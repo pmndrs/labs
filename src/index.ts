@@ -1,4 +1,4 @@
-import { bench as _bench, group as _group, type B } from 'mitata';
+import { bench as _bench, group as _group, type B } from './mitata.ts';
 
 export { defineConfig } from './config.ts';
 export type { LabsConfig } from './config.ts';

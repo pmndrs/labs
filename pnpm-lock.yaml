@@ -16,9 +16,6 @@ importers:
       '@clack/prompts':
         specifier: ^1.0.1
         version: 1.1.0
-      mitata:
-        specifier: ^1.0.34
-        version: 1.0.34(patch_hash=06539b36bc997fa642429c6695e9f6c5cc6cde462dc90e809de825d9c69eea71)
       tsx:
         specifier: ^4.21.0
         version: 4.21.0
@@ -26,6 +23,9 @@ importers:
       '@types/node':
         specifier: ^25.5.0
         version: 25.5.0
+      mitata:
+        specifier: ^1.0.34
+        version: 1.0.34(patch_hash=06539b36bc997fa642429c6695e9f6c5cc6cde462dc90e809de825d9c69eea71)
       oxlint:
         specifier: ^1.56.0
         version: 1.56.0
