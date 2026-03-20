@@ -109,7 +109,8 @@ function printReport(
   console.log('');
 }
 
-const WORKER = fileURLToPath(new URL('./worker.ts', import.meta.url));
+const WORKER_EXT = import.meta.url.endsWith('.ts') ? 'ts' : 'mjs';
+const WORKER = fileURLToPath(new URL(`./worker.${WORKER_EXT}`, import.meta.url));
 
 function globBenchFiles(dir: string, pattern: string): string[] {
   const suffix = pattern.replace(/^\*\*\/\*/, '');
