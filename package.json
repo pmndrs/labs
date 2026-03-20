@@ -26,7 +26,8 @@
     "release": "pnpm run build && pnpm publish --access public",
     "test": "vitest",
     "lint": "oxlint -c .config/oxlint.json",
-    "format": "prettier --config .config/prettier.json --write ."
+    "format": "prettier --config .config/prettier.json --write .",
+    "typecheck": "tsc --build --noEmit"
   },
   "dependencies": {
     "@clack/prompts": "^1.0.1",

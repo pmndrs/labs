@@ -4,5 +4,7 @@
   "eslint.enable": false,
   "oxc.configPath": ".config/oxlint.json",
   "oxc.enable": true,
-  "prettier.configPath": ".config/prettier.json"
+  "prettier.configPath": ".config/prettier.json",
+  "explorer.fileNesting.enabled": true,
+  "explorer.fileNesting.expand": false
 }
