@@ -42,6 +42,11 @@
     "vitest": "^4.1.0"
   },
   "packageManager": "pnpm@10.32.1",
+  "pnpm": {
+    "patchedDependencies": {
+      "mitata@1.0.34": "patches/mitata@1.0.34.patch"
+    }
+  },
   "engines": {
     "pnpm": ">=10.0.0",
     "node": ">=25.0.0"
