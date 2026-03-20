@@ -47,7 +47,7 @@ async function calibrateFreq(): Promise<number> {
 }
 
 async function main(): Promise<void> {
-  await import(file);
+  await import(file!);
   const preFreq = await calibrateFreq();
   const result = await run({ tune: parseTuneEnv() });
   const postFreq = await calibrateFreq();
