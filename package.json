@@ -23,7 +23,7 @@
   "scripts": {
     "bench": "tsx src/cli.ts",
     "build": "unbuild --config .config/build.config.ts",
-    "release": "pnpm run build && pnpm publish",
+    "release": "pnpm run build && pnpm publish --access public",
     "test": "vitest",
     "lint": "oxlint -c .config/oxlint.json",
     "format": "prettier --config .config/prettier.json --write ."
