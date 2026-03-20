@@ -8,6 +8,9 @@ importers:
 
   .:
     dependencies:
+      '@clack/prompts':
+        specifier: ^1.0.1
+        version: 1.1.0
       mitata:
         specifier: ^1.0.34
         version: 1.0.34
@@ -15,9 +18,6 @@ importers:
         specifier: ^4.21.0
         version: 4.21.0
     devDependencies:
-      '@clack/prompts':
-        specifier: ^1.0.1
-        version: 1.1.0
       '@types/node':
         specifier: ^25.5.0
         version: 25.5.0
