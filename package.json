@@ -1,6 +1,6 @@
 {
   "name": "@pmndrs/labs",
-  "description": "A JS benching framework that actually works",
+  "description": "🏆 JS benching you can trust",
   "type": "module",
   "version": "0.1.0",
   "main": "./dist/index.mjs",
@@ -25,7 +25,7 @@
   },
   "dependencies": {
     "mitata": "^1.0.34",
-    "tsx": "latest"
+    "tsx": "^4.21.0"
   },
   "devDependencies": {
     "@clack/prompts": "^1.0.1",
