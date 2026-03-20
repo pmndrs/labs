@@ -3,9 +3,98 @@
 > [!WARNING]
 > Labs currently only supports Node.js. Workers are spawned via `tsx` with V8-specific flags (`--allow-natives-syntax`, `--expose-gc`), which are not portable to Bun (JSC) or Deno. Portability will be on the roadmap.
 
-Benchmark runner for koota. Discovers `*.bench.ts` files and runs each in an isolated process with V8 flags.
+Labs is JS benchmarking you can trust. Trying to get good signal is harder than you might think. VMs are non-deterministic, environments are unstable, and typical benchmarks don't give you any sense of a comparison's validity. Labs detects variance, giving feedback on how to fix it, and uses statistical analysis to determine if two runs are actually different.
 
-## Usage
+```bash
+npm i @pmndrs/labs
+```
+
+### Write
+
+Create a config and a bench file. Benches use a generator where code before `yield` is setup, the yielded function is measured, and code after is teardown.
+
+```ts
+// labs.config.ts
+import { defineConfig } from '@pmndrs/labs'
+
+export default defineConfig({
+  benchDir: '.',
+})
+```
+
+Chain `.gc('inner')` to force GC between samples to control for collection and measure its impact. Use `@tags` in the name string for filtering.
+
+```ts
+// array-push.bench.ts
+import { bench, group } from '@pmndrs/labs'
+
+group('array @stress', () => {
+  bench('push 1k', function* () {
+    const arr: number[] = []
+    yield () => {
+      for (let i = 0; i < 1000; i++) arr.push(i)
+    }
+  })
+})
+```
+
+### Run
+
+Each bench runs in an isolated worker process. CPU clock speed is measured before and after the run — if it drifted, Labs flags the result so it doesn't pollute comparisons. Adaptive sampling collects more samples until the confidence interval converges, or marks the bench `noisy` if it can't.
+
+```sh
+# Run benches all, save with auto timestamp
+bench
+# Or filter by tag
+bench "@mytag"
+# Save with a name for easier reading
+bench "@mytag" -n 'v1.0.0'
+```
+
+And get the pretty results.
+
+```bash
+labs
+
+▶ relation-churn.bench.ts (tsx + v8 flags)
+clk: ~4.32 GHz
+cpu: Apple M4 Pro
+runtime: node 25.8.0 (arm64-darwin)
+
+benchmark                   avg (min … max) p75 / p99    (min … top 1%)
+------------------------------------------- -------------------------------
+• relation churn
+------------------------------------------- -------------------------------
+■ big test                    17.80 ms/iter  18.02 ms      ▃▃██▃ ▃ ▃▆▃
+                      (17.25 ms … 19.10 ms)  18.45 ms ▄███████████████▁▄▄▄▄
+                  gc(  1.09 ms …   3.12 ms)  47.63 mb ( 41.19 mb… 50.10 mb)
+```
+
+### Compare
+
+Compare against a baseline.
+
+```sh
+bench compare
+```
+
+And see the results!
+
+```bash
+━━ compare 2026-03-20_16-25-36 -> 2026-03-20_16-36-12
+Apple M4 Pro
+Mann-Whitney U  α=0.05  minΔ=5%  cliff's d≥0.474
+
+relation-churn.bench.ts
+  bench                                    baseline  candidate    Δp50    Δp99     p
+------------------------------------------------------------------------------------
+  • relation churn
+  ----------------------------------------------------------------------------------
+  ■ big test                                17.96ms    17.74ms   -1.2%   +0.1%  .003
+                                         ▁▂▄▅▅█▇▅▅▃ ▃▅▅██▅█▄▂▂
+```
+
+## API report (to be edited)
 
 Every run saves results by default (auto-timestamped). Use `bench run` to execute without saving.
 
@@ -132,9 +221,9 @@ Labs is single-run only. Each benchmark comparison uses mitata's collected sampl
 
 A change is flagged only when all three conditions are met:
 
-1. **`p <= alpha`** (Mann-Whitney U, default 0.05) — statistical significance. The Mann-Whitney U test is a non-parametric, rank-based test that determines whether values from one group consistently rank higher than the other. It is robust to non-normal distributions and GC-induced outliers.
-2. **`|Δp50| >= minDelta`** (default 5%) — practical magnitude. Filters environmental noise (thermal throttling, OS scheduling, etc.) that can produce statistically significant but practically meaningless differences, especially on hybrid-core CPUs.
-3. **`|cliff's d| >= minEffect`** (default 0.474) — effect size. [Cliff's delta](https://en.wikipedia.org/wiki/Effect_size#Cliff's_delta) measures how separated two distributions are (range [-1, +1]). High-variance benchmarks can show large median shifts while the actual sample distributions overlap heavily — a sign of JIT/scheduling noise rather than a real code change. The default threshold of 0.474 corresponds to the "medium" effect size boundary (Romano et al. 2006), meaning at least ~74% of pairwise sample comparisons must favor one direction.
+1. `**p <= alpha**` (Mann-Whitney U, default 0.05) — statistical significance. The Mann-Whitney U test is a non-parametric, rank-based test that determines whether values from one group consistently rank higher than the other. It is robust to non-normal distributions and GC-induced outliers.
+2. `**|Δp50| >= minDelta**` (default 5%) — practical magnitude. Filters environmental noise (thermal throttling, OS scheduling, etc.) that can produce statistically significant but practically meaningless differences, especially on hybrid-core CPUs.
+3. `**|cliff's d| >= minEffect**` (default 0.474) — effect size. [Cliff's delta](https://en.wikipedia.org/wiki/Effect_size#Cliff's_delta) measures how separated two distributions are (range [-1, +1]). High-variance benchmarks can show large median shifts while the actual sample distributions overlap heavily — a sign of JIT/scheduling noise rather than a real code change. The default threshold of 0.474 corresponds to the "medium" effect size boundary (Romano et al. 2006), meaning at least ~74% of pairwise sample comparisons must favor one direction.
 
 The p99 ratio provides a variance/stability signal. When it diverges from the p50 ratio, the distribution shape changed between runs (e.g., tails got worse even if the median improved).
 
@@ -153,7 +242,7 @@ export default defineConfig({
 ```
 
 | Option       | Default                                     | Description                                                                                                        |
-| ------------ | ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| ------------ | ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ | --------- | ------------------------------------------------------------------------------------- |
 | `benchDir`   | (required)                                  | Directory to search, relative to config file                                                                       |
 | `benchMatch` | `**/*.bench.ts`                             | Glob pattern for discovery                                                                                         |
 | `nodeFlags`  | `['--allow-natives-syntax', '--expose-gc']` | Node flags per worker process                                                                                      |
@@ -165,7 +254,7 @@ export default defineConfig({
 | `maxSamples` | `1e9`                                       | Maximum sample cap per benchmark to prevent pathological long runs                                                 |
 | `alpha`      | `0.05`                                      | Mann-Whitney U significance level                                                                                  |
 | `minDelta`   | `0.05`                                      | Minimum absolute Δp50 ratio to flag a verdict; filters environmental noise on identical code                       |
-| `minEffect`  | `0.474`                                     | Minimum \|Cliff's d\| to flag a verdict; filters noise on high-variance benches where distributions overlap        |
+| `minEffect`  | `0.474`                                     | Minimum                                                                                                            | Cliff's d | to flag a verdict; filters noise on high-variance benches where distributions overlap |
 
 Sampling behavior:
 
