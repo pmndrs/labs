@@ -19,8 +19,7 @@
     }
   },
   "files": [
-    "dist",
-    "THIRD_PARTY_NOTICES.md"
+    "dist"
   ],
   "scripts": {
     "bench": "tsx src/cli.ts",
