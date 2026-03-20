@@ -1,0 +1,44 @@
+{
+  "name": "@pmndrs/labs",
+  "description": "A JS benching framework that actually works",
+  "type": "module",
+  "version": "0.1.0",
+  "main": "./dist/index.mjs",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.cjs"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "unbuild --config .config/build.config.ts",
+    "release": "pnpm run build && pnpm publish",
+    "test": "vitest",
+    "lint": "oxlint -c .config/oxlint.json",
+    "format": "prettier --config .config/prettier.json --write ."
+  },
+  "dependencies": {
+    "mitata": "^1.0.34",
+    "tsx": "latest"
+  },
+  "devDependencies": {
+    "@clack/prompts": "^1.0.1",
+    "@types/node": "^25.5.0",
+    "oxlint": "^1.56.0",
+    "prettier": "^3.8.1",
+    "typescript": "^5.9.3",
+    "unbuild": "^3.6.1",
+    "vitest": "^4.1.0"
+  },
+  "packageManager": "pnpm@10.32.1",
+  "engines": {
+    "pnpm": ">=10.0.0",
+    "node": ">=25.0.0"
+  }
+}

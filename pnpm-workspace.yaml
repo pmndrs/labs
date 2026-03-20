@@ -1,0 +1,4 @@
+manage-package-manager-versions: true
+
+onlyBuiltDependencies:
+  - esbuild
