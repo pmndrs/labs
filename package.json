@@ -6,6 +6,10 @@
   "main": "./dist/index.mjs",
   "module": "./dist/index.mjs",
   "types": "./dist/index.d.ts",
+  "bin": {
+    "bench": "./dist/cli.mjs",
+    "labs": "./dist/cli.mjs"
+  },
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
@@ -17,6 +21,7 @@
     "dist"
   ],
   "scripts": {
+    "bench": "tsx src/cli.ts",
     "build": "unbuild --config .config/build.config.ts",
     "release": "pnpm run build && pnpm publish",
     "test": "vitest",
@@ -24,11 +29,11 @@
     "format": "prettier --config .config/prettier.json --write ."
   },
   "dependencies": {
+    "@clack/prompts": "^1.0.1",
     "mitata": "^1.0.34",
     "tsx": "^4.21.0"
   },
   "devDependencies": {
-    "@clack/prompts": "^1.0.1",
     "@types/node": "^25.5.0",
     "oxlint": "^1.56.0",
     "prettier": "^3.8.1",
