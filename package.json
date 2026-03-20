@@ -3,6 +3,7 @@
   "description": "🏆 JS benching you can trust",
   "type": "module",
   "version": "0.3.0",
+  "license": "ISC",
   "main": "./dist/index.mjs",
   "module": "./dist/index.mjs",
   "types": "./dist/index.d.ts",
@@ -18,7 +19,8 @@
     }
   },
   "files": [
-    "dist"
+    "dist",
+    "THIRD_PARTY_NOTICES.md"
   ],
   "scripts": {
     "bench": "tsx src/cli.ts",
@@ -31,11 +33,11 @@
   },
   "dependencies": {
     "@clack/prompts": "^1.0.1",
-    "mitata": "^1.0.34",
     "tsx": "^4.21.0"
   },
   "devDependencies": {
     "@types/node": "^25.5.0",
+    "mitata": "^1.0.34",
     "oxlint": "^1.56.0",
     "prettier": "^3.8.1",
     "typescript": "^5.9.3",
