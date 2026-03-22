@@ -94,6 +94,26 @@ relation-churn.bench.ts
                                          ▁▂▄▅▅█▇▅▅▃ ▃▅▅██▅█▄▂▂
 ```
 
+## How to control my CPU
+
+One the largest sources of noise when running benchmarks is an unstable environment and the usual culprit is the CPU. The CPU turbos or thermal throttles, or a process gest put on a P-core (performance) instead of an E-core (efficiency). Koota checks the CPU clocks before and after each bench and tracks if it is varying across the runs. If it detects too muc variance you will get warned and the run flagged. But what can you do about it?
+
+### Windows
+
+You get decent control with Windows by going into the BIOS. 90% of the variance is solved by disabling any kind of CPU turbo.
+
+- Boot into the BIOS and disable turbo + SMT.
+- Run the benchmarks on the highest priority.
+- Disable as much background tasks as you can.
+
+### MacOS (Apple Silicon)
+
+While Apple Silicon is relatively stable, there isn't much that can be done to control it. The governor cannot be adjusted and the dynamic CPU frequencies cannot be disabled.
+
+### Linux
+
+Linux gives the most controls getting the best possible environment for testing. [See this LLVM guide for specifics.](https://llvm.org/docs/Benchmarking.html#linux)
+
 ## API report (to be edited)
 
 Every run saves results by default (auto-timestamped). Use `bench run` to execute without saving.
