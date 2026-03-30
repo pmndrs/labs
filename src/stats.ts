@@ -21,7 +21,7 @@ export function mad(a: number[]): number {
 /**
  * Mann-Whitney U test (two-tailed).
  * Ranks all combined samples, sums ranks for group A, derives U and p-value
- * via normal approximation. Accurate for n > ~20 (mitata yields 50+ samples).
+ * via normal approximation. Accurate for n > ~20 (the engine yields 50+ samples).
  *
  * Returns { U, z, p } where p is the two-tailed p-value.
  */

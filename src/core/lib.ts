@@ -1,31 +1,35 @@
-const AsyncFunction = (async () => {}).constructor;
-const GeneratorFunction = function* () {}.constructor;
-const AsyncGeneratorFunction = async function* () {}.constructor;
+import type { FnKind, MeasureOptions, Stats } from './types.ts';
 
-export function do_not_optimize(v) {
-  $._ = v;
-}
-export const $ = {
+const AsyncFunction = (async () => {}).constructor as any;
+const GeneratorFunction = function* () {}.constructor as any;
+const AsyncGeneratorFunction = async function* () {}.constructor as any;
+
+const _sink: { _: any; __(): void } = {
   _: null,
   __() {
-    return print($._);
+    _print(_sink._);
   },
 };
 
-export async function measure(f, ...args) {
-  return await {
-    fn,
-    iter,
-    yield: generator,
-    [void 0]() {
-      throw new TypeError('expected iterator, generator or one-shot function');
-    },
-  }[kind(f)](f, ...args);
+export function do_not_optimize(v: any): void {
+  _sink._ = v;
 }
 
-export async function generator(gen, opts = {}) {
+export async function measure(f: (...args: any[]) => any, opts: MeasureOptions = {}): Promise<Stats> {
+  const dispatch: Record<string, (f: any, opts?: any) => Promise<Stats>> = {
+    fn: benchFn,
+    iter: benchIter,
+    yield: benchGenerator,
+    [void 0 as any]() {
+      throw new TypeError('expected iterator, generator or one-shot function');
+    },
+  };
+  return await dispatch[kind(f) as any](f, opts);
+}
+
+export async function benchGenerator(gen: (...args: any[]) => any, opts: any = {}): Promise<Stats> {
   const ctx = {
-    get(name) {
+    get(name: string) {
       return opts.args?.[name];
     },
   };
@@ -43,7 +47,7 @@ export async function generator(gen, opts = {}) {
     if ('fn' !== kind($fn, true)) throw new TypeError('expected benchmarkable yield from generator');
 
     opts.params ??= {};
-    const params = $fn.length;
+    const params: number = $fn.length;
     opts.manual = !n.value.manual ? false : 'manual' !== n.value.budget ? 'real' : 'manual';
 
     for (let o = 0; o < params; o++) {
@@ -52,80 +56,73 @@ export async function generator(gen, opts = {}) {
     }
   }
 
-  const stats = await fn($fn, opts);
+  const stats = await benchFn($fn, opts);
   if (!(await g.next()).done) throw new TypeError('expected generator to yield once');
 
   return {
     ...stats,
-    kind: 'yield',
+    kind: 'yield' as const,
   };
 }
 
-export const print = (() => {
+export const _print: (s: any) => void = (() => {
   if (globalThis.console?.log) return globalThis.console.log;
-  if (globalThis.print && !globalThis.document) return globalThis.print;
+  if ((globalThis as any).print && !globalThis.document) return (globalThis as any).print;
 
   return () => {
     throw new Error('no print function available');
   };
 })();
 
-export const gc = (() => {
+export const gc: (() => void) & { fallback?: boolean } = (() => {
+  const g = globalThis as any;
   try {
-    return (Bun.gc(true), () => Bun.gc(true));
+    return (g.Bun.gc(true), () => g.Bun.gc(true));
   } catch {}
   try {
-    return (globalThis.gc(), () => globalThis.gc());
+    return (g.gc(), () => g.gc());
   } catch {}
   try {
-    return (globalThis.__gc(), () => globalThis.__gc());
+    return (g.__gc(), () => g.__gc());
   } catch {}
   try {
-    return (globalThis.std.gc(), () => globalThis.std.gc());
+    return (g.std.gc(), () => g.std.gc());
   } catch {}
   try {
-    return (globalThis.$262.gc(), () => globalThis.$262.gc());
+    return (g.$262.gc(), () => g.$262.gc());
   } catch {}
   try {
-    return (globalThis.tjs.engine.gc.run(), () => globalThis.tjs.engine.gc.run());
+    return (g.tjs.engine.gc.run(), () => g.tjs.engine.gc.run());
   } catch {}
-  return Object.assign(
-    globalThis.Graal ? () => new Uint8Array(2 ** 29) : () => new Uint8Array(2 ** 30),
-    { fallback: true }
-  );
+  return Object.assign(g.Graal ? () => new Uint8Array(2 ** 29) : () => new Uint8Array(2 ** 30), {
+    fallback: true,
+  });
 })();
 
-export const now = (() => {
+export const now: () => number = (() => {
+  const g = globalThis as any;
   try {
-    // bun
-    Bun.nanoseconds();
-    return Bun.nanoseconds;
+    g.Bun.nanoseconds();
+    return g.Bun.nanoseconds;
   } catch {}
-
   try {
-    // jsc
-    $.agent.monotonicNow();
-    return () => 1e6 * $.agent.monotonicNow();
+    (_sink as any).agent.monotonicNow();
+    return () => 1e6 * (_sink as any).agent.monotonicNow();
   } catch {}
-
   try {
-    // 262 agent
-    $262.agent.monotonicNow();
-    return () => 1e6 * $262.agent.monotonicNow();
+    g.$262.agent.monotonicNow();
+    return () => 1e6 * g.$262.agent.monotonicNow();
   } catch {}
-
   try {
-    // node/deno/... (v8 inline, anti-deopts)
-    const now = performance.now.bind(performance);
-
-    now();
-    return () => 1e6 * now();
+    const _now = performance.now.bind(performance);
+    _now();
+    return () => 1e6 * _now();
   } catch {
     return () => 1e6 * Date.now();
   }
 })();
 
-export function kind(fn, _ = false) {
+export function kind(fn: any, _: boolean = false): FnKind | undefined {
   if (
     !(
       fn instanceof Function ||
@@ -144,6 +141,8 @@ export function kind(fn, _ = false) {
   if (0 !== fn.length && (fn instanceof Function || fn instanceof AsyncFunction)) return 'iter';
 }
 
+// ── constants ──────────────────────────────────────────────────────
+
 const k_cpu_time_rescale_heap = 1.1;
 const k_cpu_time_rescale_inner_gc = 2;
 
@@ -158,7 +157,9 @@ export const k_batch_threshold = 65536;
 export const k_min_cpu_time = 642 * 1e6;
 export const k_warmup_threshold = 500_000;
 
-function defaults(opts) {
+// ── defaults ───────────────────────────────────────────────────────
+
+function defaults(opts: any): void {
   opts.gc ??= gc;
   opts.now ??= now;
   opts.heap ??= null;
@@ -187,11 +188,13 @@ function defaults(opts) {
   if (opts.gc && opts.inner_gc) opts.min_cpu_time *= k_cpu_time_rescale_inner_gc;
 }
 
-export async function fn(fn, opts = {}) {
+// ── fn benchmark (codegen) ─────────────────────────────────────────
+
+export async function benchFn(fn: (...args: any[]) => any, opts: any = {}): Promise<Stats> {
   defaults(opts);
   let async = false;
   let batch = false;
-  const params = Object.keys(opts.params);
+  const params: string[] = Object.keys(opts.params);
 
   warmup: {
     const $p = new Array(params.length);
@@ -224,7 +227,7 @@ export async function fn(fn, opts = {}) {
     opts.concurrency = 1;
   }
 
-  const loop = new AsyncFunction(
+  const loop: (...args: any[]) => Promise<any> = new AsyncFunction(
     '$fn',
     '$gc',
     '$now',
@@ -435,15 +438,16 @@ export async function fn(fn, opts = {}) {
   );
 
   return {
-    kind: 'fn',
+    kind: 'fn' as const,
     debug: loop.toString(),
     ...(await loop(fn, opts.gc, opts.now, opts.heap, opts.params, opts.$counters)),
   };
 }
 
-// TODO: update when jit can do zero-cost opt
-export async function iter(iter, opts = {}) {
-  const _ = {};
+// ── iter benchmark (codegen) ───────────────────────────────────────
+
+export async function benchIter(iter: (...args: any[]) => any, opts: any = {}): Promise<Stats> {
+  const _: any = {};
   defaults(opts);
   let samples = new Array(2 ** 20);
   const _i = {
@@ -459,12 +463,12 @@ export async function iter(iter, opts = {}) {
     [Symbol.asyncIterator]() {
       return _i;
     },
-    get(name) {
+    get(name: string) {
       return opts.args?.[name];
     },
   };
 
-  const gen = (function* () {
+  const gen: Generator = (function* () {
     let batch = false;
 
     warmup: {
@@ -482,7 +486,7 @@ export async function iter(iter, opts = {}) {
       }
     }
 
-    const loop = new GeneratorFunction(
+    const loop: Generator = new GeneratorFunction(
       '$gc',
       '$now',
       '$samples',
@@ -560,7 +564,7 @@ export async function iter(iter, opts = {}) {
 
   return {
     samples,
-    kind: 'iter',
+    kind: 'iter' as const,
     debug: _.debug,
     min: samples[0],
     max: samples[samples.length - 1],

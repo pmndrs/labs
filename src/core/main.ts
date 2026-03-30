@@ -1,9 +1,12 @@
-export { measure, do_not_optimize } from './lib.mjs';
-import { kind, measure, print as grint } from './lib.mjs';
+export { measure, do_not_optimize } from './lib.ts';
+import { kind, measure, _print } from './lib.ts';
+import { $ } from './format.ts';
+export { $ } from './format.ts';
+import type { Collection, Trial, Context, Stats } from './types.ts';
 
 let FLAGS = 0;
-let $counters = null;
-let COLLECTIONS = [{ id: 0, name: null, types: [], trials: [] }];
+let $counters: any = null;
+let COLLECTIONS: Collection[] = [{ id: 0, name: null, types: [], trials: [] }];
 
 export const flags = {
   compact: 1 << 0,
@@ -11,60 +14,62 @@ export const flags = {
 };
 
 export class B {
-  f = null;
-  _args = {};
-  _name = '';
-  _group = 0;
-  _gc = 'once';
-  flags = FLAGS;
-  _highlight = false;
+  f: ((...args: any[]) => any) | null = null;
+  _args: Record<string, any[]> = {};
+  _name: string = '';
+  _group: number = 0;
+  _gc: string | boolean = 'once';
+  flags: number = FLAGS;
+  _highlight: string | false = false;
 
-  constructor(name, f) {
+  constructor(name: string, f: any) {
     this.f = f;
     this.name(name);
     if (!kind(f)) throw new TypeError('expected iterator, generator or one-shot function');
   }
 
-  name(name, color = false) {
+  name(name: string, color: string | false = false): this {
     return ((this._name = name), this.highlight(color), this);
   }
 
-  gc(gc = 'once') {
-    if (![true, false, 'once', 'inner'].includes(gc)) throw new TypeError('invalid gc type');
+  gc(gc: string | boolean = 'once'): this {
+    if (![true, false, 'once', 'inner'].includes(gc as any)) throw new TypeError('invalid gc type');
     return ((this._gc = gc), this);
   }
 
-  highlight(color = false) {
+  highlight(color: string | false = false): this {
     if (!color) return ((this._highlight = false), this);
     if (!$.colors.includes(color)) throw new TypeError('invalid highlight color');
     return ((this._highlight = color), this);
   }
 
-  compact(bool = true) {
+  compact(bool = true): this {
     if (bool) return ((this.flags |= flags.compact), this);
     if (!bool) return ((this.flags &= ~flags.compact), this);
+    return this;
   }
 
-  baseline(bool = true) {
+  baseline(bool = true): this {
     if (bool) return ((this.flags |= flags.baseline), this);
     if (!bool) return ((this.flags &= ~flags.baseline), this);
+    return this;
   }
 
-  range(name, s, e, m = 8) {
-    const arr = [];
+  range(name: string, s: number, e: number, m = 8): this {
+    const arr: number[] = [];
     for (let o = s; o <= e; o *= m) arr.push(Math.min(o, e));
     if (!arr.includes(e)) arr.push(e);
     return this.args(name, arr);
   }
 
-  dense_range(name, s, e, a = 1) {
-    const arr = [];
+  dense_range(name: string, s: number, e: number, a = 1): this {
+    const arr: number[] = [];
     for (let o = s; o <= e; o += a) arr.push(o);
     if (!arr.includes(e)) arr.push(e);
     return this.args(name, arr);
   }
 
-  args(name, args) {
+  args(name: any, args?: any): this {
     if (name === null) return (delete this._args.x, this);
     if (Array.isArray(name)) return ((this._args.x = name), this);
     if (null === args && 'string' === typeof name) return (delete this._args[name], this);
@@ -84,7 +89,7 @@ export class B {
     throw new TypeError('invalid arguments');
   }
 
-  *_names() {
+  *_names(): Generator<string> {
     const args = Object.keys(this._args);
     const kind = 0 === args.length ? 'static' : 1 === args.length ? 'args' : 'multi-args';
 
@@ -92,11 +97,11 @@ export class B {
       yield this._name;
     } else {
       const offsets = new Array(args.length).fill(0);
-      const runs = args.reduce((len, name) => len * this._args[name].length, 1);
+      const runs = args.reduce((len: number, name: string) => len * this._args[name].length, 1);
 
       for (let o = 0; o < runs; o++) {
         {
-          const _args = {};
+          const _args: Record<string, any> = {};
           let _name = this._name;
           for (let oo = 0; oo < args.length; oo++)
             _args[args[oo]] = this._args[args[oo]][offsets[oo]];
@@ -114,7 +119,7 @@ export class B {
     }
   }
 
-  async run(thrw = false, _tune = {}) {
+  async run(thrw = false, _tune: any = {}): Promise<Trial> {
     const args = Object.keys(this._args);
     const kind = 0 === args.length ? 'static' : 1 === args.length ? 'args' : 'multi-args';
 
@@ -125,7 +130,7 @@ export class B {
       ..._tune,
 
       heap: await (async () => {
-        if (globalThis.Bun) {
+        if ((globalThis as any).Bun) {
           const { memoryUsage } = await import('bun:jsc');
           return () => {
             const m = memoryUsage();
@@ -145,9 +150,9 @@ export class B {
     };
 
     if (kind === 'static') {
-      let stats, error;
+      let stats: Stats | undefined, error: unknown;
       try {
-        stats = await measure(this.f, tune);
+        stats = await measure(this.f!, tune);
       } catch (err) {
         error = err;
         if (thrw) throw err;
@@ -173,22 +178,24 @@ export class B {
           highlight: this._highlight,
           compact: !!(this.flags & flags.compact),
         },
-      };
+      } as Trial;
     } else {
       const offsets = new Array(args.length).fill(0);
-      const runs = new Array(args.reduce((len, name) => len * this._args[name].length, 1));
+      const runs = new Array(
+        args.reduce((len: number, name: string) => len * this._args[name].length, 1)
+      );
 
       for (let o = 0; o < runs.length; o++) {
         {
-          let stats, error;
-          const _args = {};
+          let stats: Stats | undefined, error: unknown;
+          const _args: Record<string, any> = {};
           let _name = this._name;
           for (let oo = 0; oo < args.length; oo++)
             _args[args[oo]] = this._args[args[oo]][offsets[oo]];
           for (let oo = 0; oo < args.length; oo++)
             _name = _name.replaceAll(`\$${args[oo]}`, _args[args[oo]]);
           try {
-            stats = await measure(this.f, { ...tune, args: _args });
+            stats = await measure(this.f!, { ...tune, args: _args });
           } catch (err) {
             error = err;
             if (thrw) throw err;
@@ -220,31 +227,31 @@ export class B {
           highlight: this._highlight,
           compact: !!(this.flags & flags.compact),
         },
-      };
+      } as Trial;
     }
   }
 }
 
 // ------ collections ------
 
-export function boxplot(f) {
+export function boxplot(f: () => any): void | Promise<void> {
   return _c(f, 'x');
 }
-export function barplot(f) {
+export function barplot(f: () => any): void | Promise<void> {
   return _c(f, 'b');
 }
-export function summary(f) {
+export function summary(f: () => any): void | Promise<void> {
   return _c(f, 's');
 }
-export function lineplot(f) {
+export function lineplot(f: () => any): void | Promise<void> {
   return _c(f, 'l');
 }
-export function group(name, f) {
+export function group(name: any, f?: () => any): void | Promise<void> {
   if (typeof name === 'function') ((f = name), (name = null));
-  return _c(f, 'g', name);
+  return _c(f!, 'g', name);
 }
 
-export function bench(n, fn) {
+export function bench(n: any, fn?: any): B {
   if (typeof n === 'function') ((fn = n), (n = fn.name || 'anonymous'));
 
   const collection = COLLECTIONS[COLLECTIONS.length - 1];
@@ -253,7 +260,7 @@ export function bench(n, fn) {
   return (collection.trials.push(b), b);
 }
 
-export function compact(f) {
+export function compact(f: () => any): void | Promise<void> {
   const old = FLAGS;
   FLAGS |= flags.compact;
 
@@ -262,7 +269,7 @@ export function compact(f) {
   else return r.then(() => ((FLAGS = old), void 0));
 }
 
-const _c = (f, t, name = null) => {
+const _c = (f: () => any, t: string, name: string | null = null): void | Promise<void> => {
   const last = COLLECTIONS[COLLECTIONS.length - 1];
   COLLECTIONS.push({
     trials: [],
@@ -272,37 +279,37 @@ const _c = (f, t, name = null) => {
   });
 
   const r = f();
-  const n = { trials: [], name: last.name, types: last.types, id: COLLECTIONS.length };
+  const n: Collection = { trials: [], name: last.name, types: last.types, id: COLLECTIONS.length };
   if (!(r instanceof Promise)) COLLECTIONS.push(n);
   else return r.then(() => (COLLECTIONS.push(n), void 0));
 };
 
 // ------ runtime ------
 
-function colors() {
+function colors(): any {
   return (
-    globalThis.tjs?.env?.FORCE_COLOR ||
-    globalThis.process?.env?.FORCE_COLOR ||
-    (!globalThis.Deno?.noColor &&
-      !globalThis.tjs?.env?.NO_COLOR &&
-      !globalThis.process?.env?.NO_COLOR &&
-      !globalThis.process?.env?.NODE_DISABLE_COLORS)
+    (globalThis as any).tjs?.env?.FORCE_COLOR ||
+    (globalThis as any).process?.env?.FORCE_COLOR ||
+    (!(globalThis as any).Deno?.noColor &&
+      !(globalThis as any).tjs?.env?.NO_COLOR &&
+      !(globalThis as any).process?.env?.NO_COLOR &&
+      !(globalThis as any).process?.env?.NODE_DISABLE_COLORS)
   );
 }
 
-async function cpu() {
-  if (globalThis.process?.versions?.webcontainer) return null;
+async function cpu(): Promise<string | null> {
+  if ((globalThis as any).process?.versions?.webcontainer) return null;
   try {
     let n;
-    if ((n = require('os')?.cpus?.()?.[0]?.model)) return n;
+    if ((n = (globalThis as any).require('os')?.cpus?.()?.[0]?.model)) return n;
   } catch {}
   try {
     let n;
-    if ((n = require('node:os')?.cpus?.()?.[0]?.model)) return n;
+    if ((n = (globalThis as any).require('node:os')?.cpus?.()?.[0]?.model)) return n;
   } catch {}
   try {
     let n;
-    if ((n = globalThis.tjs?.system?.cpus?.[0]?.model)) return n;
+    if ((n = (globalThis as any).tjs?.system?.cpus?.[0]?.model)) return n;
   } catch {}
   try {
     let n;
@@ -312,70 +319,89 @@ async function cpu() {
   return null;
 }
 
-function version() {
+function version(): string | null {
   return (
-    {
-      v8: () => globalThis.version?.(),
-      bun: () => globalThis.Bun?.version,
-      'txiki.js': () => globalThis.tjs?.version,
-      deno: () => globalThis.Deno?.version?.deno,
-      llrt: () => globalThis.process?.versions?.llrt,
-      node: () => globalThis.process?.versions?.node,
-      graaljs: () => globalThis.Graal?.versionGraalVM,
-      webcontainer: () => globalThis.process?.versions?.webcontainer,
-      'quickjs-ng': () => globalThis.navigator?.userAgent?.split?.('/')[1],
-      hermes: () => globalThis.HermesInternal?.getRuntimeProperties?.()?.['OSS Release Version'],
-    }[runtime()]?.() || null
+    (
+      {
+        v8: () => (globalThis as any).version?.(),
+        bun: () => (globalThis as any).Bun?.version,
+        'txiki.js': () => (globalThis as any).tjs?.version,
+        deno: () => (globalThis as any).Deno?.version?.deno,
+        llrt: () => (globalThis as any).process?.versions?.llrt,
+        node: () => (globalThis as any).process?.versions?.node,
+        graaljs: () => (globalThis as any).Graal?.versionGraalVM,
+        webcontainer: () => (globalThis as any).process?.versions?.webcontainer,
+        'quickjs-ng': () => (globalThis as any).navigator?.userAgent?.split?.('/')[1],
+        hermes: () =>
+          (globalThis as any).HermesInternal?.getRuntimeProperties?.()?.['OSS Release Version'],
+      } as Record<string, () => string | null>
+    )[runtime() as string]?.() || null
   );
 }
 
-function runtime() {
-  if (globalThis.d8) return 'v8';
-  if (globalThis.tjs) return 'txiki.js';
-  if (globalThis.Graal) return 'graaljs';
-  if (globalThis.process?.versions?.llrt) return 'llrt';
-  if (globalThis.process?.versions?.webcontainer) return 'webcontainer';
-  if (globalThis.inIon && globalThis.performance?.mozMemory) return 'spidermonkey';
-  if (globalThis.window && globalThis.netscape && globalThis.InternalError) return 'firefox';
-  if (globalThis.window && globalThis.navigator && Error.prepareStackTrace) return 'chromium';
-  if (globalThis.navigator?.userAgent?.toLowerCase?.()?.includes?.('quickjs-ng')) return 'quickjs-ng';
-  if (globalThis.$262 && globalThis.lockdown && globalThis.AsyncDisposableStack) return 'XS Moddable';
-  if (globalThis.$ && 'IsHTMLDDA' in globalThis.$ && new Error().stack.includes('runtime@'))
+function runtime(): string | null {
+  if ((globalThis as any).d8) return 'v8';
+  if ((globalThis as any).tjs) return 'txiki.js';
+  if ((globalThis as any).Graal) return 'graaljs';
+  if ((globalThis as any).process?.versions?.llrt) return 'llrt';
+  if ((globalThis as any).process?.versions?.webcontainer) return 'webcontainer';
+  if ((globalThis as any).inIon && (globalThis as any).performance?.mozMemory) return 'spidermonkey';
+  if ((globalThis as any).window && (globalThis as any).netscape && (globalThis as any).InternalError)
+    return 'firefox';
+  if ((globalThis as any).window && (globalThis as any).navigator && (Error as any).prepareStackTrace)
+    return 'chromium';
+  if ((globalThis as any).navigator?.userAgent?.toLowerCase?.()?.includes?.('quickjs-ng'))
+    return 'quickjs-ng';
+  if (
+    (globalThis as any).$262 &&
+    (globalThis as any).lockdown &&
+    (globalThis as any).AsyncDisposableStack
+  )
+    return 'XS Moddable';
+  if (
+    (globalThis as any).$ &&
+    'IsHTMLDDA' in (globalThis as any).$ &&
+    new Error().stack?.includes('runtime@')
+  )
     return 'jsc';
-  if (globalThis.window && globalThis.navigator && new Error().stack.includes('runtime@'))
+  if (
+    (globalThis as any).window &&
+    (globalThis as any).navigator &&
+    new Error().stack?.includes('runtime@')
+  )
     return 'webkit';
 
-  if (globalThis.os && globalThis.std) return 'quickjs';
-  if (globalThis.Bun) return 'bun';
-  if (globalThis.Deno) return 'deno';
-  if (globalThis.HermesInternal) return 'hermes';
-  if (globalThis.window && globalThis.navigator) return 'browser';
-  if (globalThis.process) return 'node';
+  if ((globalThis as any).os && (globalThis as any).std) return 'quickjs';
+  if ((globalThis as any).Bun) return 'bun';
+  if ((globalThis as any).Deno) return 'deno';
+  if ((globalThis as any).HermesInternal) return 'hermes';
+  if ((globalThis as any).window && (globalThis as any).navigator) return 'browser';
+  if ((globalThis as any).process) return 'node';
   else return null;
 }
 
-async function arch() {
+async function arch(): Promise<string | null> {
   if (runtime() === 'webcontainer') return 'js + wasm';
   try {
     let n;
-    if ((n = Deno?.build?.target)) return n;
+    if ((n = (globalThis as any).Deno?.build?.target)) return n;
   } catch {}
   try {
     const os = await import('node:os');
     return `${os.arch()}-${os.platform()}`;
   } catch {}
 
-  if (globalThis.process?.arch && globalThis.process?.platform) {
-    return `${globalThis.process.arch}-${globalThis.process.platform}`;
+  if ((globalThis as any).process?.arch && (globalThis as any).process?.platform) {
+    return `${(globalThis as any).process.arch}-${(globalThis as any).process.platform}`;
   }
 
   if (runtime() === 'txiki.js') {
-    return `${globalThis.tjs.system?.arch}-${globalThis.tjs.system?.platform}`;
+    return `${(globalThis as any).tjs.system?.arch}-${(globalThis as any).tjs.system?.platform}`;
   }
 
   if (runtime() === 'spidermonkey') {
     try {
-      const build = globalThis.getBuildConfiguration();
+      const build = (globalThis as any).getBuildConfiguration();
       const platforms = ['osx', 'linux', 'android', 'windows'];
       const archs = ['arm', 'x64', 'x86', 'wasi', 'arm64', 'mips32', 'mips64', 'loong64', 'riscv64'];
 
@@ -385,7 +411,7 @@ async function arch() {
     } catch {}
 
     try {
-      if (globalThis.isAvxPresent()) return 'x86_64';
+      if ((globalThis as any).isAvxPresent()) return 'x86_64';
     } catch {}
   }
 
@@ -394,29 +420,31 @@ async function arch() {
 
 // ------ run ------
 
-function defaults(opts) {
-  opts.print ??= grint;
+function defaults(opts: any): void {
+  opts.print ??= _print;
   opts.throw ??= false;
   opts.filter ??= /.*/;
   opts.format ??= 'mitata';
   opts.colors ??= colors();
   opts.tune ??= {};
-  opts.observe ??= (trial) => trial;
+  opts.observe ??= (trial: any) => trial;
 }
 
-export async function run(opts = {}) {
+export async function run(
+  opts: any = {}
+): Promise<{ layout: any[]; context: Context; benchmarks: Trial[] }> {
   defaults(opts);
   const t = Date.now();
-  const benchmarks = [];
+  const benchmarks: Trial[] = [];
   const cal = opts.calibrate ?? {};
   const noop = await measure(() => {}, cal);
   const _cpu = await measure(() => {}, { ...cal, batch_unroll: 1 });
   const noop_inner_gc = await measure(() => {}, { ...cal, inner_gc: true });
-  const noop_iter = await measure((state) => {
+  const noop_iter = await measure((state: any) => {
     for (const _ of state);
   }, cal);
 
-  const context = {
+  const context: Context = {
     now: t,
     arch: await arch(),
     version: version(),
@@ -437,34 +465,42 @@ export async function run(opts = {}) {
   if (
     !$counters &&
     context.arch?.includes?.('darwin') &&
-    ['bun', 'node', 'deno'].includes(context.runtime)
+    ['bun', 'node', 'deno'].includes(context.runtime as string)
   ) {
     try {
       $counters = await import('@mitata/counters');
-      if (0 !== process.getuid()) throw (($counters = false), 1);
+      if (0 !== (globalThis as any).process.getuid()) throw (($counters = false), 1);
     } catch {}
   }
 
   if (
     !$counters &&
     context.arch?.includes?.('linux') &&
-    ['bun', 'node', 'deno'].includes(context.runtime)
+    ['bun', 'node', 'deno'].includes(context.runtime as string)
   ) {
     try {
       $counters = await import('@mitata/counters');
-    } catch (err) {
+    } catch (err: any) {
       if (err?.message?.includes?.('PermissionDenied')) $counters = false;
     }
   }
 
   const layout = COLLECTIONS.map((c) => ({ name: c.name, types: c.types }));
   const format = 'string' === typeof opts.format ? opts.format : Object.keys(opts.format)[0];
-  await formats[format](context, { ...opts, format: opts.format[format] }, benchmarks, layout);
-  return ((COLLECTIONS = [{ name: 0, types: [], trials: [] }]), { layout, context, benchmarks });
+  await (formats as any)[format](
+    context,
+    { ...opts, format: opts.format[format] },
+    benchmarks,
+    layout
+  );
+  return (
+    (COLLECTIONS = [{ name: 0, types: [], trials: [] }] as any),
+    { layout, context, benchmarks }
+  );
 }
 
 const formats = {
-  async quiet(_, opts, benchmarks) {
+  async quiet(_: any, opts: any, benchmarks: Trial[]) {
     for (const collection of COLLECTIONS) {
       for (const trial of collection.trials) {
         if (opts.filter.test(trial._name))
@@ -473,7 +509,7 @@ const formats = {
     }
   },
 
-  async json(ctx, opts, benchmarks, layout) {
+  async json(ctx: any, opts: any, benchmarks: Trial[], layout: any[]) {
     const print = opts.print;
     const debug = opts.format?.debug ?? true;
     const samples = opts.format?.samples ?? true;
@@ -492,7 +528,7 @@ const formats = {
           benchmarks,
           context: ctx,
         },
-        (k, v) => {
+        (k: string, v: any) => {
           if (!debug && k === 'debug') return '';
           if (!samples && k === 'samples') return null;
 
@@ -504,7 +540,7 @@ const formats = {
     );
   },
 
-  async markdown(ctx, opts, benchmarks) {
+  async markdown(ctx: any, opts: any, benchmarks: Trial[]) {
     let first = true;
     const print = opts.print;
 
@@ -515,7 +551,7 @@ const formats = {
     print('');
 
     for (const collection of COLLECTIONS) {
-      const trials = [];
+      const trials: Trial[] = [];
       if (!collection.trials.length) continue;
 
       for (const trial of collection.trials) {
@@ -531,10 +567,10 @@ const formats = {
       if (!trials.length) continue;
       if (!first) print('');
       const name_len = trials.reduce(
-        (a, b) =>
+        (a: number, b: Trial) =>
           Math.max(
             a,
-            b.runs.reduce((a, b) => Math.max(a, b.name.length), 0)
+            b.runs.reduce((a: number, b: any) => Math.max(a, b.name.length), 0)
           ),
         0
       );
@@ -550,19 +586,21 @@ const formats = {
       for (const trial of trials) {
         for (const run of trial.runs) {
           if (run.error)
-            print(`| ${run.name.padEnd(name_len)} | error: ${run.error.message ?? run.error} |`);
+            print(
+              `| ${run.name.padEnd(name_len)} | error: ${(run.error as any).message ?? run.error} |`
+            );
           else
             print(
-              `| ${run.name.padEnd(name_len)} | \`${`${$.time(run.stats.avg)}/iter`.padStart(14)}\` | \`${$.time(run.stats.min).padStart(9)}\` | \`${$.time(run.stats.p75).padStart(9)}\` | \`${$.time(run.stats.p99).padStart(9)}\` | \`${$.time(run.stats.max).padStart(9)}\` |`
+              `| ${run.name.padEnd(name_len)} | \`${`${$.time(run.stats!.avg)}/iter`.padStart(14)}\` | \`${$.time(run.stats!.min).padStart(9)}\` | \`${$.time(run.stats!.p75).padStart(9)}\` | \`${$.time(run.stats!.p99).padStart(9)}\` | \`${$.time(run.stats!.max).padStart(9)}\` |`
             );
         }
       }
     }
   },
 
-  async mitata(ctx, opts, benchmarks) {
+  async mitata(ctx: any, opts: any, benchmarks: Trial[]) {
     const print = opts.print;
-    let k_legend = opts.format?.name ?? 'longest';
+    let k_legend: number = opts.format?.name ?? 'longest';
 
     if ('fixed' === k_legend) k_legend = 28;
     else if (k_legend === 'longest') {
@@ -603,10 +641,10 @@ const formats = {
     let noisy_warning = false;
 
     for (const collection of COLLECTIONS) {
-      const trials = [];
+      const trials: [any, Trial][] = [];
       let prev_run_gap = false;
       if (!collection.trials.length) continue;
-      const has_matches = collection.trials.some((trial) => opts.filter.test(trial._name));
+      const has_matches = collection.trials.some((trial: any) => opts.filter.test(trial._name));
 
       if (!has_matches) continue;
       else if (first) {
@@ -633,7 +671,9 @@ const formats = {
           benchmarks.push(bench);
           if (-1 === $.colors.indexOf(trial._highlight)) trial._highlight = null;
           const _h =
-            !opts.colors || !trial._highlight ? (x) => x : (x) => $[trial._highlight] + x + $.reset;
+            !opts.colors || !trial._highlight
+              ? (x: string) => x
+              : (x: string) => ($ as any)[trial._highlight] + x + $.reset;
 
           for (const r of bench.runs) {
             if (prev_run_gap) print('');
@@ -641,11 +681,11 @@ const formats = {
             if (r.error) {
               if (!opts.colors)
                 print(
-                  `${_h($.str(r.name, k_legend).padEnd(k_legend))} error: ${r.error.message ?? r.error}`
+                  `${_h($.str(r.name, k_legend).padEnd(k_legend))} error: ${(r.error as any).message ?? r.error}`
                 );
               else
                 print(
-                  `${_h($.str(r.name, k_legend).padEnd(k_legend))} ${$.red + 'error:' + $.reset} ${r.error.message ?? r.error}`
+                  `${_h($.str(r.name, k_legend).padEnd(k_legend))} ${$.red + 'error:' + $.reset} ${(r.error as any).message ?? r.error}`
                 );
             } else {
               const compact = trial.flags & flags.compact;
@@ -1004,14 +1044,14 @@ const formats = {
       }
 
       if (collection.types.includes('b')) {
-        const map = {};
-        const colors = {};
+        const map: Record<string, number> = {};
+        const colors: Record<string, any> = {};
 
         for (const [trial, bench] of trials) {
           for (const r of bench.runs) {
             if (r.error) continue;
-            map[r.name] = r.stats.avg;
-            colors[r.name] = $[trial._highlight];
+            map[r.name] = r.stats!.avg;
+            colors[r.name] = ($ as any)[trial._highlight];
           }
         }
 
@@ -1023,32 +1063,32 @@ const formats = {
               steps: -10,
               colors: !opts.colors ? null : colors,
             })
-            .forEach((l) => print(l));
+            .forEach((l: string) => print(l));
         }
       }
 
       if (collection.types.includes('x')) {
-        const map = {};
-        const colors = {};
+        const map: Record<string, any> = {};
+        const colors: Record<string, any> = {};
 
         if (1 === trials.length) {
           for (const [trial, bench] of trials) {
             for (const r of bench.runs) {
               map[r.name] = r.stats;
-              colors[r.name] = $[trial._highlight];
+              colors[r.name] = ($ as any)[trial._highlight];
             }
           }
         } else {
           for (const [trial, bench] of trials) {
-            const runs = bench.runs.filter((r) => r.stats);
+            const runs = bench.runs.filter((r: any) => r.stats);
 
             if (!runs.length) continue;
 
             if (1 === runs.length) {
               map[runs[0].name] = runs[0].stats;
-              colors[runs[0].name] = $[trial._highlight];
+              colors[runs[0].name] = ($ as any)[trial._highlight];
             } else {
-              const stats = {
+              const stats: any = {
                 avg: 0,
                 min: Infinity,
                 p25: Infinity,
@@ -1066,7 +1106,7 @@ const formats = {
 
               map[bench.alias] = stats;
               stats.avg /= runs.length;
-              colors[bench.alias] = $[trial._highlight];
+              colors[bench.alias] = ($ as any)[trial._highlight];
             }
           }
         }
@@ -1077,19 +1117,19 @@ const formats = {
             .ascii(map, k_legend, 44, {
               colors: !opts.colors ? null : colors,
             })
-            .forEach((l) => print(l));
+            .forEach((l: string) => print(l));
         }
       }
 
       if (collection.types.includes('l')) {
-        const map = {};
-        const extra = {};
-        const colors = {};
-        const labels = {};
+        const map: Record<string, any> = {};
+        const extra: any = {};
+        const colors: Record<string, any> = {};
+        const labels: any = {};
 
         if (1 === trials.length) {
           for (const [trial, bench] of trials) {
-            const runs = bench.runs.filter((r) => r.stats);
+            const runs = bench.runs.filter((r: any) => r.stats);
 
             if (!runs.length) continue;
 
@@ -1103,13 +1143,13 @@ const formats = {
               labels.xmin = $.time(min);
               labels.xmax = $.time(max);
               extra.xmax = bins.length - 1;
-              colors[runs[0].name] = $[trial._highlight] || $.bold;
+              colors[runs[0].name] = ($ as any)[trial._highlight] || $.bold;
 
               map[runs[0].name] = {
                 y: bins,
-                x: bins.map((_, o) => o),
+                x: bins.map((_: any, o: number) => o),
 
-                format(x, y, s) {
+                format(x: number, y: number, s: string) {
                   x = Math.round(x * 44);
                   if (!opts.colors) return s;
                   if (x === avg) return $.yellow + s + $.reset;
@@ -1117,7 +1157,7 @@ const formats = {
                 },
               };
             } else {
-              const avgs = runs.map((r) => r.stats.avg);
+              const avgs = runs.map((r: any) => r.stats.avg);
 
               colors.ymin = $.cyan;
               colors.ymax = $.magenta;
@@ -1126,28 +1166,28 @@ const formats = {
               extra.xmax = runs.length - 1;
               labels.ymin = $.time(extra.ymin);
               labels.ymax = $.time(extra.ymax);
-              colors[bench.alias] = $[trial._highlight];
+              colors[bench.alias] = ($ as any)[trial._highlight];
 
               map[bench.alias] = {
                 y: avgs,
-                x: avgs.map((_, o) => o),
+                x: avgs.map((_: any, o: number) => o),
               };
             }
           }
         } else {
-          if (trials.every(([_, bench]) => 'static' === bench.kind)) {
+          if (trials.every(([_, bench]: [any, Trial]) => 'static' === bench.kind)) {
             colors.xmin = $.cyan;
             colors.xmax = $.magenta;
 
             for (const [trial, bench] of trials) {
               for (const r of bench.runs) {
                 if (r.error) continue;
-                const { bins, peak, steps } = $.histogram.bins(r.stats, 44, 0.99);
+                const { bins, peak, steps } = $.histogram.bins(r.stats!, 44, 0.99);
 
-                const y = bins.map((b) => b / peak);
+                const y = bins.map((b: number) => b / peak);
 
                 map[r.name] = { y, x: steps };
-                colors[r.name] = $[trial._highlight];
+                colors[r.name] = ($ as any)[trial._highlight];
                 extra.ymin = Math.min($.min(y), extra.ymin ?? Infinity);
                 extra.ymax = Math.max($.max(y), extra.ymax ?? -Infinity);
                 extra.xmin = Math.min($.min(steps), extra.xmin ?? Infinity);
@@ -1163,8 +1203,8 @@ const formats = {
             for (const [trial, bench] of trials) {
               for (const r of bench.runs) {
                 if (r.error) continue;
-                min = Math.min(min, r.stats.avg);
-                max = Math.max(max, r.stats.avg);
+                min = Math.min(min, r.stats!.avg);
+                max = Math.max(max, r.stats!.avg);
               }
             }
 
@@ -1174,22 +1214,25 @@ const formats = {
             labels.ymax = $.time(max);
 
             for (const [trial, bench] of trials) {
-              const runs = bench.runs.filter((r) => r.stats);
+              const runs = bench.runs.filter((r: any) => r.stats);
 
               if (!runs.length) continue;
 
               if (1 === runs.length) {
-                const y = runs[0].stats.avg / max;
-                colors[runs[0].name] = $[trial._highlight];
+                const y = runs[0].stats!.avg / max;
+                colors[runs[0].name] = ($ as any)[trial._highlight];
                 map[runs[0].name] = { x: [0, 1], y: [y, y] };
                 extra.ymin = Math.min(y, extra.ymin ?? Infinity);
                 extra.ymax = Math.max(y, extra.ymax ?? -Infinity);
               } else {
-                colors[bench.alias] = $[trial._highlight];
-                const y = runs.map((r) => r.stats.avg / max);
+                colors[bench.alias] = ($ as any)[trial._highlight];
+                const y = runs.map((r: any) => r.stats.avg / max);
                 extra.ymin = Math.min($.min(y), extra.ymin ?? Infinity);
                 extra.ymax = Math.max($.max(y), extra.ymax ?? -Infinity);
-                map[bench.alias] = { y, x: runs.map((_, o) => o / (runs.length - 1)) };
+                map[bench.alias] = {
+                  y,
+                  x: runs.map((_: any, o: number) => o / (runs.length - 1)),
+                };
               }
             }
           }
@@ -1207,28 +1250,28 @@ const formats = {
               key: k_legend,
               colors: !opts.colors ? null : colors,
             })
-            .forEach((l) => print(l));
+            .forEach((l: string) => print(l));
         }
       }
 
       if (collection.types.includes('s')) {
-        trials.sort((a, b) => {
-          const aa = a[1].runs.filter((r) => r.stats);
-          const bb = b[1].runs.filter((r) => r.stats);
+        trials.sort((a: [any, Trial], b: [any, Trial]) => {
+          const aa = a[1].runs.filter((r: any) => r.stats);
+          const bb = b[1].runs.filter((r: any) => r.stats);
 
           if (0 === aa.length) return 1;
           if (0 === bb.length) return -1;
 
-          const a_avg = aa.reduce((a, r) => a + r.stats.avg, 0) / aa.length;
-          const b_avg = bb.reduce((a, r) => a + r.stats.avg, 0) / bb.length;
+          const a_avg = aa.reduce((a: number, r: any) => a + r.stats.avg, 0) / aa.length;
+          const b_avg = bb.reduce((a: number, r: any) => a + r.stats.avg, 0) / bb.length;
 
           return a_avg - b_avg;
         });
 
         if (1 === trials.length) {
           const runs = trials[0][1].runs
-            .filter((r) => r.stats)
-            .sort((a, b) => a.stats.avg - b.stats.avg);
+            .filter((r: any) => r.stats)
+            .sort((a: any, b: any) => a.stats.avg - b.stats.avg);
 
           if (1 < runs.length) {
             print('');
@@ -1261,20 +1304,21 @@ const formats = {
         } else {
           let header = false;
           const baseline =
-            trials.find(([trial, bench]) => bench.baseline && bench.runs.some((r) => r.stats))?.[1] ||
-            trials[0][1];
+            trials.find(
+              ([trial, bench]: [any, Trial]) => bench.baseline && bench.runs.some((r: any) => r.stats)
+            )?.[1] || trials[0][1];
 
           if (baseline) {
             const bruns = baseline.runs
-              .filter((r) => !r.error)
-              .sort((a, b) => a.stats.avg - b.stats.avg);
+              .filter((r: any) => !r.error)
+              .sort((a: any, b: any) => a.stats.avg - b.stats.avg);
 
             for (const [trial, bench] of trials) {
               if (bench === baseline) continue;
 
               const runs = bench.runs
-                .filter((r) => !r.error)
-                .sort((a, b) => a.stats.avg - b.stats.avg);
+                .filter((r: any) => !r.error)
+                .sort((a: any, b: any) => a.stats.avg - b.stats.avg);
 
               if (!runs.length) continue;
 
@@ -1318,8 +1362,8 @@ const formats = {
                 const rs = runs[runs.length - 1];
                 const bs = bruns[bruns.length - 1];
 
-                const ravg = runs.reduce((a, r) => a + r.stats.avg, 0) / runs.length;
-                const bavg = bruns.reduce((a, r) => a + r.stats.avg, 0) / bruns.length;
+                const ravg = runs.reduce((a: number, r: any) => a + r.stats.avg, 0) / runs.length;
+                const bavg = bruns.reduce((a: number, r: any) => a + r.stats.avg, 0) / bruns.length;
 
                 const faster = ravg >= bavg;
                 const sfaster = rs.stats.avg >= bs.stats.avg;
@@ -1434,582 +1478,5 @@ const formats = {
               $.reset +
               'noisy: confidence target not reached before max cpu time'
           ));
-  },
-};
-
-export const $ = {
-  bold: '\x1b[1m',
-  reset: '\x1b[0m',
-
-  red: '\x1b[31m',
-  cyan: '\x1b[36m',
-  blue: '\x1b[34m',
-  gray: '\x1b[90m',
-  white: '\x1b[37m',
-  black: '\x1b[30m',
-  green: '\x1b[32m',
-  yellow: '\x1b[33m',
-  magenta: '\x1b[35m',
-
-  colors: ['red', 'cyan', 'blue', 'green', 'yellow', 'magenta', 'gray', 'white', 'black'],
-
-  clamp(m, v, x) {
-    return v < m ? m : v > x ? x : v;
-  },
-
-  min(arr, s = Infinity) {
-    return arr.reduce((x, v) => Math.min(x, v), s);
-  },
-
-  max(arr, s = -Infinity) {
-    return arr.reduce((x, v) => Math.max(x, v), s);
-  },
-
-  str(s, len = 3) {
-    if (len >= s.length) return s;
-    return `${s.slice(0, len - 2)}..`;
-  },
-
-  amount(n) {
-    if (Number.isNaN(n)) return 'NaN';
-    if (n < 1e3) return n.toFixed(2);
-    n /= 1000;
-    if (n < 1e3) return `${n.toFixed(2)}k`;
-    n /= 1000;
-    if (n < 1e3) return `${n.toFixed(2)}M`;
-    n /= 1000;
-    if (n < 1e3) return `${n.toFixed(2)}G`;
-    n /= 1000;
-    if (n < 1e3) return `${n.toFixed(2)}T`;
-    n /= 1000;
-
-    return `${n.toFixed(2)}P`;
-  },
-
-  bytes(b, pad = true) {
-    if (Number.isNaN(b)) return 'NaN';
-    if (b < 1e3) return `${b.toFixed(2)} ${!pad ? '' : ' '}b`;
-
-    b /= 1024;
-    if (b < 1e3) return `${b.toFixed(2)} kb`;
-    b /= 1024;
-    if (b < 1e3) return `${b.toFixed(2)} mb`;
-    b /= 1024;
-    if (b < 1e3) return `${b.toFixed(2)} gb`;
-    b /= 1024;
-    if (b < 1e3) return `${b.toFixed(2)} tb`;
-    b /= 1024;
-
-    return `${b.toFixed(2)} pb`;
-  },
-
-  time(ns) {
-    if (ns < 1) return `${(ns * 1e3).toFixed(2)} ps`;
-    if (ns < 1e3) return `${ns.toFixed(2)} ns`;
-    ns /= 1000;
-    if (ns < 1e3) return `${ns.toFixed(2)} µs`;
-    ns /= 1000;
-    if (ns < 1e3) return `${ns.toFixed(2)} ms`;
-    ns /= 1000;
-
-    if (ns < 1e3) return `${ns.toFixed(2)} s`;
-    ns /= 60;
-    if (ns < 1e3) return `${ns.toFixed(2)} m`;
-    ns /= 60;
-
-    return `${ns.toFixed(2)} h`;
-  },
-
-  barplot: {
-    symbols: {
-      bar: '■',
-      legend: '┤',
-      tl: '┌',
-      tr: '┐',
-      bl: '└',
-      br: '┘',
-    },
-
-    ascii(
-      map,
-      key = 8,
-      size = 14,
-      { steps = 0, fmt = $.time, colors = true, symbols = $.barplot.symbols } = {}
-    ) {
-      const values = Object.values(map);
-      const canvas = new Array(2 + values.length).fill('');
-
-      steps += size;
-      const min = $.min(values);
-      const max = $.max(values);
-      const step = (max - min) / steps;
-
-      canvas[0] += ' '.repeat(1 + key);
-      canvas[0] += symbols.tl + ' '.repeat(size) + symbols.tr;
-
-      Object.keys(map).forEach((name, o) => {
-        const value = map[name];
-        const bars = Math.round((value - min) / step);
-        if (colors?.[name]) canvas[o + 1] += colors[name];
-
-        canvas[o + 1] += $.str(name, key).padStart(key);
-        if (colors?.[name]) canvas[o + 1] += $.reset;
-        canvas[o + 1] += ' ' + symbols.legend;
-
-        if (colors) canvas[o + 1] += $.gray;
-        canvas[o + 1] += symbols.bar.repeat(bars);
-        if (colors) canvas[o + 1] += $.reset;
-
-        canvas[o + 1] += ' ';
-        if (colors) canvas[o + 1] += $.yellow;
-        canvas[o + 1] += fmt(value);
-        if (colors) canvas[o + 1] += $.reset;
-      });
-
-      canvas[canvas.length - 1] += ' '.repeat(1 + key);
-      canvas[canvas.length - 1] += symbols.bl + ' '.repeat(size) + symbols.br;
-
-      return canvas;
-    },
-  },
-
-  canvas: {
-    braille(width, height) {
-      const vwidth = 2 * width;
-      const vheight = 4 * height;
-      const buffer = new Uint8Array(vwidth * vheight);
-
-      const symbols = [0x2801, 0x2802, 0x2804, 0x2840, 0x2808, 0x2810, 0x2820, 0x2880];
-
-      return {
-        buffer,
-        width,
-        height,
-        vwidth,
-        vheight,
-
-        set(x, y, tag = 1) {
-          buffer[x + y * vwidth] = tag;
-        },
-
-        line(s, e, tag = 1) {
-          s.x = Math.round(s.x);
-          s.y = Math.round(s.y);
-          e.x = Math.round(e.x);
-          e.y = Math.round(e.y);
-          const dx = Math.abs(e.x - s.x);
-          const dy = Math.abs(e.y - s.y);
-
-          let err = dx - dy;
-          let x = s.x;
-          let y = s.y;
-          const sx = s.x < e.x ? 1 : -1;
-          const sy = s.y < e.y ? 1 : -1;
-
-          while (true) {
-            buffer[x + y * vwidth] = tag;
-            if (x === e.x && y === e.y) break;
-
-            const e2 = 2 * err;
-            if (e2 < dx) ((y += sy), (err += dx));
-            if (e2 > -dy) ((x += sx), (err -= dy));
-          }
-        },
-
-        toString({ background = false, format = (x, y, s, tag, backgorund) => s } = {}) {
-          const canvas = new Array(height).fill('');
-
-          for (let y = 0; y < vheight; y += 4) {
-            const y0 = y * vwidth;
-            const y1 = y0 + vwidth;
-            const y2 = y1 + vwidth;
-            const y3 = y2 + vwidth;
-
-            for (let x = 0; x < vwidth; x += 2) {
-              let c = 0x2800;
-
-              if (buffer[x + y0]) c |= symbols[0];
-              if (buffer[1 + x + y0]) c |= symbols[4];
-              if (buffer[x + y1]) c |= symbols[1];
-              if (buffer[1 + x + y1]) c |= symbols[5];
-              if (buffer[x + y2]) c |= symbols[2];
-              if (buffer[1 + x + y2]) c |= symbols[6];
-              if (buffer[x + y3]) c |= symbols[3];
-              if (buffer[1 + x + y3]) c |= symbols[7];
-
-              if (c === 0x2800 && !background) canvas[y / 4] += ' ';
-              else
-                canvas[y / 4] += format(
-                  x / (vwidth - 1),
-                  y / (vheight - 1),
-                  String.fromCharCode(c),
-                  buffer[x + y0] ||
-                    buffer[1 + x + y0] ||
-                    buffer[x + y1] ||
-                    buffer[1 + x + y1] ||
-                    buffer[x + y2] ||
-                    buffer[1 + x + y2] ||
-                    buffer[x + y3] ||
-                    buffer[1 + x + y3],
-                  c === 0x2800
-                );
-            }
-          }
-
-          return canvas;
-        },
-      };
-    },
-  },
-
-  lineplot: {
-    symbols: {
-      tl: '┌',
-      tr: '┐',
-      bl: '└',
-      br: '┘',
-    },
-
-    ascii(
-      map,
-      {
-        colors = true,
-        xmin = 0,
-        xmax = 1,
-        ymin = 0,
-        ymax = 1,
-        symbols = $.lineplot.symbols,
-        key = 8,
-        width = 12,
-        height = 12,
-        labels = { xmin: null, xmax: null, ymin: null, ymax: null },
-      } = {}
-    ) {
-      const keys = Object.keys(map);
-      const _canvas = $.canvas.braille(width, height);
-      const xs = (_canvas.vwidth - 1) / (xmax - xmin);
-      const ys = (_canvas.vheight - 1) / (ymax - ymin);
-
-      const colorsv = Object.entries(colors)
-        .filter(([n]) => !Object.keys(labels).includes(n))
-        .map(([_, v]) => v);
-
-      const acolors = $.colors.filter((n) => !colorsv.includes($[n]));
-
-      keys.forEach((name, k) => {
-        const { x: xp, y: yp } = map[name];
-
-        for (let o = 0; o < xp.length - 1; o++) {
-          if (null == xp[o] || null == xp[o + 1]) continue;
-          if (null == yp[o] || null == yp[o + 1]) continue;
-          const s = {
-            x: Math.round(xs * (xp[o] - xmin)),
-            y: _canvas.vheight - 1 - Math.round(ys * (yp[o] - ymin)),
-          };
-          const e = {
-            x: Math.round(xs * (xp[o + 1] - xmin)),
-            y: _canvas.vheight - 1 - Math.round(ys * (yp[o + 1] - ymin)),
-          };
-
-          _canvas.line(s, e, 1 + k);
-        }
-      });
-
-      const canvas = new Array(2 + _canvas.height).fill('');
-
-      canvas[0] += ' '.repeat(1 + key);
-      canvas[0] += symbols.tl + ' '.repeat(width) + symbols.tr;
-
-      const lines = _canvas.toString({
-        format(x, y, s, tag) {
-          const name = keys[tag - 1];
-          if (map[name].format) return map[name].format(x, y, s);
-          else if (colors?.[name]) return colors[name] + s + $.reset;
-          else return $[acolors[(tag - 1) % acolors.length]] + s + $.reset;
-        },
-      });
-
-      const plabels = {
-        0: !colors?.ymax ? labels.ymax || '' : colors.ymax + (labels.ymax || '') + $.reset,
-        [lines.length - 1]: !colors?.ymin
-          ? labels.ymin || ''
-          : colors.ymin + (labels.ymin || '') + $.reset,
-      };
-
-      const legends = keys.map((name, k) => {
-        if (colors?.[name]) return colors[name] + $.str(name, key).padStart(key) + $.reset;
-        else return $[acolors[k % acolors.length]] + $.str(name, key).padStart(key) + $.reset;
-      });
-
-      lines.forEach((l, o) => {
-        canvas[o + 1] += legends[o] ?? ' '.repeat(key);
-        canvas[o + 1] += ' '.repeat(2) + l + (!plabels[o] ? '' : ' ' + plabels[o]);
-      });
-
-      canvas[canvas.length - 1] += ' '.repeat(1 + key);
-      canvas[canvas.length - 1] += symbols.bl + ' '.repeat(width) + symbols.br;
-
-      if (labels.xmin || labels.xmax) {
-        const xmin = labels.xmin || '';
-        const xmax = labels.xmax || '';
-        const gap = 2 + width - xmin.length;
-
-        canvas.push(
-          ' '.repeat(key) +
-            ' ' +
-            (!colors?.xmin ? xmin : colors.xmin + xmin + $.reset) +
-            (!colors?.xmax ? xmax.padStart(gap) : colors.xmax + xmax.padStart(gap) + $.reset)
-        );
-      }
-
-      return canvas;
-    },
-  },
-
-  histogram: {
-    symbols: ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'],
-
-    bins(stats, size = 6, percentile = 1) {
-      const offset = (percentile * (stats.samples.length - 1)) | 0;
-
-      let min = stats.min;
-      const max = stats.samples[offset] || stats.max || 1;
-
-      const steps = new Array(size);
-      const bins = new Array(size).fill(0);
-      const step = (max - min) / (size - 1);
-
-      if (0 === step) {
-        min = 0;
-        for (let o = 0; o < size; o++) steps[o] = o * step;
-        bins[$.clamp(0, Math.round((stats.avg - min) / step), size - 1)] = 1;
-      } else {
-        for (let o = 0; o < size; o++) steps[o] = min + o * step;
-        for (let o = 0; o <= offset; o++) bins[Math.round((stats.samples[o] - min) / step)]++;
-      }
-
-      return {
-        min,
-        max,
-        step,
-        bins,
-        steps,
-        peak: $.max(bins),
-        outliers: stats.samples.length - 1 - offset,
-        avg: $.clamp(0, Math.round((stats.avg - min) / step), size - 1),
-      };
-    },
-
-    ascii(_bins, height = 1, { colors = true, symbols = $.histogram.symbols } = {}) {
-      const canvas = new Array(height);
-      const { avg, peak, bins } = _bins;
-      const scale = (height * symbols.length - 1) / peak;
-
-      for (let y = 0; y < height; y++) {
-        let l = '';
-
-        if (0 !== avg) {
-          if (colors) l += $.cyan;
-
-          for (let o = 0; o < avg; o++) {
-            const b = bins[o];
-            if (y === 0) l += symbols[$.clamp(0, Math.round(b * scale), symbols.length - 1)];
-            else {
-              const min = y * symbols.length;
-              const max = (y + 1) * symbols.length;
-              const offset = Math.round(b * scale) | 0;
-
-              if (min >= offset) l += ' ';
-              else if (max <= offset) l += symbols[symbols.length - 1];
-              else l += symbols[$.clamp(min, offset, max) % symbols.length];
-            }
-          }
-
-          if (colors) l += $.reset;
-        }
-
-        {
-          if (colors) l += $.yellow;
-
-          const b = bins[avg];
-          if (y === 0) l += symbols[$.clamp(0, Math.round(b * scale), symbols.length - 1)];
-          else {
-            const min = y * symbols.length;
-            const max = (y + 1) * symbols.length;
-            const offset = Math.round(b * scale) | 0;
-
-            if (min >= offset) l += ' ';
-            else if (max <= offset) l += symbols[symbols.length - 1];
-            else l += symbols[$.clamp(min, offset, max) % symbols.length];
-          }
-
-          if (colors) l += $.reset;
-        }
-
-        if (avg != bins.length - 1) {
-          if (colors) l += $.magenta;
-
-          for (let o = 1 + avg; o < bins.length; o++) {
-            const b = bins[o];
-            if (y === 0) l += symbols[$.clamp(0, Math.round(b * scale), symbols.length - 1)];
-            else {
-              const min = y * symbols.length;
-              const max = (y + 1) * symbols.length;
-              const offset = Math.round(b * scale) | 0;
-
-              if (min >= offset) l += ' ';
-              else if (max <= offset) l += symbols[symbols.length - 1];
-              else l += symbols[$.clamp(min, offset, max) % symbols.length];
-            }
-          }
-
-          if (colors) l += $.reset;
-        }
-
-        canvas[y] = l;
-      }
-
-      return canvas.reverse();
-    },
-  },
-
-  boxplot: {
-    symbols: {
-      v: '│',
-      h: '─',
-      tl: '┌',
-      tr: '┐',
-      bl: '└',
-      br: '┘',
-
-      avg: {
-        top: '┬',
-        middle: '│',
-        bottom: '┴',
-      },
-
-      tail: {
-        top: '╷',
-        bottom: '╵',
-        middle: ['├', '┤'],
-      },
-    },
-
-    ascii(
-      map,
-      key = 8,
-      size = 14,
-      { fmt = $.time, colors = true, symbols = $.boxplot.symbols } = {}
-    ) {
-      let tmin = Infinity;
-      let tmax = -Infinity;
-      const keys = Object.keys(map);
-      const canvas = new Array(3 + 3 * keys.length).fill('');
-
-      for (const name of keys) {
-        const stats = map[name];
-        if (tmin > stats.min) tmin = stats.min;
-        const max = stats.p99 || stats.max || 1;
-        if (max > tmax) tmax = max;
-      }
-
-      const steps = 2 + size;
-      const step = (tmax - tmin) / (steps - 1);
-
-      canvas[0] += ' '.repeat(1 + key);
-      canvas[0] += symbols.tl + ' '.repeat(size) + symbols.tr;
-
-      keys.forEach((name, o) => {
-        o *= 3;
-        const stats = map[name];
-
-        const min = stats.min;
-        const avg = stats.avg;
-        const p25 = stats.p25;
-        const p75 = stats.p75;
-        const max = stats.p99 || stats.max || 1;
-
-        // TODO: ????
-        const min_offset = 1 + Math.min(steps - 1, Math.round((min - tmin) / step));
-        const max_offset = 1 + Math.min(steps - 1, Math.round((max - tmin) / step));
-        const avg_offset = 1 + Math.min(steps - 1, Math.round((avg - tmin) / step));
-        const p25_offset = 1 + Math.min(steps - 1, Math.round((p25 - tmin) / step));
-        const p75_offset = 1 + Math.min(steps - 1, Math.round((p75 - tmin) / step));
-
-        const u = new Array(2 + steps).fill(' ');
-        const m = new Array(2 + steps).fill(' ');
-        const l = new Array(2 + steps).fill(' ');
-
-        u[0] = !colors ? '' : $.cyan;
-        m[0] = !colors ? '' : $.cyan;
-        l[0] = !colors ? '' : $.cyan;
-
-        if (min_offset < p25_offset) {
-          u[min_offset] = symbols.tail.top;
-          l[min_offset] = symbols.tail.bottom;
-          m[min_offset] = symbols.tail.middle[0];
-          for (let o = 1 + min_offset; o < p25_offset; o++) m[o] = symbols.h;
-        }
-
-        if (avg_offset > p25_offset) {
-          u[p25_offset] = symbols.tl;
-          l[p25_offset] = symbols.bl;
-          m[p25_offset] = min_offset === p25_offset ? symbols.v : symbols.tail.middle[1];
-
-          for (let o = 1 + p25_offset; o < avg_offset; o++) u[o] = l[o] = symbols.h;
-        }
-
-        u[avg_offset] = !colors
-          ? symbols.avg.top
-          : $.reset + $.yellow + symbols.avg.top + $.reset + $.magenta;
-        l[avg_offset] = !colors
-          ? symbols.avg.bottom
-          : $.reset + $.yellow + symbols.avg.bottom + $.reset + $.magenta;
-        m[avg_offset] = !colors
-          ? symbols.avg.middle
-          : $.reset + $.yellow + symbols.avg.middle + $.reset + $.magenta;
-
-        if (avg_offset < p75_offset) {
-          u[p75_offset] = symbols.tr;
-          l[p75_offset] = symbols.br;
-          m[p75_offset] = max_offset === p75_offset ? symbols.v : symbols.tail.middle[0];
-
-          for (let o = 1 + avg_offset; o < p75_offset; o++) u[o] = l[o] = symbols.h;
-        }
-
-        if (max_offset > p75_offset) {
-          u[max_offset] = symbols.tail.top;
-          l[max_offset] = symbols.tail.bottom;
-          m[max_offset] = symbols.tail.middle[1];
-          for (let o = 1 + Math.max(avg_offset, p75_offset); o < max_offset; o++) m[o] = symbols.h;
-        }
-
-        canvas[o + 1] = ' '.repeat(1 + key) + u.join('').trimEnd() + (!colors ? '' : $.reset);
-        if (colors?.[name]) canvas[o + 2] += colors[name];
-        canvas[o + 2] += $.str(name, key).padStart(key);
-
-        if (colors?.[name]) canvas[o + 2] += $.reset;
-        canvas[o + 2] += ' ' + m.join('').trimEnd() + (!colors ? '' : $.reset);
-        canvas[o + 3] = ' '.repeat(1 + key) + l.join('').trimEnd() + (!colors ? '' : $.reset);
-      });
-
-      canvas[canvas.length - 2] += ' '.repeat(1 + key);
-      canvas[canvas.length - 2] += symbols.bl + ' '.repeat(size) + symbols.br;
-
-      const rmin = fmt(tmin);
-      const rmax = fmt(tmax);
-      const rmid = fmt((tmin + tmax) / 2);
-      const gap = (size - rmin.length - rmid.length - rmax.length) / 2;
-
-      canvas[canvas.length - 1] += ' '.repeat(1 + key);
-      canvas[canvas.length - 1] += !colors ? rmin : $.cyan + rmin + $.reset;
-
-      canvas[canvas.length - 1] += ' '.repeat((1 + gap) | 0);
-      canvas[canvas.length - 1] += !colors ? rmid : $.gray + rmid + $.reset;
-
-      canvas[canvas.length - 1] += ' '.repeat(1 + Math.ceil(gap));
-      canvas[canvas.length - 1] += !colors ? rmax : $.magenta + rmax + $.reset;
-      return canvas;
-    },
   },
 };

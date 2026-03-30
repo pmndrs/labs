@@ -1,4 +1,4 @@
-import { bench as _bench, group as _group, type B } from './mitata.ts';
+import { bench as _bench, group as _group, type B } from './bench.ts';
 
 export { defineConfig } from './config.ts';
 export type { LabsConfig } from './config.ts';
@@ -8,7 +8,7 @@ const groupNameStack: string[] = [];
 const grepTags = process.env.LABS_GREP_TAGS?.split(',').filter(Boolean) ?? [];
 
 // Ordered registry of (groupName, benchAlias) built as bench() calls execute.
-// worker.ts zips this with mitata's benchmarks[] array (same registration order)
+// worker.ts zips this with the engine's benchmarks[] array (same registration order)
 // to attach groupName to each trial in the saved JSON.
 const benchRegistry: Array<{ groupName: string; alias: string }> = [];
 
