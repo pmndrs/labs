@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { measure, kind, do_not_optimize } from '../src/core/lib.mjs';
-import { B, bench, group, run, compact } from '../src/core/main.mjs';
+import { measure, kind, do_not_optimize } from '../src/core/lib.ts';
+import { B, bench, group, run, compact } from '../src/core/main.ts';
 
 const fast = { min_cpu_time: 1, min_samples: 12, adaptive: false } as const;
 
@@ -81,7 +81,11 @@ describe('kind', () => {
   });
 
   it('classifies async generator as yield', () => {
-    expect(kind(async function* () { yield; })).toBe('yield');
+    expect(
+      kind(async function* () {
+        yield;
+      })
+    ).toBe('yield');
   });
 
   it('returns undefined for non-functions', () => {
@@ -205,14 +209,18 @@ describe('B class', () => {
   }, 20_000);
 
   it('B.run(thrw=false) captures errors instead of throwing', async () => {
-    const b = new B('throws', () => { throw new Error('boom'); });
+    const b = new B('throws', () => {
+      throw new Error('boom');
+    });
     const trial = await b.run(false, fast);
     expect(trial.runs[0].error).toBeDefined();
     expect(trial.runs[0].stats).toBeUndefined();
   }, 20_000);
 
   it('B.run(thrw=true) throws on benchmark error', async () => {
-    const b = new B('throws', () => { throw new Error('boom'); });
+    const b = new B('throws', () => {
+      throw new Error('boom');
+    });
     await expect(b.run(true, fast)).rejects.toThrow('boom');
   }, 20_000);
 });
@@ -297,7 +305,9 @@ describe('bench + run', () => {
       format: { json: { debug: false, samples: false } } as any,
       tune: fast,
       calibrate: fast,
-      print: (s: string) => { output += s; },
+      print: (s: string) => {
+        output += s;
+      },
     });
     const parsed = JSON.parse(output);
     expect(parsed).toHaveProperty('benchmarks');
