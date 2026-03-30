@@ -1,20 +1,12 @@
-import type { FnKind, MeasureOptions, Stats } from './types.ts';
+import type { MeasureOptions, Stats } from '../types.ts';
+import { AsyncFunction, GeneratorFunction, kind, now } from './runtime.ts';
+import { defaults } from './constants.ts';
 
-const AsyncFunction = (async () => {}).constructor as any;
-const GeneratorFunction = function* () {}.constructor as any;
-const AsyncGeneratorFunction = async function* () {}.constructor as any;
-
-const _sink: { _: any; __(): void } = {
-  _: null,
-  __() {
-    _print(_sink._);
-  },
-};
-
-export function do_not_optimize(v: any): void {
-  _sink._ = v;
-}
-
+/**
+ * Measure the performance of `f` by dispatching to the appropriate benchmark
+ * engine ({@link benchFn}, {@link benchIter}, or {@link benchGenerator})
+ * based on its {@link kind}.
+ */
 export async function measure(f: (...args: any[]) => any, opts: MeasureOptions = {}): Promise<Stats> {
   const dispatch: Record<string, (f: any, opts?: any) => Promise<Stats>> = {
     fn: benchFn,
@@ -27,6 +19,13 @@ export async function measure(f: (...args: any[]) => any, opts: MeasureOptions =
   return await dispatch[kind(f) as any](f, opts);
 }
 
+/**
+ * Benchmark adapter for generator functions.
+ *
+ * The generator yields a benchmarkable function (or an options object with a
+ * `bench` / `manual` key) and is resumed after measurement completes.
+ * Delegates the actual timing to {@link benchFn}.
+ */
 export async function benchGenerator(gen: (...args: any[]) => any, opts: any = {}): Promise<Stats> {
   const ctx = {
     get(name: string) {
@@ -65,131 +64,14 @@ export async function benchGenerator(gen: (...args: any[]) => any, opts: any = {
   };
 }
 
-export const _print: (s: any) => void = (() => {
-  if (globalThis.console?.log) return globalThis.console.log;
-  if ((globalThis as any).print && !globalThis.document) return (globalThis as any).print;
-
-  return () => {
-    throw new Error('no print function available');
-  };
-})();
-
-export const gc: (() => void) & { fallback?: boolean } = (() => {
-  const g = globalThis as any;
-  try {
-    return (g.Bun.gc(true), () => g.Bun.gc(true));
-  } catch {}
-  try {
-    return (g.gc(), () => g.gc());
-  } catch {}
-  try {
-    return (g.__gc(), () => g.__gc());
-  } catch {}
-  try {
-    return (g.std.gc(), () => g.std.gc());
-  } catch {}
-  try {
-    return (g.$262.gc(), () => g.$262.gc());
-  } catch {}
-  try {
-    return (g.tjs.engine.gc.run(), () => g.tjs.engine.gc.run());
-  } catch {}
-  return Object.assign(g.Graal ? () => new Uint8Array(2 ** 29) : () => new Uint8Array(2 ** 30), {
-    fallback: true,
-  });
-})();
-
-export const now: () => number = (() => {
-  const g = globalThis as any;
-  try {
-    g.Bun.nanoseconds();
-    return g.Bun.nanoseconds;
-  } catch {}
-  try {
-    (_sink as any).agent.monotonicNow();
-    return () => 1e6 * (_sink as any).agent.monotonicNow();
-  } catch {}
-  try {
-    g.$262.agent.monotonicNow();
-    return () => 1e6 * g.$262.agent.monotonicNow();
-  } catch {}
-  try {
-    const _now = performance.now.bind(performance);
-    _now();
-    return () => 1e6 * _now();
-  } catch {
-    return () => 1e6 * Date.now();
-  }
-})();
-
-export function kind(fn: any, _: boolean = false): FnKind | undefined {
-  if (
-    !(
-      fn instanceof Function ||
-      fn instanceof AsyncFunction ||
-      fn instanceof GeneratorFunction ||
-      fn instanceof AsyncGeneratorFunction
-    )
-  )
-    return;
-
-  if (fn instanceof GeneratorFunction || fn instanceof AsyncGeneratorFunction) return 'yield';
-
-  if ((_ ? true : 0 === fn.length) && (fn instanceof Function || fn instanceof AsyncFunction))
-    return 'fn';
-
-  if (0 !== fn.length && (fn instanceof Function || fn instanceof AsyncFunction)) return 'iter';
-}
-
-// ── constants ──────────────────────────────────────────────────────
-
-const k_cpu_time_rescale_heap = 1.1;
-const k_cpu_time_rescale_inner_gc = 2;
-
-export const k_concurrency = 1;
-export const k_min_samples = 12;
-export const k_batch_unroll = 4;
-export const k_max_samples = 1e9;
-export const k_warmup_samples = 2;
-export const k_batch_samples = 4096;
-export const k_samples_threshold = 12;
-export const k_batch_threshold = 65536;
-export const k_min_cpu_time = 642 * 1e6;
-export const k_warmup_threshold = 500_000;
-
-// ── defaults ───────────────────────────────────────────────────────
-
-function defaults(opts: any): void {
-  opts.gc ??= gc;
-  opts.now ??= now;
-  opts.heap ??= null;
-  opts.params ??= {};
-  opts.manual ??= false;
-  opts.inner_gc ??= false;
-  opts.$counters ??= false;
-  opts.concurrency ??= k_concurrency;
-  opts.min_samples ??= k_min_samples;
-  opts.max_samples ??= k_max_samples;
-  opts.min_cpu_time ??= k_min_cpu_time;
-  opts.batch_unroll ??= k_batch_unroll;
-  opts.batch_samples ??= k_batch_samples;
-  opts.warmup_samples ??= k_warmup_samples;
-  opts.batch_threshold ??= k_batch_threshold;
-  opts.warmup_threshold ??= k_warmup_threshold;
-  opts.samples_threshold ??= k_samples_threshold;
-  opts.adaptive ??= true;
-  opts.max_cpu_time ??= 5e9;
-  if (opts.target_rel_ci === undefined) {
-    opts.target_rel_ci =
-      opts.adaptive === false ? 0 : opts.adaptive === true ? 0.025 : +opts.adaptive;
-  }
-
-  if (opts.heap) opts.min_cpu_time *= k_cpu_time_rescale_heap;
-  if (opts.gc && opts.inner_gc) opts.min_cpu_time *= k_cpu_time_rescale_inner_gc;
-}
-
-// ── fn benchmark (codegen) ─────────────────────────────────────────
-
+/**
+ * Core benchmark engine for zero-arg and parameterised functions.
+ *
+ * Generates an {@link AsyncFunction} loop at runtime that handles warm-up,
+ * batching, parameter injection, heap tracking, inner GC, hardware counters,
+ * and adaptive stopping via Welford's online variance (when `target_rel_ci`
+ * is set).  The generated source is attached as `debug` on the returned stats.
+ */
 export async function benchFn(fn: (...args: any[]) => any, opts: any = {}): Promise<Stats> {
   defaults(opts);
   let async = false;
@@ -197,7 +79,7 @@ export async function benchFn(fn: (...args: any[]) => any, opts: any = {}): Prom
   const params: string[] = Object.keys(opts.params);
 
   warmup: {
-    const $p = new Array(params.length);
+    const $p = Array.from({ length: params.length }, () => 0);
 
     for (let o = 0; o < params.length; o++) {
       $p[o] = await opts.params[o]();
@@ -206,7 +88,11 @@ export async function benchFn(fn: (...args: any[]) => any, opts: any = {}): Prom
     const t0 = now();
     const r = fn(...$p);
     let t1 = now();
-    if ((async = r instanceof Promise)) (await r, (t1 = now()));
+
+    if ((async = r instanceof Promise)) {
+      await r;
+      t1 = now();
+    }
 
     if (t1 - t0 <= opts.warmup_threshold) {
       for (let o = 0; o < opts.warmup_samples; o++) {
@@ -444,12 +330,18 @@ export async function benchFn(fn: (...args: any[]) => any, opts: any = {}): Prom
   };
 }
 
-// ── iter benchmark (codegen) ───────────────────────────────────────
-
+/**
+ * Benchmark engine for iterator-style benchmarks.
+ *
+ * The caller receives an iterable context; each `for..of` / `for await..of`
+ * iteration is one timed sample.  Internally a {@link GeneratorFunction} loop
+ * is code-generated with the same adaptive-stopping and batching logic as
+ * {@link benchFn}.
+ */
 export async function benchIter(iter: (...args: any[]) => any, opts: any = {}): Promise<Stats> {
   const _: any = {};
   defaults(opts);
-  let samples = new Array(2 ** 20);
+  let samples = Array.from({ length: 2 ** 20 }, () => 0);
   const _i = {
     next() {
       return _.next();
@@ -520,7 +412,7 @@ export async function benchIter(iter: (...args: any[]) => any, opts: any = {}): 
             ? 'yield void 0;'
             : `
           for (let o = 0; o < ${(opts.batch_samples / opts.batch_unroll) | 0}; o++) {
-            ${new Array(opts.batch_unroll).fill('yield void 0;').join(' ')}
+            ${Array.from({ length: opts.batch_unroll }, () => 'yield void 0;').join(' ')}
           }
         `
         }

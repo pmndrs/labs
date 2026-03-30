@@ -1,8 +1,16 @@
-export { measure, do_not_optimize } from './lib.ts';
-import { kind, measure, _print } from './lib.ts';
-import { $ } from './format.ts';
-export { $ } from './format.ts';
+export { measure } from './lib/measure.ts';
+export { do_not_optimize } from './lib/runtime.ts';
+import { kind, _print } from './lib/runtime.ts';
+import { measure } from './lib/measure.ts';
+import { ansi, COLOR_NAMES } from '../utils/ansi.ts';
+import { min as arrMin, max as arrMax } from '../utils/math.ts';
+import { truncate, formatNs, formatBytes, formatAmount } from '../utils/units.ts';
+import * as histogramFmt from './format/histogram.ts';
+import * as boxplotFmt from './format/boxplot.ts';
+import * as barplotFmt from './format/barplot.ts';
+import * as lineplotFmt from './format/lineplot.ts';
 import type { Collection, Trial, Context, Stats } from './types.ts';
+import { colors, cpu, version, runtime, arch } from './env.ts';
 
 let FLAGS = 0;
 let $counters: any = null;
@@ -39,7 +47,7 @@ export class B {
 
   highlight(color: string | false = false): this {
     if (!color) return ((this._highlight = false), this);
-    if (!$.colors.includes(color)) throw new TypeError('invalid highlight color');
+    if (!COLOR_NAMES.includes(color)) throw new TypeError('invalid highlight color');
     return ((this._highlight = color), this);
   }
 
@@ -96,7 +104,7 @@ export class B {
     if (kind === 'static') {
       yield this._name;
     } else {
-      const offsets = new Array(args.length).fill(0);
+      const offsets = Array.from<number>({ length: args.length }).fill(0);
       const runs = args.reduce((len: number, name: string) => len * this._args[name].length, 1);
 
       for (let o = 0; o < runs; o++) {
@@ -131,7 +139,8 @@ export class B {
 
       heap: await (async () => {
         if ((globalThis as any).Bun) {
-          const { memoryUsage } = await import('bun:jsc');
+          const _m = 'bun:jsc';
+          const { memoryUsage } = await import(_m);
           return () => {
             const m = memoryUsage();
             return m.current;
@@ -139,7 +148,8 @@ export class B {
         }
 
         try {
-          const { getHeapStatistics } = await import('node:v8');
+          const _v8 = 'node:v8';
+          const { getHeapStatistics } = await import(_v8);
           getHeapStatistics();
           return () => {
             const m = getHeapStatistics();
@@ -180,10 +190,9 @@ export class B {
         },
       } as Trial;
     } else {
-      const offsets = new Array(args.length).fill(0);
-      const runs = new Array(
-        args.reduce((len: number, name: string) => len * this._args[name].length, 1)
-      );
+      const offsets = Array.from({ length: args.length }, () => 0);
+      const runCount = args.reduce((len: number, name: string) => len * this._args[name].length, 1);
+      const runs: any[] = Array.from({ length: runCount });
 
       for (let o = 0; o < runs.length; o++) {
         {
@@ -247,12 +256,18 @@ export function lineplot(f: () => any): void | Promise<void> {
   return _c(f, 'l');
 }
 export function group(name: any, f?: () => any): void | Promise<void> {
-  if (typeof name === 'function') ((f = name), (name = null));
+  if (typeof name === 'function') {
+    f = name;
+    name = null;
+  }
   return _c(f!, 'g', name);
 }
 
 export function bench(n: any, fn?: any): B {
-  if (typeof n === 'function') ((fn = n), (n = fn.name || 'anonymous'));
+  if (typeof n === 'function') {
+    fn = n;
+    n = fn.name || 'anonymous';
+  }
 
   const collection = COLLECTIONS[COLLECTIONS.length - 1];
   const b = new B(n, fn);
@@ -283,140 +298,6 @@ const _c = (f: () => any, t: string, name: string | null = null): void | Promise
   if (!(r instanceof Promise)) COLLECTIONS.push(n);
   else return r.then(() => (COLLECTIONS.push(n), void 0));
 };
-
-// ------ runtime ------
-
-function colors(): any {
-  return (
-    (globalThis as any).tjs?.env?.FORCE_COLOR ||
-    (globalThis as any).process?.env?.FORCE_COLOR ||
-    (!(globalThis as any).Deno?.noColor &&
-      !(globalThis as any).tjs?.env?.NO_COLOR &&
-      !(globalThis as any).process?.env?.NO_COLOR &&
-      !(globalThis as any).process?.env?.NODE_DISABLE_COLORS)
-  );
-}
-
-async function cpu(): Promise<string | null> {
-  if ((globalThis as any).process?.versions?.webcontainer) return null;
-  try {
-    let n;
-    if ((n = (globalThis as any).require('os')?.cpus?.()?.[0]?.model)) return n;
-  } catch {}
-  try {
-    let n;
-    if ((n = (globalThis as any).require('node:os')?.cpus?.()?.[0]?.model)) return n;
-  } catch {}
-  try {
-    let n;
-    if ((n = (globalThis as any).tjs?.system?.cpus?.[0]?.model)) return n;
-  } catch {}
-  try {
-    let n;
-    if ((n = (await import('node:os'))?.cpus?.()?.[0]?.model)) return n;
-  } catch {}
-
-  return null;
-}
-
-function version(): string | null {
-  return (
-    (
-      {
-        v8: () => (globalThis as any).version?.(),
-        bun: () => (globalThis as any).Bun?.version,
-        'txiki.js': () => (globalThis as any).tjs?.version,
-        deno: () => (globalThis as any).Deno?.version?.deno,
-        llrt: () => (globalThis as any).process?.versions?.llrt,
-        node: () => (globalThis as any).process?.versions?.node,
-        graaljs: () => (globalThis as any).Graal?.versionGraalVM,
-        webcontainer: () => (globalThis as any).process?.versions?.webcontainer,
-        'quickjs-ng': () => (globalThis as any).navigator?.userAgent?.split?.('/')[1],
-        hermes: () =>
-          (globalThis as any).HermesInternal?.getRuntimeProperties?.()?.['OSS Release Version'],
-      } as Record<string, () => string | null>
-    )[runtime() as string]?.() || null
-  );
-}
-
-function runtime(): string | null {
-  if ((globalThis as any).d8) return 'v8';
-  if ((globalThis as any).tjs) return 'txiki.js';
-  if ((globalThis as any).Graal) return 'graaljs';
-  if ((globalThis as any).process?.versions?.llrt) return 'llrt';
-  if ((globalThis as any).process?.versions?.webcontainer) return 'webcontainer';
-  if ((globalThis as any).inIon && (globalThis as any).performance?.mozMemory) return 'spidermonkey';
-  if ((globalThis as any).window && (globalThis as any).netscape && (globalThis as any).InternalError)
-    return 'firefox';
-  if ((globalThis as any).window && (globalThis as any).navigator && (Error as any).prepareStackTrace)
-    return 'chromium';
-  if ((globalThis as any).navigator?.userAgent?.toLowerCase?.()?.includes?.('quickjs-ng'))
-    return 'quickjs-ng';
-  if (
-    (globalThis as any).$262 &&
-    (globalThis as any).lockdown &&
-    (globalThis as any).AsyncDisposableStack
-  )
-    return 'XS Moddable';
-  if (
-    (globalThis as any).$ &&
-    'IsHTMLDDA' in (globalThis as any).$ &&
-    new Error().stack?.includes('runtime@')
-  )
-    return 'jsc';
-  if (
-    (globalThis as any).window &&
-    (globalThis as any).navigator &&
-    new Error().stack?.includes('runtime@')
-  )
-    return 'webkit';
-
-  if ((globalThis as any).os && (globalThis as any).std) return 'quickjs';
-  if ((globalThis as any).Bun) return 'bun';
-  if ((globalThis as any).Deno) return 'deno';
-  if ((globalThis as any).HermesInternal) return 'hermes';
-  if ((globalThis as any).window && (globalThis as any).navigator) return 'browser';
-  if ((globalThis as any).process) return 'node';
-  else return null;
-}
-
-async function arch(): Promise<string | null> {
-  if (runtime() === 'webcontainer') return 'js + wasm';
-  try {
-    let n;
-    if ((n = (globalThis as any).Deno?.build?.target)) return n;
-  } catch {}
-  try {
-    const os = await import('node:os');
-    return `${os.arch()}-${os.platform()}`;
-  } catch {}
-
-  if ((globalThis as any).process?.arch && (globalThis as any).process?.platform) {
-    return `${(globalThis as any).process.arch}-${(globalThis as any).process.platform}`;
-  }
-
-  if (runtime() === 'txiki.js') {
-    return `${(globalThis as any).tjs.system?.arch}-${(globalThis as any).tjs.system?.platform}`;
-  }
-
-  if (runtime() === 'spidermonkey') {
-    try {
-      const build = (globalThis as any).getBuildConfiguration();
-      const platforms = ['osx', 'linux', 'android', 'windows'];
-      const archs = ['arm', 'x64', 'x86', 'wasi', 'arm64', 'mips32', 'mips64', 'loong64', 'riscv64'];
-
-      const arch = archs.find((k) => build[k]);
-      const platform = platforms.find((k) => build[k]);
-      if (arch) return !platform ? arch : `${arch}-${platform}`;
-    } catch {}
-
-    try {
-      if ((globalThis as any).isAvxPresent()) return 'x86_64';
-    } catch {}
-  }
-
-  return null;
-}
 
 // ------ run ------
 
@@ -468,7 +349,8 @@ export async function run(
     ['bun', 'node', 'deno'].includes(context.runtime as string)
   ) {
     try {
-      $counters = await import('@mitata/counters');
+      const _c = '@mitata/counters';
+      $counters = await import(_c);
       if (0 !== (globalThis as any).process.getuid()) throw (($counters = false), 1);
     } catch {}
   }
@@ -479,7 +361,8 @@ export async function run(
     ['bun', 'node', 'deno'].includes(context.runtime as string)
   ) {
     try {
-      $counters = await import('@mitata/counters');
+      const _c = '@mitata/counters';
+      $counters = await import(_c);
     } catch (err: any) {
       if (err?.message?.includes?.('PermissionDenied')) $counters = false;
     }
@@ -591,7 +474,7 @@ const formats = {
             );
           else
             print(
-              `| ${run.name.padEnd(name_len)} | \`${`${$.time(run.stats!.avg)}/iter`.padStart(14)}\` | \`${$.time(run.stats!.min).padStart(9)}\` | \`${$.time(run.stats!.p75).padStart(9)}\` | \`${$.time(run.stats!.p99).padStart(9)}\` | \`${$.time(run.stats!.max).padStart(9)}\` |`
+              `| ${run.name.padEnd(name_len)} | \`${`${formatNs(run.stats!.avg)}/iter`.padStart(14)}\` | \`${formatNs(run.stats!.min).padStart(9)}\` | \`${formatNs(run.stats!.p75).padStart(9)}\` | \`${formatNs(run.stats!.p99).padStart(9)}\` | \`${formatNs(run.stats!.max).padStart(9)}\` |`
             );
         }
       }
@@ -600,7 +483,7 @@ const formats = {
 
   async mitata(ctx: any, opts: any, benchmarks: Trial[]) {
     const print = opts.print;
-    let k_legend: number = opts.format?.name ?? 'longest';
+    let k_legend: number | string = opts.format?.name ?? 'longest';
 
     if ('fixed' === k_legend) k_legend = 28;
     else if (k_legend === 'longest') {
@@ -617,19 +500,19 @@ const formats = {
       }
     }
 
-    k_legend = Math.max(20, k_legend);
+    k_legend = Math.max(20, Number(k_legend));
     if (!opts.colors) print(`clk: ~${ctx.cpu.freq.toFixed(2)} GHz`);
-    else print($.gray + `clk: ~${ctx.cpu.freq.toFixed(2)} GHz` + $.reset);
+    else print(ansi.gray + `clk: ~${ctx.cpu.freq.toFixed(2)} GHz` + ansi.reset);
 
     if (!opts.colors) print(`cpu: ${ctx.cpu.name}`);
-    else print($.gray + `cpu: ${ctx.cpu.name}` + $.reset);
+    else print(ansi.gray + `cpu: ${ctx.cpu.name}` + ansi.reset);
     if (!opts.colors)
       print(`runtime: ${ctx.runtime}${!ctx.version ? '' : ` ${ctx.version}`} (${ctx.arch})`);
     else
       print(
-        $.gray +
+        ansi.gray +
           `runtime: ${ctx.runtime}${!ctx.version ? '' : ` ${ctx.version}`} (${ctx.arch})` +
-          $.reset
+          ansi.reset
       );
 
     print('');
@@ -653,13 +536,13 @@ const formats = {
         if (collection.name) {
           print(`• ${collection.name}`);
           if (!opts.colors) print('-'.repeat(15 + k_legend) + ' ' + '-'.repeat(31));
-          else print($.gray + '-'.repeat(15 + k_legend) + ' ' + '-'.repeat(31) + $.reset);
+          else print(ansi.gray + '-'.repeat(15 + k_legend) + ' ' + '-'.repeat(31) + ansi.reset);
         }
       } else {
         print('');
         if (collection.name) print(`• ${collection.name}`);
         if (!opts.colors) print('-'.repeat(15 + k_legend) + ' ' + '-'.repeat(31));
-        else print($.gray + '-'.repeat(15 + k_legend) + ' ' + '-'.repeat(31) + $.reset);
+        else print(ansi.gray + '-'.repeat(15 + k_legend) + ' ' + '-'.repeat(31) + ansi.reset);
       }
 
       for (const trial of collection.trials) {
@@ -669,11 +552,11 @@ const formats = {
           bench = opts.observe(bench);
           trials.push([trial, bench]);
           benchmarks.push(bench);
-          if (-1 === $.colors.indexOf(trial._highlight)) trial._highlight = null;
+          if (-1 === COLOR_NAMES.indexOf(trial._highlight)) trial._highlight = null;
           const _h =
             !opts.colors || !trial._highlight
               ? (x: string) => x
-              : (x: string) => ($ as any)[trial._highlight] + x + $.reset;
+              : (x: string) => ansi[trial._highlight] + x + ansi.reset;
 
           for (const r of bench.runs) {
             if (prev_run_gap) print('');
@@ -681,11 +564,11 @@ const formats = {
             if (r.error) {
               if (!opts.colors)
                 print(
-                  `${_h($.str(r.name, k_legend).padEnd(k_legend))} error: ${(r.error as any).message ?? r.error}`
+                  `${_h(truncate(r.name, k_legend).padEnd(k_legend))} error: ${(r.error as any).message ?? r.error}`
                 );
               else
                 print(
-                  `${_h($.str(r.name, k_legend).padEnd(k_legend))} ${$.red + 'error:' + $.reset} ${(r.error as any).message ?? r.error}`
+                  `${_h(truncate(r.name, k_legend).padEnd(k_legend))} ${ansi.red + 'error:' + ansi.reset} ${(r.error as any).message ?? r.error}`
                 );
             } else {
               const compact = trial.flags & flags.compact;
@@ -705,42 +588,43 @@ const formats = {
               if (compact) {
                 let l = '';
                 prev_run_gap = false;
-                const avg = $.time(r.stats.avg).padStart(9);
-                const name = $.str(r.name, k_legend).padEnd(k_legend);
+                const avg = formatNs(r.stats.avg).padStart(9);
+                const name = truncate(r.name, k_legend).padEnd(k_legend);
 
                 if (noisy)
                   if (!opts.colors) l += '~ ';
-                  else l += $.yellow + '~' + $.reset + ' ';
+                  else l += ansi.yellow + '~' + ansi.reset + ' ';
                 l += _h(name) + ' ';
                 if (!opts.colors) l += avg + '/iter';
-                else l += $.bold + $.yellow + avg + $.reset + $.bold + '/iter' + $.reset;
+                else
+                  l += ansi.bold + ansi.yellow + avg + ansi.reset + ansi.bold + '/iter' + ansi.reset;
 
-                const p75 = $.time(r.stats.p75).padStart(9);
-                const p99 = $.time(r.stats.p99).padStart(9);
-                const bins = $.histogram.bins(r.stats, 11, 0.99);
-                const histogram = $.histogram.ascii(bins, 1, { colors: opts.colors });
+                const p75 = formatNs(r.stats.p75).padStart(9);
+                const p99 = formatNs(r.stats.p99).padStart(9);
+                const bins = histogramFmt.bins(r.stats, 11, 0.99);
+                const histogram = histogramFmt.ascii(bins, 1, { colors: opts.colors });
 
                 l += ' ';
                 if (!opts.colors) l += p75 + ' ' + p99 + ' ' + histogram[0];
-                else l += $.gray + p75 + ' ' + p99 + $.reset + ' ' + histogram[0];
+                else l += ansi.gray + p75 + ' ' + p99 + ansi.reset + ' ' + histogram[0];
 
                 if (optimized_out)
                   if (!opts.colors) l += ' !';
-                  else l += $.red + ' !' + $.reset;
+                  else l += ansi.red + ' !' + ansi.reset;
 
                 print(l);
               } else {
                 let l = '';
-                const avg = $.time(r.stats.avg).padStart(9);
-                const name = $.str(r.name, k_legend).padEnd(k_legend);
+                const avg = formatNs(r.stats.avg).padStart(9);
+                const name = truncate(r.name, k_legend).padEnd(k_legend);
 
                 if (noisy)
                   if (!opts.colors) l += '~ ';
-                  else l += $.yellow + '~' + $.reset + ' ';
+                  else l += ansi.yellow + '~' + ansi.reset + ' ';
                 l += _h(name) + ' ';
-                const p75 = $.time(r.stats.p75).padStart(9);
-                const bins = $.histogram.bins(r.stats, 21, 0.99);
-                const histogram = $.histogram.ascii(
+                const p75 = formatNs(r.stats.p75).padStart(9);
+                const bins = histogramFmt.bins(r.stats, 21, 0.99);
+                const histogram = histogramFmt.ascii(
                   bins,
                   r.stats.gc && r.stats.heap ? 2 : !(r.stats.gc || r.stats.heap) ? 2 : 3,
                   { colors: opts.colors }
@@ -749,55 +633,55 @@ const formats = {
                 if (!opts.colors) l += avg + '/iter' + ' ' + p75 + ' ' + histogram[0];
                 else
                   l +=
-                    $.bold +
-                    $.yellow +
+                    ansi.bold +
+                    ansi.yellow +
                     avg +
-                    $.reset +
-                    $.bold +
+                    ansi.reset +
+                    ansi.bold +
                     '/iter' +
-                    $.reset +
+                    ansi.reset +
                     ' ' +
-                    $.gray +
+                    ansi.gray +
                     p75 +
-                    $.reset +
+                    ansi.reset +
                     ' ' +
                     histogram[0];
 
                 if (optimized_out)
                   if (!opts.colors) l += ' !';
-                  else l += $.red + ' !' + $.reset;
+                  else l += ansi.red + ' !' + ansi.reset;
 
                 print(l);
 
                 l = '';
-                const min = $.time(r.stats.min);
-                const max = $.time(r.stats.max);
-                const p99 = $.time(r.stats.p99).padStart(9);
+                const min = formatNs(r.stats.min);
+                const max = formatNs(r.stats.max);
+                const p99 = formatNs(r.stats.p99).padStart(9);
                 const diff = 2 * 9 - (min.length + max.length);
 
                 l += ' '.repeat(diff + k_legend - 8);
                 if (!opts.colors) l += '(' + min + ' … ' + max + ')';
                 else
                   l +=
-                    $.gray +
+                    ansi.gray +
                     '(' +
-                    $.reset +
-                    $.cyan +
+                    ansi.reset +
+                    ansi.cyan +
                     min +
-                    $.reset +
-                    $.gray +
+                    ansi.reset +
+                    ansi.gray +
                     ' … ' +
-                    $.reset +
-                    $.magenta +
+                    ansi.reset +
+                    ansi.magenta +
                     max +
-                    $.reset +
-                    $.gray +
+                    ansi.reset +
+                    ansi.gray +
                     ')' +
-                    $.reset;
+                    ansi.reset;
 
                 l += ' ';
                 if (!opts.colors) l += p99 + ' ' + histogram[1];
-                else l += $.gray + p99 + $.reset + ' ' + histogram[1];
+                else l += ansi.gray + p99 + ansi.reset + ' ' + histogram[1];
 
                 print(l);
 
@@ -805,92 +689,92 @@ const formats = {
                   l = '';
                   prev_run_gap = true;
                   l += ' '.repeat(k_legend - 10);
-                  const gcm = $.time(r.stats.gc.min).padStart(9);
-                  const gcx = $.time(r.stats.gc.max).padStart(9);
+                  const gcm = formatNs(r.stats.gc.min).padStart(9);
+                  const gcx = formatNs(r.stats.gc.max).padStart(9);
 
                   if (!opts.colors) l += 'gc(' + gcm + ' … ' + gcx + ')';
                   else
                     l +=
-                      $.gray +
+                      ansi.gray +
                       'gc(' +
-                      $.reset +
-                      $.blue +
+                      ansi.reset +
+                      ansi.blue +
                       gcm +
-                      $.reset +
-                      $.gray +
+                      ansi.reset +
+                      ansi.gray +
                       ' … ' +
-                      $.reset +
-                      $.blue +
+                      ansi.reset +
+                      ansi.blue +
                       gcx +
-                      $.reset +
-                      $.gray +
+                      ansi.reset +
+                      ansi.gray +
                       ')' +
-                      $.reset;
+                      ansi.reset;
 
                   if (r.stats.heap) {
                     l += ' ';
-                    const ha = $.bytes(r.stats.heap.avg).padStart(9);
-                    const hm = $.bytes(r.stats.heap.min).padStart(9);
-                    const hx = $.bytes(r.stats.heap.max).padStart(9);
+                    const ha = formatBytes(r.stats.heap.avg).padStart(9);
+                    const hm = formatBytes(r.stats.heap.min).padStart(9);
+                    const hx = formatBytes(r.stats.heap.max).padStart(9);
 
                     if (!opts.colors) l += ha + ' (' + hm + '…' + hx + ')';
                     else
                       l +=
-                        $.yellow +
+                        ansi.yellow +
                         ha +
-                        $.reset +
-                        $.gray +
+                        ansi.reset +
+                        ansi.gray +
                         ' (' +
-                        $.reset +
-                        $.yellow +
+                        ansi.reset +
+                        ansi.yellow +
                         hm +
-                        $.reset +
-                        $.gray +
+                        ansi.reset +
+                        ansi.gray +
                         '…' +
-                        $.reset +
-                        $.yellow +
+                        ansi.reset +
+                        ansi.yellow +
                         hx +
-                        $.reset +
-                        $.gray +
+                        ansi.reset +
+                        ansi.gray +
                         ')' +
-                        $.reset;
+                        ansi.reset;
                   } else {
                     l += ' ';
-                    const gca = $.time(r.stats.gc.avg).padStart(9);
+                    const gca = formatNs(r.stats.gc.avg).padStart(9);
 
                     if (!opts.colors) l += gca + ' ' + histogram[2];
-                    else l += $.blue + gca + $.reset + ' ' + histogram[2];
+                    else l += ansi.blue + gca + ansi.reset + ' ' + histogram[2];
                   }
 
                   print(l);
                 } else if (r.stats.heap) {
                   prev_run_gap = true;
                   l = ' '.repeat(k_legend - 8);
-                  const ha = $.bytes(r.stats.heap.avg).padStart(9);
-                  const hm = $.bytes(r.stats.heap.min).padStart(9);
-                  const hx = $.bytes(r.stats.heap.max).padStart(9);
+                  const ha = formatBytes(r.stats.heap.avg).padStart(9);
+                  const hm = formatBytes(r.stats.heap.min).padStart(9);
+                  const hx = formatBytes(r.stats.heap.max).padStart(9);
 
                   if (!opts.colors) l += '(' + hm + ' … ' + hx + ') ' + ha + ' ' + histogram[2];
                   else
                     l +=
-                      $.gray +
+                      ansi.gray +
                       '(' +
-                      $.reset +
-                      $.yellow +
+                      ansi.reset +
+                      ansi.yellow +
                       hm +
-                      $.reset +
-                      $.gray +
+                      ansi.reset +
+                      ansi.gray +
                       ' … ' +
-                      $.reset +
-                      $.yellow +
+                      ansi.reset +
+                      ansi.yellow +
                       hx +
-                      $.reset +
-                      $.gray +
+                      ansi.reset +
+                      ansi.gray +
                       ') ' +
-                      $.reset +
-                      $.yellow +
+                      ansi.reset +
+                      ansi.yellow +
                       ha +
-                      $.reset +
+                      ansi.reset +
                       ' ' +
                       histogram[2];
 
@@ -912,51 +796,59 @@ const formats = {
                       );
 
                     l += ' '.repeat(k_legend - 12);
-                    if (!opts.colors) l += $.amount(ipc).padStart(7) + ' ipc';
+                    if (!opts.colors) l += formatAmount(ipc).padStart(7) + ' ipc';
                     else
                       l +=
-                        $.bold +
-                        $.green +
-                        $.amount(ipc).padStart(7) +
-                        $.reset +
-                        $.bold +
+                        ansi.bold +
+                        ansi.green +
+                        formatAmount(ipc).padStart(7) +
+                        ansi.reset +
+                        ansi.bold +
                         ' ipc' +
-                        $.reset;
+                        ansi.reset;
 
                     if (!opts.colors) l += ' (' + cache.toFixed(2).padStart(6) + '% cache)';
                     else
                       l +=
-                        $.gray +
+                        ansi.gray +
                         ' (' +
-                        $.reset +
-                        (50 > cache ? $.red : 84 < cache ? $.green : $.yellow) +
+                        ansi.reset +
+                        (50 > cache ? ansi.red : 84 < cache ? ansi.green : ansi.yellow) +
                         cache.toFixed(2).padStart(6) +
                         '%' +
-                        $.reset +
+                        ansi.reset +
                         ' cache' +
-                        $.gray +
+                        ansi.gray +
                         ')' +
-                        $.reset;
+                        ansi.reset;
 
-                    if (!opts.colors) l += ' ' + $.amount(_bmispred).padStart(7) + ' branch misses';
+                    if (!opts.colors)
+                      l += ' ' + formatAmount(_bmispred).padStart(7) + ' branch misses';
                     else
                       l +=
-                        ' ' + $.green + $.amount(_bmispred).padStart(7) + $.reset + ' branch misses';
+                        ' ' +
+                        ansi.green +
+                        formatAmount(_bmispred).padStart(7) +
+                        ansi.reset +
+                        ' branch misses';
 
                     print(l);
 
                     l = '';
                     l += ' '.repeat(k_legend - 20);
 
-                    if (opts.colors) l += $.gray;
-                    l += $.amount(r.stats.counters.cycles.avg).padStart(7) + ' cycles';
+                    if (opts.colors) l += ansi.gray;
+                    l += formatAmount(r.stats.counters.cycles.avg).padStart(7) + ' cycles';
                     l +=
-                      ' ' + $.amount(r.stats.counters.instructions.avg).padStart(7) + ' instructions';
+                      ' ' +
+                      formatAmount(r.stats.counters.instructions.avg).padStart(7) +
+                      ' instructions';
 
-                    l += ' ' + $.amount(r.stats.counters.cache.avg).padStart(7) + ' c-refs';
-                    l += ' ' + $.amount(r.stats.counters.cache.misses.avg).padStart(7) + ' c-misses';
+                    l += ' ' + formatAmount(r.stats.counters.cache.avg).padStart(7) + ' c-refs';
+                    l +=
+                      ' ' + formatAmount(r.stats.counters.cache.misses.avg).padStart(7) + ' c-misses';
 
-                    if (opts.colors) l += $.reset;
+                    if (opts.colors) l += ansi.reset;
 
                     print(l);
                   }
@@ -979,40 +871,40 @@ const formats = {
                       );
 
                     l += ' '.repeat(k_legend - 13);
-                    if (!opts.colors) l += $.amount(ipc).padStart(7) + ' ipc';
+                    if (!opts.colors) l += formatAmount(ipc).padStart(7) + ' ipc';
                     else
                       l +=
-                        $.bold +
-                        $.green +
-                        $.amount(ipc).padStart(7) +
-                        $.reset +
-                        $.bold +
+                        ansi.bold +
+                        ansi.green +
+                        formatAmount(ipc).padStart(7) +
+                        ansi.reset +
+                        ansi.bold +
                         ' ipc' +
-                        $.reset;
+                        ansi.reset;
 
                     if (!opts.colors) l += ' (' + stalls.toFixed(2).padStart(6) + '% stalls)';
                     else
                       l +=
-                        $.gray +
+                        ansi.gray +
                         ' (' +
-                        $.reset +
-                        (12 > stalls ? $.green : 50 < stalls ? $.red : $.yellow) +
+                        ansi.reset +
+                        (12 > stalls ? ansi.green : 50 < stalls ? ansi.red : ansi.yellow) +
                         stalls.toFixed(2).padStart(6) +
                         '%' +
-                        $.reset +
+                        ansi.reset +
                         ' stalls' +
-                        $.gray +
+                        ansi.gray +
                         ')' +
-                        $.reset;
+                        ansi.reset;
 
                     if (!opts.colors) l += ' ' + cache.toFixed(2).padStart(6) + '% L1 data cache';
                     else
                       l +=
                         ' ' +
-                        (50 > cache ? $.red : 84 < cache ? $.green : $.yellow) +
+                        (50 > cache ? ansi.red : 84 < cache ? ansi.green : ansi.yellow) +
                         cache.toFixed(2).padStart(6) +
                         '%' +
-                        $.reset +
+                        ansi.reset +
                         ' L1 data cache';
 
                     print(l);
@@ -1020,19 +912,21 @@ const formats = {
                     l = '';
                     l += ' '.repeat(k_legend - 20);
 
-                    if (opts.colors) l += $.gray;
-                    l += $.amount(r.stats.counters.cycles.avg).padStart(7) + ' cycles';
+                    if (opts.colors) l += ansi.gray;
+                    l += formatAmount(r.stats.counters.cycles.avg).padStart(7) + ' cycles';
                     l +=
-                      ' ' + $.amount(r.stats.counters.instructions.avg).padStart(7) + ' instructions';
+                      ' ' +
+                      formatAmount(r.stats.counters.instructions.avg).padStart(7) +
+                      ' instructions';
                     l +=
                       ' ' +
                       ldst.toFixed(2).padStart(6) +
                       '%' +
                       ' retired LD/ST (' +
-                      $.amount(r.stats.counters.instructions.loads_and_stores.avg).padStart(7) +
+                      formatAmount(r.stats.counters.instructions.loads_and_stores.avg).padStart(7) +
                       ')';
 
-                    if (opts.colors) l += $.reset;
+                    if (opts.colors) l += ansi.reset;
 
                     print(l);
                   }
@@ -1051,14 +945,14 @@ const formats = {
           for (const r of bench.runs) {
             if (r.error) continue;
             map[r.name] = r.stats!.avg;
-            colors[r.name] = ($ as any)[trial._highlight];
+            colors[r.name] = ansi[trial._highlight];
           }
         }
 
         if (Object.keys(map).length) {
           print('');
 
-          $.barplot
+          barplotFmt
             .ascii(map, k_legend, 44, {
               steps: -10,
               colors: !opts.colors ? null : colors,
@@ -1075,7 +969,7 @@ const formats = {
           for (const [trial, bench] of trials) {
             for (const r of bench.runs) {
               map[r.name] = r.stats;
-              colors[r.name] = ($ as any)[trial._highlight];
+              colors[r.name] = ansi[trial._highlight];
             }
           }
         } else {
@@ -1086,7 +980,7 @@ const formats = {
 
             if (1 === runs.length) {
               map[runs[0].name] = runs[0].stats;
-              colors[runs[0].name] = ($ as any)[trial._highlight];
+              colors[runs[0].name] = ansi[trial._highlight];
             } else {
               const stats: any = {
                 avg: 0,
@@ -1097,6 +991,7 @@ const formats = {
               };
 
               for (const r of runs) {
+                if (!r.stats) continue;
                 stats.avg += r.stats.avg;
                 stats.min = Math.min(stats.min, r.stats.min);
                 stats.p25 = Math.min(stats.p25, r.stats.p25);
@@ -1106,14 +1001,14 @@ const formats = {
 
               map[bench.alias] = stats;
               stats.avg /= runs.length;
-              colors[bench.alias] = ($ as any)[trial._highlight];
+              colors[bench.alias] = ansi[trial._highlight];
             }
           }
         }
 
         if (Object.keys(map).length) {
           print('');
-          $.boxplot
+          boxplotFmt
             .ascii(map, k_legend, 44, {
               colors: !opts.colors ? null : colors,
             })
@@ -1134,16 +1029,16 @@ const formats = {
             if (!runs.length) continue;
 
             if (1 === runs.length) {
-              const { min, max, avg, peak, bins } = $.histogram.bins(runs[0].stats, 44, 0.99);
+              const { min, max, avg, peak, bins } = histogramFmt.bins(runs[0].stats!, 44, 0.99);
 
               extra.ymax = peak;
-              colors.xmin = $.cyan;
-              colors.xmax = $.magenta;
-              extra.ymin = $.min(bins);
-              labels.xmin = $.time(min);
-              labels.xmax = $.time(max);
+              colors.xmin = ansi.cyan;
+              colors.xmax = ansi.magenta;
+              extra.ymin = arrMin(bins);
+              labels.xmin = formatNs(min);
+              labels.xmax = formatNs(max);
               extra.xmax = bins.length - 1;
-              colors[runs[0].name] = ($ as any)[trial._highlight] || $.bold;
+              colors[runs[0].name] = ansi[trial._highlight] || ansi.bold;
 
               map[runs[0].name] = {
                 y: bins,
@@ -1152,21 +1047,21 @@ const formats = {
                 format(x: number, y: number, s: string) {
                   x = Math.round(x * 44);
                   if (!opts.colors) return s;
-                  if (x === avg) return $.yellow + s + $.reset;
-                  return (x < avg ? $.cyan : $.magenta) + s + $.reset;
+                  if (x === avg) return ansi.yellow + s + ansi.reset;
+                  return (x < avg ? ansi.cyan : ansi.magenta) + s + ansi.reset;
                 },
               };
             } else {
               const avgs = runs.map((r: any) => r.stats.avg);
 
-              colors.ymin = $.cyan;
-              colors.ymax = $.magenta;
-              extra.ymin = $.min(avgs);
-              extra.ymax = $.max(avgs);
+              colors.ymin = ansi.cyan;
+              colors.ymax = ansi.magenta;
+              extra.ymin = arrMin(avgs);
+              extra.ymax = arrMax(avgs);
               extra.xmax = runs.length - 1;
-              labels.ymin = $.time(extra.ymin);
-              labels.ymax = $.time(extra.ymax);
-              colors[bench.alias] = ($ as any)[trial._highlight];
+              labels.ymin = formatNs(extra.ymin);
+              labels.ymax = formatNs(extra.ymax);
+              colors[bench.alias] = ansi[trial._highlight];
 
               map[bench.alias] = {
                 y: avgs,
@@ -1176,31 +1071,31 @@ const formats = {
           }
         } else {
           if (trials.every(([_, bench]: [any, Trial]) => 'static' === bench.kind)) {
-            colors.xmin = $.cyan;
-            colors.xmax = $.magenta;
+            colors.xmin = ansi.cyan;
+            colors.xmax = ansi.magenta;
 
             for (const [trial, bench] of trials) {
               for (const r of bench.runs) {
                 if (r.error) continue;
-                const { bins, peak, steps } = $.histogram.bins(r.stats!, 44, 0.99);
+                const { bins, peak, steps } = histogramFmt.bins(r.stats!, 44, 0.99);
 
                 const y = bins.map((b: number) => b / peak);
 
                 map[r.name] = { y, x: steps };
-                colors[r.name] = ($ as any)[trial._highlight];
-                extra.ymin = Math.min($.min(y), extra.ymin ?? Infinity);
-                extra.ymax = Math.max($.max(y), extra.ymax ?? -Infinity);
-                extra.xmin = Math.min($.min(steps), extra.xmin ?? Infinity);
-                extra.xmax = Math.max($.max(steps), extra.xmax ?? -Infinity);
-                labels.xmin = $.time(extra.xmin);
-                labels.xmax = $.time(extra.xmax);
+                colors[r.name] = ansi[trial._highlight];
+                extra.ymin = Math.min(arrMin(y), extra.ymin ?? Infinity);
+                extra.ymax = Math.max(arrMax(y), extra.ymax ?? -Infinity);
+                extra.xmin = Math.min(arrMin(steps), extra.xmin ?? Infinity);
+                extra.xmax = Math.max(arrMax(steps), extra.xmax ?? -Infinity);
+                labels.xmin = formatNs(extra.xmin);
+                labels.xmax = formatNs(extra.xmax);
               }
             }
           } else {
             let min = Infinity;
             let max = -Infinity;
 
-            for (const [trial, bench] of trials) {
+            for (const [_trial, bench] of trials) {
               for (const r of bench.runs) {
                 if (r.error) continue;
                 min = Math.min(min, r.stats!.avg);
@@ -1208,10 +1103,10 @@ const formats = {
               }
             }
 
-            colors.ymin = $.cyan;
-            colors.ymax = $.magenta;
-            labels.ymin = $.time(min);
-            labels.ymax = $.time(max);
+            colors.ymin = ansi.cyan;
+            colors.ymax = ansi.magenta;
+            labels.ymin = formatNs(min);
+            labels.ymax = formatNs(max);
 
             for (const [trial, bench] of trials) {
               const runs = bench.runs.filter((r: any) => r.stats);
@@ -1220,15 +1115,15 @@ const formats = {
 
               if (1 === runs.length) {
                 const y = runs[0].stats!.avg / max;
-                colors[runs[0].name] = ($ as any)[trial._highlight];
+                colors[runs[0].name] = ansi[trial._highlight];
                 map[runs[0].name] = { x: [0, 1], y: [y, y] };
                 extra.ymin = Math.min(y, extra.ymin ?? Infinity);
                 extra.ymax = Math.max(y, extra.ymax ?? -Infinity);
               } else {
-                colors[bench.alias] = ($ as any)[trial._highlight];
+                colors[bench.alias] = ansi[trial._highlight];
                 const y = runs.map((r: any) => r.stats.avg / max);
-                extra.ymin = Math.min($.min(y), extra.ymin ?? Infinity);
-                extra.ymax = Math.max($.max(y), extra.ymax ?? -Infinity);
+                extra.ymin = Math.min(arrMin(y), extra.ymin ?? Infinity);
+                extra.ymax = Math.max(arrMax(y), extra.ymax ?? -Infinity);
                 map[bench.alias] = {
                   y,
                   x: runs.map((_: any, o: number) => o / (runs.length - 1)),
@@ -1241,7 +1136,7 @@ const formats = {
         if (Object.keys(map).length) {
           print('');
 
-          $.lineplot
+          lineplotFmt
             .ascii(map, {
               labels,
               ...extra,
@@ -1276,13 +1171,14 @@ const formats = {
           if (1 < runs.length) {
             print('');
             if (!opts.colors) print('summary');
-            else print($.bold + 'summary' + $.reset);
+            else print(ansi.bold + 'summary' + ansi.reset);
             if (!opts.colors) print('  ' + runs[0].name);
-            else print(' '.repeat(2) + $.bold + $.cyan + runs[0].name + $.reset);
+            else print(' '.repeat(2) + ansi.bold + ansi.cyan + runs[0].name + ansi.reset);
 
             for (let o = 1; o < runs.length; o++) {
               const r = runs[o];
               const baseline = runs[0];
+              if (!r.stats || !baseline.stats) continue;
               const faster = r.stats.avg >= baseline.stats.avg;
 
               const diff = !faster
@@ -1294,10 +1190,10 @@ const formats = {
               else
                 print(
                   ' '.repeat(3) +
-                    (!faster ? $.red : $.green) +
+                    (!faster ? ansi.red : ansi.green) +
                     diff +
-                    $.reset +
-                    `x ${faster ? 'faster' : 'slower'} than ${$.bold + $.cyan + r.name + $.reset}`
+                    ansi.reset +
+                    `x ${faster ? 'faster' : 'slower'} than ${ansi.bold + ansi.cyan + r.name + ansi.reset}`
                 );
             }
           }
@@ -1305,7 +1201,8 @@ const formats = {
           let header = false;
           const baseline =
             trials.find(
-              ([trial, bench]: [any, Trial]) => bench.baseline && bench.runs.some((r: any) => r.stats)
+              ([_trial, bench]: [any, Trial]) =>
+                bench.baseline && bench.runs.some((r: any) => r.stats)
             )?.[1] || trials[0][1];
 
           if (baseline) {
@@ -1313,7 +1210,7 @@ const formats = {
               .filter((r: any) => !r.error)
               .sort((a: any, b: any) => a.stats.avg - b.stats.avg);
 
-            for (const [trial, bench] of trials) {
+            for (const [_trial, bench] of trials) {
               if (bench === baseline) continue;
 
               const runs = bench.runs
@@ -1326,20 +1223,21 @@ const formats = {
                 print('');
                 header = true;
                 if (!opts.colors) print('summary');
-                else print($.bold + 'summary' + $.reset);
+                else print(ansi.bold + 'summary' + ansi.reset);
 
                 if (1 !== bruns.length) {
                   if (!opts.colors) print('  ' + baseline.alias);
-                  else print(' '.repeat(2) + $.bold + $.cyan + baseline.alias + $.reset);
+                  else print(' '.repeat(2) + ansi.bold + ansi.cyan + baseline.alias + ansi.reset);
                 } else {
                   if (!opts.colors) print('  ' + bruns[0].name);
-                  else print(' '.repeat(2) + $.bold + $.cyan + bruns[0].name + $.reset);
+                  else print(' '.repeat(2) + ansi.bold + ansi.cyan + bruns[0].name + ansi.reset);
                 }
               }
 
               if (1 === runs.length && 1 === bruns.length) {
                 const r = runs[0];
                 const br = bruns[0];
+                if (!r.stats || !br.stats) continue;
                 const faster = r.stats.avg >= br.stats.avg;
 
                 const diff = !faster
@@ -1351,10 +1249,10 @@ const formats = {
                 else
                   print(
                     ' '.repeat(3) +
-                      (!faster ? $.red : $.green) +
+                      (!faster ? ansi.red : ansi.green) +
                       diff +
-                      $.reset +
-                      `x ${faster ? 'faster' : 'slower'} than ${$.bold + $.cyan + r.name + $.reset}`
+                      ansi.reset +
+                      `x ${faster ? 'faster' : 'slower'} than ${ansi.bold + ansi.cyan + r.name + ansi.reset}`
                   );
               } else {
                 const rf = runs[0];
@@ -1364,6 +1262,8 @@ const formats = {
 
                 const ravg = runs.reduce((a: number, r: any) => a + r.stats.avg, 0) / runs.length;
                 const bavg = bruns.reduce((a: number, r: any) => a + r.stats.avg, 0) / bruns.length;
+
+                if (!rf.stats || !bf.stats || !rs.stats || !bs.stats) continue;
 
                 const faster = ravg >= bavg;
                 const sfaster = rs.stats.avg >= bs.stats.avg;
@@ -1389,17 +1289,17 @@ const formats = {
                   print(
                     ' '.repeat(3) +
                       (1 === sdiff
-                        ? $.gray + sdiff + $.reset
+                        ? ansi.gray + sdiff + ansi.reset
                         : !sfaster
-                          ? $.red + '-' + sdiff + $.reset
-                          : $.green + '+' + sdiff + $.reset) +
+                          ? ansi.red + '-' + sdiff + ansi.reset
+                          : ansi.green + '+' + sdiff + ansi.reset) +
                       '…' +
                       (1 === fdiff
-                        ? $.gray + fdiff + $.reset
+                        ? ansi.gray + fdiff + ansi.reset
                         : !ffaster
-                          ? $.red + '-' + fdiff + $.reset
-                          : $.green + '+' + fdiff + $.reset) +
-                      `x ${faster ? 'faster' : 'slower'} than ${$.bold + $.cyan + (1 === runs.length ? rf.name : bench.alias) + $.reset}`
+                          ? ansi.red + '-' + fdiff + ansi.reset
+                          : ansi.green + '+' + fdiff + ansi.reset) +
+                      `x ${faster ? 'faster' : 'slower'} than ${ansi.bold + ansi.cyan + (1 === runs.length ? rf.name : bench.alias) + ansi.reset}`
                   );
               }
             }
@@ -1410,73 +1310,70 @@ const formats = {
 
     let nl = false;
 
-    if (false === $counters)
-      if (!opts.colors)
-        (print(''), (nl = true), print('! = run with sudo to enable hardware counters'));
-      else
-        (print(''),
-          (nl = true),
-          print(
-            $.yellow +
-              '!' +
-              $.reset +
-              $.gray +
-              ' = ' +
-              $.reset +
-              'run with sudo to enable hardware counters'
-          ));
+    if (false === $counters) {
+      print('');
+      nl = true;
+      if (!opts.colors) {
+        print('! = run with sudo to enable hardware counters');
+      } else {
+        print(
+          ansi.yellow +
+            '!' +
+            ansi.reset +
+            ansi.gray +
+            ' = ' +
+            ansi.reset +
+            'run with sudo to enable hardware counters'
+        );
+      }
+    }
 
-    if (optimized_out_warning)
-      if (!opts.colors)
-        (nl ? null : print(''),
-          print(
-            ' '.repeat(k_legend - 13) +
-              'benchmark was likely optimized out (dead code elimination) = !'
-          ),
-          print(
-            ' '.repeat(k_legend - 13) +
-              'https://github.com/evanwashere/mitata#writing-good-benchmarks'
-          ));
-      else
-        (nl ? null : print(''),
-          print(
-            ' '.repeat(k_legend - 13) +
-              'benchmark was likely optimized out' +
-              ' ' +
-              $.gray +
-              '(dead code elimination)' +
-              $.reset +
-              $.gray +
-              ' = ' +
-              $.reset +
-              $.red +
-              '!' +
-              $.reset
-          ),
-          print(
-            ' '.repeat(k_legend - 13) +
-              $.gray +
-              'https://github.com/evanwashere/mitata#writing-good-benchmarks' +
-              $.reset
-          ));
+    if (optimized_out_warning) {
+      if (!nl) print('');
+      const pad = ' '.repeat(k_legend - 13);
+      if (!opts.colors) {
+        print(pad + 'benchmark was likely optimized out (dead code elimination) = !');
+        print(pad + 'https://github.com/evanwashere/mitata#writing-good-benchmarks');
+      } else {
+        print(
+          pad +
+            'benchmark was likely optimized out ' +
+            ansi.gray +
+            '(dead code elimination)' +
+            ansi.reset +
+            ansi.gray +
+            ' = ' +
+            ansi.reset +
+            ansi.red +
+            '!' +
+            ansi.reset
+        );
+        print(
+          pad +
+            ansi.gray +
+            'https://github.com/evanwashere/mitata#writing-good-benchmarks' +
+            ansi.reset
+        );
+      }
+    }
 
-    if (noisy_warning)
-      if (!opts.colors)
-        (nl ? null : print(''),
-          print(
-            ' '.repeat(k_legend - 13) + '~ = noisy: confidence target not reached before max cpu time'
-          ));
-      else
-        (nl ? null : print(''),
-          print(
-            ' '.repeat(k_legend - 13) +
-              $.yellow +
-              '~' +
-              $.reset +
-              $.gray +
-              ' = ' +
-              $.reset +
-              'noisy: confidence target not reached before max cpu time'
-          ));
+    if (noisy_warning) {
+      if (!nl) print('');
+      const pad = ' '.repeat(k_legend - 13);
+      if (!opts.colors) {
+        print(pad + '~ = noisy: confidence target not reached before max cpu time');
+      } else {
+        print(
+          pad +
+            ansi.yellow +
+            '~' +
+            ansi.reset +
+            ansi.gray +
+            ' = ' +
+            ansi.reset +
+            'noisy: confidence target not reached before max cpu time'
+        );
+      }
+    }
   },
 };

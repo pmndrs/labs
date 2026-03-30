@@ -1,4 +1,4 @@
-import { bench as _bench, group as _group, type B } from './bench.ts';
+import { bench as _bench, group as _group, type B } from './bench/index.ts';
 
 export { defineConfig } from './config.ts';
 export type { LabsConfig } from './config.ts';

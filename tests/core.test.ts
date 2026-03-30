@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { measure, kind, do_not_optimize } from '../src/core/lib.ts';
-import { B, bench, group, run, compact } from '../src/core/main.ts';
+import { measure, do_not_optimize, B, bench, group, run } from '../src/bench/index.ts';
+import { kind } from '../src/bench/lib/runtime.ts';
+import { compact } from '../src/bench/main.ts';
 
 const fast = { min_cpu_time: 1, min_samples: 12, adaptive: false } as const;
 

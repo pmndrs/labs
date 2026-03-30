@@ -1,6 +1,6 @@
 import { writeFileSync } from 'node:fs';
 import { getBenchRegistry } from './index.ts';
-import { measure, run } from './bench.ts';
+import { measure, run } from './bench/index.ts';
 type TuneOptions = {
   min_cpu_time?: number;
   min_samples?: number;
