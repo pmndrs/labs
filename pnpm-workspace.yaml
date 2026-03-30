@@ -2,6 +2,3 @@ manage-package-manager-versions: true
 
 onlyBuiltDependencies:
   - esbuild
-
-patchedDependencies:
-  mitata@1.0.34: patches/mitata@1.0.34.patch
