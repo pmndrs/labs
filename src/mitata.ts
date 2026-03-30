@@ -1,6 +1,4 @@
-// Bundled from the locally patched mitata source at build time so published
-// packages do not depend on consumer-side pnpm patches.
-import * as mitata from '../node_modules/mitata/src/main.mjs';
+import * as mitata from './core/main.mjs';
 
 export type B = {
   run(thrw?: boolean, tune?: Record<string, unknown>): Promise<unknown>;
