@@ -149,7 +149,7 @@ function replayTrial(trial: SavedBenchmarkTrial): Trial {
     runs: trial.runs.map((run) => ({
       name: run.name,
       args: run.args,
-      stats: run.stats,
+      stats: run.stats as Stats | undefined,
       error: run.error,
     })),
   };

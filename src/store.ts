@@ -9,11 +9,23 @@ export interface HardwareInfo {
   freq: number;
 }
 
-export interface BenchmarkStats {
-  stats?: Stats;
+export interface SavedStats {
+  kind: Stats['kind'];
+  samples: number[];
+  counters?: any;
+  min: number;
+  max: number;
+  avg: number;
+  p25: number;
+  p75: number;
+  p99: number;
+  noisy?: boolean;
+  gc?: { avg: number; min: number; max: number };
+  heap?: { avg: number; min: number; max: number };
 }
 
-export interface WorkerBenchmarkRun extends BenchmarkStats {
+export interface WorkerBenchmarkRun {
+  stats?: Stats;
   name: string;
   args: Record<string, any>;
   error?: unknown;
@@ -33,7 +45,8 @@ export interface WorkerBenchmarkTrial {
   };
 }
 
-export interface SavedBenchmarkRun extends BenchmarkStats {
+export interface SavedBenchmarkRun {
+  stats?: SavedStats;
   name: string;
   args: Record<string, any>;
   error?: unknown;
@@ -70,10 +83,22 @@ export interface WorkerResult {
   environment?: { preFreq?: number; postFreq: number };
 }
 
+export interface SavedContext {
+  cpu: { freq: number; name: string | null };
+  arch: string | null;
+  runtime: string | null;
+  version?: string | null;
+  noop?: {
+    fn?: { avg: number };
+    iter?: { avg: number };
+    fn_gc?: { avg: number };
+  };
+}
+
 export interface SavedFile {
   file: string;
   layout?: Array<{ name: string | null; types: string[] }>;
-  context?: WorkerResult['context'];
+  context?: SavedContext;
   benchmarks: SavedBenchmarkTrial[];
 }
 
@@ -90,7 +115,6 @@ export interface SavedResult {
   description?: string;
   timestamp: string;
   hardware: HardwareInfo;
-  layout?: Array<{ name: string | null; types: string[] }>;
   context?: {
     version?: string | null;
     noop?: {
@@ -172,11 +196,12 @@ export function listResults(labsDir: string): SavedResult[] {
 }
 
 function normalizeSavedResult(result: SavedResult): SavedResult {
+  const legacyLayout = (result as any).layout as SavedFile['layout'] | undefined;
   return {
     ...result,
     files: result.files.map((file) => ({
       ...file,
-      layout: file.layout ?? result.layout,
+      layout: file.layout ?? legacyLayout,
       context: file.context ?? {
         cpu: { freq: result.hardware.freq, name: result.hardware.cpu },
         arch: result.hardware.arch,
@@ -215,10 +240,43 @@ function normalizeTrial(
       {
         name: trial.alias,
         args: {},
-        ...(trial.stats ? { stats: trial.stats } : {}),
+        ...(trial.stats ? { stats: trimStats(trial.stats) } : {}),
         ...(trial.error !== undefined ? { error: trial.error } : {}),
       },
     ],
+  };
+}
+
+export function trimStats(stats: Stats): SavedStats {
+  return {
+    kind: stats.kind,
+    samples: stats.samples,
+    ...(stats.counters ? { counters: stats.counters } : {}),
+    min: stats.min,
+    max: stats.max,
+    avg: stats.avg,
+    p25: stats.p25,
+    p75: stats.p75,
+    p99: stats.p99,
+    ...(stats.noisy !== undefined ? { noisy: stats.noisy } : {}),
+    ...(stats.gc
+      ? {
+          gc: {
+            avg: stats.gc.avg,
+            min: stats.gc.min,
+            max: stats.gc.max,
+          },
+        }
+      : {}),
+    ...(stats.heap
+      ? {
+          heap: {
+            avg: stats.heap.avg,
+            min: stats.heap.min,
+            max: stats.heap.max,
+          },
+        }
+      : {}),
   };
 }
 
