@@ -128,7 +128,8 @@ export function renderMitata(
           let l = '';
           prev_run_gap = false;
           const avg = formatNs(r.stats!.avg).padStart(9);
-          const name = truncate(r.name, k_legend).padEnd(k_legend);
+          const nw = noisy ? k_legend - 2 : k_legend;
+          const name = truncate(r.name, nw).padEnd(nw);
 
           if (noisy) l += !opts.colors ? '~ ' : ansi.yellow + '~' + ansi.reset + ' ';
           l += _h(name) + ' ';
@@ -149,7 +150,8 @@ export function renderMitata(
         } else {
           let l = '';
           const avg = formatNs(r.stats!.avg).padStart(9);
-          const name = truncate(r.name, k_legend).padEnd(k_legend);
+          const nw = noisy ? k_legend - 2 : k_legend;
+          const name = truncate(r.name, nw).padEnd(nw);
 
           if (noisy) l += !opts.colors ? '~ ' : ansi.yellow + '~' + ansi.reset + ' ';
           l += _h(name) + ' ';
