@@ -25,7 +25,7 @@ const CLOCK_COMPARE_THRESHOLD = 0.05;
 
 function medianFreq(freqs: FreqSample[]): number {
   if (freqs.length === 0) return 0;
-  const all = freqs.flatMap((s) => [s.preFreq, s.runFreq, s.postFreq]);
+  const all = freqs.flatMap((s) => [s.runFreq, s.postFreq]);
   return median(all);
 }
 
@@ -42,33 +42,30 @@ export const checkHardwareMatch: EnvironmentCheck = (baseline, candidate) => {
 
 function freqDrift(freqs: FreqSample[]): number {
   if (freqs.length === 0) return 0;
-  const all = freqs.flatMap((s) => [s.preFreq, s.runFreq, s.postFreq]);
+  const all = freqs.flatMap((s) => [s.runFreq, s.postFreq]);
   const min = Math.min(...all);
   const max = Math.max(...all);
   return (max - min) / ((max + min) / 2);
 }
 
-export const checkClockStability: EnvironmentCheck = (baseline, candidate) => {
+// ─── Environment warnings (non-blocking) ─────────────────────────────────────
+
+type EnvironmentWarning = (baseline: SavedResult, candidate: SavedResult) => string[];
+
+export const warnClockDrift: EnvironmentWarning = (baseline, candidate) => {
+  const warnings: string[] = [];
   const bFreqs = baseline.environment?.freqs ?? [];
   const cFreqs = candidate.environment?.freqs ?? [];
 
   if (!isEnvironmentStable(baseline)) {
     const drift = freqDrift(bFreqs);
-    return {
-      ok: false,
-      reason: `baseline CPU was unstable during the run (${(drift * 100).toFixed(1)}% clock drift — disable turbo and fix the governor for a stable benchmark environment)`,
-    };
+    warnings.push(`baseline CPU clock drifted ${(drift * 100).toFixed(1)}% during its run`);
   }
   if (!isEnvironmentStable(candidate)) {
     const drift = freqDrift(cFreqs);
-    return {
-      ok: false,
-      reason: `candidate CPU was unstable during the run (${(drift * 100).toFixed(1)}% clock drift — disable turbo and fix the governor for a stable benchmark environment)`,
-    };
+    warnings.push(`candidate CPU clock drifted ${(drift * 100).toFixed(1)}% during its run`);
   }
 
-  // Compare clock speeds between runs: prefer detailed per-bench freq samples,
-  // fall back to the coarse hardware.freq snapshot from each worker.
   let bFreq = 0;
   let cFreq = 0;
   if (bFreqs.length > 0 && cFreqs.length > 0) {
@@ -82,18 +79,19 @@ export const checkClockStability: EnvironmentCheck = (baseline, candidate) => {
   if (bFreq > 0 && cFreq > 0) {
     const diff = Math.abs(bFreq - cFreq) / ((bFreq + cFreq) / 2);
     if (diff > CLOCK_COMPARE_THRESHOLD) {
-      return {
-        ok: false,
-        reason: `CPU clock speeds differ between runs (${bFreq.toFixed(2)} GHz vs ${cFreq.toFixed(2)} GHz — ${(diff * 100).toFixed(1)}% apart)`,
-      };
+      warnings.push(
+        `CPU clock speeds differ between runs (${bFreq.toFixed(2)} GHz vs ${cFreq.toFixed(2)} GHz — ${(diff * 100).toFixed(1)}% apart)`
+      );
     }
   }
 
-  return { ok: true };
+  return warnings;
 };
 
+export const ENVIRONMENT_WARNINGS: EnvironmentWarning[] = [warnClockDrift];
+
 /** All environment checks in order. Any failure blocks the entire comparison. */
-export const ENVIRONMENT_CHECKS: EnvironmentCheck[] = [checkHardwareMatch, checkClockStability];
+export const ENVIRONMENT_CHECKS: EnvironmentCheck[] = [checkHardwareMatch];
 
 // ─── Per-bench checks ────────────────────────────────────────────────────────
 
@@ -154,6 +152,7 @@ export interface EligibleBench {
   p: number;
   d: number;
   verdict: Verdict;
+  effectiveMinDelta: number;
 }
 
 export interface SkippedBench {
@@ -175,6 +174,7 @@ export interface CompareResult {
   candidateName: string;
   hardware: SavedResult['hardware'];
   environmentFailures: string[];
+  environmentWarnings: string[];
   benches: BenchResult[];
 }
 
@@ -258,6 +258,11 @@ export function compare(
     if (!result.ok) environmentFailures.push(result.reason);
   }
 
+  const environmentWarnings: string[] = [];
+  for (const warn of ENVIRONMENT_WARNINGS) {
+    environmentWarnings.push(...warn(baseline, candidate));
+  }
+
   const benches: BenchResult[] = [];
 
   if (environmentFailures.length > 0) {
@@ -266,6 +271,7 @@ export function compare(
       candidateName: candidate.name,
       hardware: baseline.hardware,
       environmentFailures,
+      environmentWarnings,
       benches,
     };
   }
@@ -320,7 +326,7 @@ export function compare(
       const candidateP99 = trialP99(trial);
       const deltaP50 = base.median > 0 ? (candidateMedian - base.median) / base.median : 0;
       const deltaP99 = base.p99 > 0 ? (candidateP99 - base.p99) / base.p99 : 0;
-      const { verdict, p, d } = classify(base.samples, candidateSamples, opts);
+      const { verdict, p, d, effectiveMinDelta } = classify(base.samples, candidateSamples, opts);
 
       benches.push({
         kind: 'eligible',
@@ -334,6 +340,7 @@ export function compare(
         p,
         d,
         verdict,
+        effectiveMinDelta,
       });
     }
   }
@@ -343,6 +350,7 @@ export function compare(
     candidateName: candidate.name,
     hardware: baseline.hardware,
     environmentFailures,
+    environmentWarnings,
     benches,
   };
 }
@@ -370,6 +378,13 @@ export function printCompareReport(result: CompareResult, config: LabsConfig): v
   console.log(
     `${DIM}Mann-Whitney U  α=${config.alpha}  minΔ=${(config.minDelta * 100).toFixed(0)}%  cliff's d≥${config.minEffect}${RESET}\n`
   );
+
+  if (result.environmentWarnings.length > 0) {
+    for (const reason of result.environmentWarnings) {
+      console.log(`${YELLOW}⚠ ${reason}${RESET}`);
+    }
+    console.log('');
+  }
 
   if (result.environmentFailures.length > 0) {
     console.log(`${RED}✖ cannot compare — environment check failed${RESET}`);
@@ -408,15 +423,31 @@ export function printCompareReport(result: CompareResult, config: LabsConfig): v
   const TIME_COL = 10;
   const DELTA_COL = 7;
   const P_COL = 5;
+  const THRESH_COL = 5;
 
   const truncate = (s: string) =>
     s.length > nameCol ? s.slice(0, nameCol - 1) + '…' : s.padEnd(nameCol);
+
+  const formatThreshold = (v: number) => `±${(v * 100).toFixed(0)}%`;
 
   // ── Eligible bench table ─────────────────────────────────────────────────
 
   if (eligible.length > 0) {
     const totalWidth =
-      4 + nameCol + 1 + TIME_COL + 1 + TIME_COL + 1 + DELTA_COL + 1 + DELTA_COL + 1 + P_COL;
+      4 +
+      nameCol +
+      1 +
+      TIME_COL +
+      1 +
+      TIME_COL +
+      1 +
+      DELTA_COL +
+      1 +
+      DELTA_COL +
+      1 +
+      P_COL +
+      1 +
+      THRESH_COL;
     const header =
       `${GRAY}${'  ' + 'bench'.padEnd(nameCol + 2)}` +
       ` ${'baseline'.padStart(TIME_COL)}` +
@@ -424,6 +455,7 @@ export function printCompareReport(result: CompareResult, config: LabsConfig): v
       ` ${'Δp50'.padStart(DELTA_COL)}` +
       ` ${'Δp99'.padStart(DELTA_COL)}` +
       ` ${'p'.padStart(P_COL)}` +
+      ` ${'±Δ'.padStart(THRESH_COL)}` +
       `${RESET}`;
     const divider = `${GRAY}${'-'.repeat(totalWidth)}${RESET}`;
 
@@ -462,7 +494,8 @@ export function printCompareReport(result: CompareResult, config: LabsConfig): v
           ` ${GRAY}${formatTime(bench.candidateP50).padStart(TIME_COL)}${RESET}` +
           ` ${dp50Color}${formatDelta(bench.deltaP50).padStart(DELTA_COL)}${RESET}` +
           ` ${dp99Color}${formatDelta(bench.deltaP99).padStart(DELTA_COL)}${RESET}` +
-          ` ${pColor}${formatP(bench.p).padStart(P_COL)}${RESET}`
+          ` ${pColor}${formatP(bench.p).padStart(P_COL)}${RESET}` +
+          ` ${DIM}${formatThreshold(bench.effectiveMinDelta).padStart(THRESH_COL)}${RESET}`
       );
 
       const dist = renderDistributions(bench.baselineSamples, bench.candidateSamples, TIME_COL);

@@ -48,13 +48,9 @@ async function calibrateFreq(): Promise<number> {
 
 async function main(): Promise<void> {
   await import(file!);
-  const preFreq = await calibrateFreq();
   const result = await run({ tune: parseTuneEnv() });
   const postFreq = await calibrateFreq();
-  // preFreq/postFreq bracket the full benchmark suite to detect clock drift during the run
 
-  // Attach groupName to each trial using the registry built during bench registration.
-  // The registry and benchmarks[] are in the same sequential order.
   const registry = getBenchRegistry();
   for (let i = 0; i < result.benchmarks.length; i++) {
     (result.benchmarks[i] as any).groupName = registry[i]?.groupName ?? '';
@@ -63,7 +59,7 @@ async function main(): Promise<void> {
   if (process.env.LABS_RESULT_FILE) {
     writeFileSync(
       process.env.LABS_RESULT_FILE,
-      JSON.stringify({ ...result, environment: { preFreq, postFreq } })
+      JSON.stringify({ ...result, environment: { postFreq } })
     );
   }
 }
