@@ -4,6 +4,7 @@ import { basename, dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { compare, printCompareReport } from './compare.ts';
 import type { LabsConfig } from './config.ts';
+import { printReportBox, replayReport } from './report.ts';
 import {
   type FreqSample,
   type SavedResult,
@@ -16,14 +17,12 @@ import {
   isEnvironmentStable,
   listResults,
   loadResult,
-  resultFreqDrift,
   resultMedianFreq,
   setLastComparison,
   saveResult,
   setBaseline,
 } from './store.ts';
-import { BLUE, BOLD, CYAN, DIM, GREEN, RED, RESET, YELLOW } from './utils/ansi.ts';
-import { visibleLength } from './utils/format.ts';
+import { BLUE, CYAN, DIM, GREEN, RED, RESET } from './utils/ansi.ts';
 
 function collectEnvData(
   workerResult: WorkerResult,
@@ -38,82 +37,11 @@ function collectEnvData(
     postFreq: workerResult.environment?.postFreq ?? runFreq,
   });
   for (const trial of workerResult.benchmarks) {
-    const stats = trial.runs[0]?.stats;
-    if (stats && (stats as any).noisy) noisyAliases.push(trial.alias);
-  }
-}
-
-function printReport(
-  envData: FreqSample[],
-  noisyAliases: string[],
-  maxCpuTime: number,
-  saveMsg?: string,
-  cpu?: string | null
-): void {
-  const lines: string[] = [];
-
-  if (saveMsg) {
-    lines.push(saveMsg);
-    lines.push('');
-  }
-  if (envData.length > 0) {
-    const allFreqs = envData.flatMap((e) => [e.runFreq, e.postFreq]);
-    const min = Math.min(...allFreqs);
-    const max = Math.max(...allFreqs);
-    const drift = (max - min) / ((max + min) / 2);
-    const rangeStr = `${min.toFixed(2)}\u2013${max.toFixed(2)} GHz`;
-
-    if (drift > 0.05) {
-      lines.push(
-        `${YELLOW}\u26A0 CPU unstable${RESET}  ${rangeStr}  ${DIM}(${(drift * 100).toFixed(1)}% drift)${RESET}`
-      );
-      if (cpu && /apple/i.test(cpu)) {
-        lines.push(`  ${DIM}Apple Silicon does not support CPU controls.${RESET}`);
-        lines.push(`  ${DIM}Drift is expected and may not affect results.${RESET}`);
-      } else {
-        lines.push(
-          `  ${DIM}Disable turbo and fix the CPU governor for a stable benchmark environment.${RESET}`
-        );
-      }
-    } else {
-      lines.push(`${GREEN}\u2714 CPU stable${RESET}  ${DIM}${rangeStr}${RESET}`);
+    for (const run of trial.runs) {
+      const stats = run.stats;
+      if (stats && (stats as any).noisy) noisyAliases.push(run.name || trial.alias);
     }
   }
-
-  if (envData.length > 0) lines.push('');
-
-  if (noisyAliases.length > 0) {
-    lines.push(`${YELLOW}\u26A0 (${noisyAliases.length}) noisy benches${RESET}`);
-    for (const alias of noisyAliases) lines.push(`  ${DIM}\u00B7 ${alias}${RESET}`);
-    lines.push(
-      `  ${DIM}Increase maxCpuTime (currently ${maxCpuTime}s) to allow convergence.${RESET}`
-    );
-  } else {
-    lines.push(`${GREEN}\u2714 All measurements stable${RESET}`);
-  }
-
-  const PAD = 2;
-  const contentWidth = Math.max(40, ...lines.map((l) => visibleLength(l)));
-  const innerWidth = contentWidth + PAD * 2;
-
-  const top = `\u250C ${BOLD}report${RESET} ${'\u2500'.repeat(innerWidth - 8)}\u2510`;
-  const bot = `\u2514${'\u2500'.repeat(innerWidth)}\u2518`;
-  const blank = `\u2502${' '.repeat(innerWidth)}\u2502`;
-  const pad = ' '.repeat(PAD);
-
-  console.log(`\n${top}`);
-  console.log(blank);
-  for (const line of lines) {
-    if (line === '') {
-      console.log(blank);
-    } else {
-      const fill = innerWidth - PAD * 2 - visibleLength(line);
-      console.log(`\u2502${pad}${line}${' '.repeat(Math.max(0, fill))}${pad}\u2502`);
-    }
-  }
-  console.log(blank);
-  console.log(bot);
-  console.log('');
 }
 
 const WORKER_EXT = import.meta.url.endsWith('.ts') ? 'ts' : 'mjs';
@@ -228,31 +156,34 @@ export async function runCLI(args: string[]) {
     const baselineName = getBaseline(labsDir);
     if (results.length === 0) {
       console.log(`${DIM}No saved results${RESET}`);
-    } else {
-      console.log('');
-      for (const r of results) {
-        const isBaseline = r.name === baselineName;
-        const stable = isEnvironmentStable(r);
-        const marker = isBaseline ? ` ${CYAN}(baseline)${RESET}` : '';
-        const unstableMarker = stable ? '' : ` ${YELLOW}⚠ unstable${RESET}`;
-        const desc = r.description ? ` ${DIM}— ${r.description}${RESET}` : '';
-        const date = new Date(r.timestamp).toLocaleString();
-
-        const freq = resultMedianFreq(r);
-        let clkStr = freq > 0 ? `clk: ${freq.toFixed(2)} GHz` : '';
-        if (clkStr && !stable) {
-          const drift = resultFreqDrift(r);
-          clkStr += ` (${(drift * 100).toFixed(1)}% drift)`;
-        }
-        const clkPart = clkStr ? `  ${clkStr}` : '';
-
-        console.log(
-          `  ${isBaseline ? GREEN : BLUE}▶${RESET} ${r.name}${marker}${unstableMarker}${desc}`
-        );
-        console.log(`    ${DIM}${date}  ${r.hardware.cpu ?? 'unknown CPU'}${clkPart}${RESET}`);
-      }
-      console.log('');
+      return;
     }
+
+    const { select, isCancel } = await import('@clack/prompts');
+    const chosen = await select({
+      message: 'Select a result to view its report',
+      options: results.map((r) => {
+        const stable = isEnvironmentStable(r);
+        const hints: string[] = [];
+        if (r.name === baselineName) hints.push('baseline');
+        if (!stable) hints.push('unstable');
+        if (r.description) hints.push(r.description);
+        const freq = resultMedianFreq(r);
+        if (freq > 0) hints.push(`${freq.toFixed(2)} GHz`);
+        return {
+          value: r.name,
+          label: r.name,
+          hint: hints.length > 0 ? hints.join(', ') : undefined,
+        };
+      }),
+    });
+    if (isCancel(chosen)) {
+      console.log(`${DIM}Cancelled${RESET}`);
+      return;
+    }
+
+    const result = loadResult(labsDir, chosen as string);
+    replayReport(result, config);
     return;
   }
 
@@ -508,7 +439,7 @@ export async function runCLI(args: string[]) {
       runCpu ??= workerResult.context.cpu.name;
       collectEnvData(workerResult, suiteName(file), runEnvData, runNoisyAliases);
     }
-    printReport(runEnvData, runNoisyAliases, config.maxCpuTime!, undefined, runCpu);
+    printReportBox(runEnvData, runNoisyAliases, config.maxCpuTime!, undefined, runCpu);
     return;
   }
 
@@ -553,8 +484,9 @@ export async function runCLI(args: string[]) {
   let hardwareSet = false;
   const saveEnvData: FreqSample[] = [];
   const saveNoisyAliases: string[] = [];
+  let savedLayout: SavedResult['layout'];
+  let savedNoop: SavedResult['context'] | undefined;
 
-  let warnedMultiRun = false;
   for (const { file, resultFile } of workerOutputs) {
     if (!existsSync(resultFile)) continue;
     const workerResult: WorkerResult = JSON.parse(readFileSync(resultFile, 'utf-8'));
@@ -566,6 +498,17 @@ export async function runCLI(args: string[]) {
         runtime: workerResult.context.runtime,
         freq: workerResult.context.cpu.freq,
       };
+      savedLayout = workerResult.layout;
+      if (workerResult.context.noop) {
+        savedNoop = {
+          version: workerResult.context.version,
+          noop: {
+            fn: { avg: workerResult.context.noop.fn?.avg ?? 0 },
+            iter: { avg: workerResult.context.noop.iter?.avg ?? 0 },
+            fn_gc: { avg: workerResult.context.noop.fn_gc?.avg ?? 0 },
+          },
+        };
+      }
       hardwareSet = true;
     }
 
@@ -573,20 +516,23 @@ export async function runCLI(args: string[]) {
 
     files.push({
       file: suiteName(file),
+      layout: workerResult.layout,
+      context: workerResult.context,
       benchmarks: workerResult.benchmarks.map((trial) => {
-        if (!warnedMultiRun && trial.runs.length > 1) {
-          warnedMultiRun = true;
-          console.warn(
-            `${DIM}labs: trial "${trial.alias}" has ${trial.runs.length} runs; only the first run is kept${RESET}`
-          );
-        }
-        const primaryRun = trial.runs[0];
         return {
           alias: trial.alias,
+          group: trial.group,
           baseline: trial.baseline,
+          gcMode: trial.gcMode ?? 'once',
           groupName: trial.groupName,
-          ...(primaryRun?.stats ? { stats: primaryRun.stats } : {}),
-          ...(primaryRun?.error !== undefined ? { error: primaryRun.error } : {}),
+          kind: trial.kind ?? 'static',
+          style: trial.style ?? { compact: false, highlight: false },
+          runs: trial.runs.map((run) => ({
+            name: run.name,
+            args: run.args,
+            ...(run.stats ? { stats: run.stats } : {}),
+            ...(run.error !== undefined ? { error: run.error } : {}),
+          })),
         };
       }),
     });
@@ -597,6 +543,8 @@ export async function runCLI(args: string[]) {
     ...(description ? { description } : {}),
     timestamp: new Date().toISOString(),
     hardware,
+    layout: savedLayout,
+    context: savedNoop,
     files,
     environment: { freqs: saveEnvData },
   };
@@ -613,7 +561,7 @@ export async function runCLI(args: string[]) {
   const baselineNote = markedBaseline ? ` ${CYAN}(baseline)${RESET}` : '';
   const saveMsg = `${GREEN}\u2714${RESET} Saved "${saveName}"${baselineNote} (${files.length} file${files.length !== 1 ? 's' : ''})`;
 
-  printReport(saveEnvData, saveNoisyAliases, config.maxCpuTime!, saveMsg, hardware.cpu);
+  printReportBox(saveEnvData, saveNoisyAliases, config.maxCpuTime!, saveMsg, hardware.cpu);
 
   if (shouldCompare) {
     const baselineName = getBaseline(labsDir);

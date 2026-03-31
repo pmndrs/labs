@@ -65,6 +65,7 @@ export interface Trial {
   runs: Run[];
   alias: string;
   group: number;
+  gcMode: string | boolean;
   baseline: boolean;
   args: Record<string, any[]>;
   kind: 'args' | 'static' | 'multi-args';
