@@ -49,7 +49,7 @@ export interface WorkerResult {
     runtime: string | null;
   };
   benchmarks: WorkerBenchmarkTrial[];
-  environment?: { preFreq: number; postFreq: number };
+  environment?: { preFreq?: number; postFreq: number };
 }
 
 export interface SavedFile {
@@ -59,7 +59,8 @@ export interface SavedFile {
 
 export interface FreqSample {
   file: string;
-  preFreq: number;
+  /** @deprecated kept for backwards compat with old saved results */
+  preFreq?: number;
   runFreq: number;
   postFreq: number;
 }
@@ -78,14 +79,38 @@ export interface LastComparison {
   candidateName: string;
 }
 
+function freqReadings(freqs: FreqSample[]): number[] {
+  return freqs.flatMap((s) => [s.runFreq, s.postFreq]);
+}
+
 /** Returns true if the CPU clock was stable during the run (drift ≤ threshold). */
 export function isEnvironmentStable(result: SavedResult, threshold = 0.05): boolean {
   const freqs = result.environment?.freqs ?? [];
-  if (freqs.length === 0) return true; // no freq data = legacy result, assume stable
-  const all = freqs.flatMap((s) => [s.preFreq, s.runFreq, s.postFreq]);
+  if (freqs.length === 0) return true;
+  const all = freqReadings(freqs);
   const min = Math.min(...all);
   const max = Math.max(...all);
   return (max - min) / ((max + min) / 2) <= threshold;
+}
+
+/** Median CPU frequency across all freq samples, falling back to the hardware snapshot. */
+export function resultMedianFreq(result: SavedResult): number {
+  const freqs = result.environment?.freqs ?? [];
+  if (freqs.length > 0) {
+    const all = freqReadings(freqs).sort((a, b) => a - b);
+    return all[all.length >> 1];
+  }
+  return result.hardware.freq;
+}
+
+/** Relative clock drift (0–1) within a single run. 0 when no freq data. */
+export function resultFreqDrift(result: SavedResult): number {
+  const freqs = result.environment?.freqs ?? [];
+  if (freqs.length === 0) return 0;
+  const all = freqReadings(freqs);
+  const min = Math.min(...all);
+  const max = Math.max(...all);
+  return (max - min) / ((max + min) / 2);
 }
 
 export function getLabsDir(configDir: string, resultsDir: string): string {

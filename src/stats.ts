@@ -98,12 +98,30 @@ export function cliffsD(a: number[], b: number[]): number {
   return (more - less) / (n1 * n2);
 }
 
+/**
+ * Noise-adjusted delta threshold. Uses relative MAD (MAD/median) as a robust
+ * measure of per-sample noise, then scales by 3× (roughly a 2σ equivalent for
+ * the median). Takes the noisier of the two distributions as the reference.
+ *
+ * Stable system (pinned freq): MAD/median ≈ 0.5% → floor ≈ 1.5%
+ * Noisy system (Apple Silicon): MAD/median ≈ 2%   → floor ≈ 6%
+ */
+const NOISE_SCALE = 3;
+
+export function noiseFloor(a: number[], b: number[]): number {
+  const medA = median(a);
+  const medB = median(b);
+  const relA = medA > 0 ? mad(a) / medA : 0;
+  const relB = medB > 0 ? mad(b) / medB : 0;
+  return NOISE_SCALE * Math.max(relA, relB);
+}
+
 export type Verdict = 'faster' | 'slower' | 'neutral';
 
 export interface ClassifyOptions {
   /** Mann-Whitney U two-tailed significance level. @default 0.05 */
   alpha?: number;
-  /** Minimum absolute Δp50 ratio to flag a verdict. @default 0.05 */
+  /** Minimum absolute Δp50 ratio to flag a verdict (floor for noise-adjusted threshold). @default 0.05 */
   minDelta?: number;
   /** Minimum |Cliff's d| to flag a verdict. Filters noise on high-variance benches. @default 0.474 */
   minEffect?: number;
@@ -111,9 +129,9 @@ export interface ClassifyOptions {
 
 /**
  * Three-gate classification:
- *   1. p ≤ alpha        — statistical significance (Mann-Whitney U)
- *   2. |Δp50| ≥ minDelta — practical magnitude ("do I care about this size of change?")
- *   3. |cliff's d| ≥ minEffect — effect size ("are the distributions actually separated?")
+ *   1. p ≤ alpha                    — statistical significance (Mann-Whitney U)
+ *   2. |Δp50| ≥ effectiveMinDelta   — practical magnitude, noise-adjusted
+ *   3. |cliff's d| ≥ minEffect      — effect size ("are the distributions actually separated?")
  * All three must hold to declare faster or slower.
  */
 export function classify(
@@ -124,10 +142,12 @@ export function classify(
   verdict: Verdict;
   p: number;
   d: number;
+  effectiveMinDelta: number;
 } {
   const alpha = opts?.alpha ?? 0.05;
   const minDelta = opts?.minDelta ?? 0.05;
   const minEffect = opts?.minEffect ?? 0.474;
+  const effectiveMinDelta = Math.max(minDelta, noiseFloor(baselineSamples, candidateSamples));
   const { p } = mannWhitneyU(baselineSamples, candidateSamples);
   const d = cliffsD(baselineSamples, candidateSamples);
 
@@ -136,10 +156,10 @@ export function classify(
     const bMed = median(baselineSamples);
     const cMed = median(candidateSamples);
     const ratio = bMed > 0 ? Math.abs(cMed - bMed) / bMed : 0;
-    if (ratio >= minDelta) {
+    if (ratio >= effectiveMinDelta) {
       verdict = cMed > bMed ? 'slower' : 'faster';
     }
   }
 
-  return { verdict, p, d };
+  return { verdict, p, d, effectiveMinDelta };
 }
