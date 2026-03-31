@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import type { Stats } from './bench/types.ts';
 
 export interface HardwareInfo {
   cpu: string | null;
@@ -9,17 +10,7 @@ export interface HardwareInfo {
 }
 
 export interface BenchmarkStats {
-  stats?: {
-    avg: number;
-    min: number;
-    max: number;
-    p75: number;
-    p99: number;
-    p999: number;
-    samples: number[];
-    noisy?: boolean;
-    gc?: { avg: number; min: number; max: number; total: number };
-  };
+  stats?: Stats;
 }
 
 export interface WorkerBenchmarkRun extends BenchmarkStats {
@@ -30,16 +21,36 @@ export interface WorkerBenchmarkRun extends BenchmarkStats {
 
 export interface WorkerBenchmarkTrial {
   alias: string;
+  group: number;
   baseline: boolean;
+  gcMode?: string | boolean;
   runs: WorkerBenchmarkRun[];
   groupName?: string;
+  kind?: 'args' | 'static' | 'multi-args';
+  style?: {
+    compact: boolean;
+    highlight: false | string;
+  };
 }
 
-export interface SavedBenchmarkTrial extends BenchmarkStats {
-  alias: string;
-  baseline: boolean;
-  groupName?: string;
+export interface SavedBenchmarkRun extends BenchmarkStats {
+  name: string;
+  args: Record<string, any>;
   error?: unknown;
+}
+
+export interface SavedBenchmarkTrial {
+  alias: string;
+  group: number;
+  baseline: boolean;
+  gcMode: string | boolean;
+  groupName?: string;
+  kind: 'args' | 'static' | 'multi-args';
+  style: {
+    compact: boolean;
+    highlight: false | string;
+  };
+  runs: SavedBenchmarkRun[];
 }
 
 export interface WorkerResult {
@@ -47,13 +58,22 @@ export interface WorkerResult {
     cpu: { freq: number; name: string | null };
     arch: string | null;
     runtime: string | null;
+    version?: string | null;
+    noop?: {
+      fn?: { avg: number };
+      iter?: { avg: number };
+      fn_gc?: { avg: number };
+    };
   };
+  layout?: Array<{ name: string | null; types: string[] }>;
   benchmarks: WorkerBenchmarkTrial[];
   environment?: { preFreq?: number; postFreq: number };
 }
 
 export interface SavedFile {
   file: string;
+  layout?: Array<{ name: string | null; types: string[] }>;
+  context?: WorkerResult['context'];
   benchmarks: SavedBenchmarkTrial[];
 }
 
@@ -70,6 +90,15 @@ export interface SavedResult {
   description?: string;
   timestamp: string;
   hardware: HardwareInfo;
+  layout?: Array<{ name: string | null; types: string[] }>;
+  context?: {
+    version?: string | null;
+    noop?: {
+      fn: { avg: number };
+      iter: { avg: number };
+      fn_gc: { avg: number };
+    };
+  };
   files: SavedFile[];
   environment?: { freqs: FreqSample[] };
 }
@@ -130,7 +159,7 @@ export function saveResult(labsDir: string, result: SavedResult): void {
 export function loadResult(labsDir: string, name: string): SavedResult {
   const file = join(getResultsDir(labsDir), `${name}.json`);
   if (!existsSync(file)) throw new Error(`No saved result named "${name}"`);
-  return JSON.parse(readFileSync(file, 'utf-8')) as SavedResult;
+  return normalizeSavedResult(JSON.parse(readFileSync(file, 'utf-8')) as SavedResult);
 }
 
 export function listResults(labsDir: string): SavedResult[] {
@@ -138,8 +167,59 @@ export function listResults(labsDir: string): SavedResult[] {
   if (!existsSync(dir)) return [];
   return readdirSync(dir)
     .filter((f) => f.endsWith('.json'))
-    .map((f) => JSON.parse(readFileSync(join(dir, f), 'utf-8')) as SavedResult)
+    .map((f) => normalizeSavedResult(JSON.parse(readFileSync(join(dir, f), 'utf-8')) as SavedResult))
     .sort((a, b) => a.timestamp.localeCompare(b.timestamp));
+}
+
+function normalizeSavedResult(result: SavedResult): SavedResult {
+  return {
+    ...result,
+    files: result.files.map((file) => ({
+      ...file,
+      layout: file.layout ?? result.layout,
+      context: file.context ?? {
+        cpu: { freq: result.hardware.freq, name: result.hardware.cpu },
+        arch: result.hardware.arch,
+        runtime: result.hardware.runtime,
+        version: result.context?.version,
+        noop: result.context?.noop,
+      },
+      benchmarks: file.benchmarks.map((bench) => normalizeTrial(bench as any)),
+    })),
+  };
+}
+
+function normalizeTrial(
+  trial: SavedBenchmarkTrial & { stats?: Stats; error?: unknown }
+): SavedBenchmarkTrial {
+  if (Array.isArray((trial as any).runs)) {
+    return {
+      ...trial,
+      group: (trial as any).group ?? 0,
+      gcMode: (trial as any).gcMode ?? 'once',
+      kind: trial.kind ?? 'static',
+      style: trial.style ?? { compact: false, highlight: false },
+      runs: (trial as any).runs,
+    };
+  }
+
+  return {
+    alias: trial.alias,
+    group: (trial as any).group ?? 0,
+    baseline: trial.baseline,
+    gcMode: (trial as any).gcMode ?? 'once',
+    groupName: trial.groupName,
+    kind: 'static',
+    style: { compact: false, highlight: false },
+    runs: [
+      {
+        name: trial.alias,
+        args: {},
+        ...(trial.stats ? { stats: trial.stats } : {}),
+        ...(trial.error !== undefined ? { error: trial.error } : {}),
+      },
+    ],
+  };
 }
 
 export function deleteResult(labsDir: string, name: string): void {

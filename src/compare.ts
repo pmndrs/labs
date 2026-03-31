@@ -181,28 +181,43 @@ export interface CompareResult {
 // ─── Legacy trial helpers ────────────────────────────────────────────────────
 
 type LegacyTrial = {
+  alias?: string;
+  groupName?: string;
   stats?: { samples?: number[]; noisy?: boolean; p99?: number };
-  runs?: Array<{ stats?: { samples?: number[]; noisy?: boolean; p99?: number } }>;
+  runs?: Array<{ name?: string; stats?: { samples?: number[]; noisy?: boolean; p99?: number } }>;
 };
 
 type ComparableTrial = SavedResult['files'][number]['benchmarks'][number] | LegacyTrial;
 
-function trialSamples(trial: ComparableTrial): number[] {
-  if (Array.isArray(trial.stats?.samples)) return trial.stats.samples;
-  const legacySamples = 'runs' in trial ? trial.runs?.[0]?.stats?.samples : undefined;
-  return Array.isArray(legacySamples) ? legacySamples : [];
-}
+function trialRuns(trial: ComparableTrial): Array<{
+  name: string;
+  samples: number[];
+  p99: number;
+  noisy: boolean;
+}> {
+  const alias = (trial as any).alias ?? 'anonymous';
+  const runs = (trial as any).runs as Array<any> | undefined;
+  if (Array.isArray(runs) && runs.length > 0) {
+    return runs.map((run) => {
+      const stats = run?.stats;
+      return {
+        name: run?.name ?? alias,
+        samples: Array.isArray(stats?.samples) ? stats.samples : [],
+        p99: typeof stats?.p99 === 'number' ? stats.p99 : 0,
+        noisy: !!stats?.noisy,
+      };
+    });
+  }
 
-function trialP99(trial: ComparableTrial): number {
-  if (trial.stats?.p99 !== undefined) return trial.stats.p99;
-  if ('runs' in trial) return trial.runs?.[0]?.stats?.p99 ?? 0;
-  return 0;
-}
-
-function trialNoisy(trial: ComparableTrial): boolean {
-  if (trial.stats?.noisy) return true;
-  if ('runs' in trial) return !!(trial.runs?.[0]?.stats as any)?.noisy;
-  return false;
+  const stats = (trial as any).stats;
+  return [
+    {
+      name: alias,
+      samples: Array.isArray(stats?.samples) ? stats.samples : [],
+      p99: typeof stats?.p99 === 'number' ? stats.p99 : 0,
+      noisy: !!stats?.noisy,
+    },
+  ];
 }
 
 // ─── Index helpers ───────────────────────────────────────────────────────────
@@ -218,25 +233,34 @@ function buildIndex(result: SavedResult): Map<string, IndexEntry> {
   const map = new Map<string, IndexEntry>();
   for (const f of result.files) {
     for (const trial of f.benchmarks) {
-      const key = `${f.file}\0${trial.groupName ?? ''}\0${trial.alias}`;
-      const samples = trialSamples(trial);
-      map.set(key, {
-        median: samples.length > 0 ? median(samples) : 0,
-        p99: trialP99(trial),
-        samples,
-        noisy: trialNoisy(trial),
-      });
+      for (const run of trialRuns(trial)) {
+        const key = `${f.file}\0${trial.groupName ?? ''}\0${run.name}`;
+        map.set(key, {
+          median: run.samples.length > 0 ? median(run.samples) : 0,
+          p99: run.p99,
+          samples: run.samples,
+          noisy: run.noisy,
+        });
+      }
     }
   }
   return map;
 }
 
-function trialKey(file: string, trial: SavedResult['files'][number]['benchmarks'][number]): string {
-  return `${file}\0${trial.groupName ?? ''}\0${trial.alias}`;
+function trialKey(
+  file: string,
+  trial: SavedResult['files'][number]['benchmarks'][number],
+  runName: string
+): string {
+  return `${file}\0${trial.groupName ?? ''}\0${runName}`;
 }
 
-function benchKey(file: string, trial: SavedResult['files'][number]['benchmarks'][number]): BenchKey {
-  return { file, group: trial.groupName ?? trial.alias, name: trial.alias };
+function benchKey(
+  file: string,
+  trial: SavedResult['files'][number]['benchmarks'][number],
+  runName: string
+): BenchKey {
+  return { file, group: trial.groupName ?? trial.alias, name: runName };
 }
 
 // ─── Core comparison ─────────────────────────────────────────────────────────
@@ -292,56 +316,55 @@ export function compare(
 
   for (const f of candidate.files) {
     for (const trial of f.benchmarks) {
-      const key = trialKey(f.file, trial);
-      const key_ = benchKey(f.file, trial);
-      const base = baseIndex.get(key);
+      for (const run of trialRuns(trial)) {
+        const key = trialKey(f.file, trial, run.name);
+        const key_ = benchKey(f.file, trial, run.name);
+        const base = baseIndex.get(key);
 
-      if (base === undefined) {
-        benches.push({ kind: 'missing', key: key_, presentIn: 'candidate' });
-        continue;
-      }
-
-      const candidateSamples = trialSamples(trial);
-      const candidateNoisy = trialNoisy(trial);
-      const benchData = {
-        baseline: { samples: base.samples, noisy: base.noisy },
-        candidate: { samples: candidateSamples, noisy: candidateNoisy },
-      };
-
-      let skipReason: string | undefined;
-      for (const check of BENCH_CHECKS) {
-        const result = check(benchData.baseline, benchData.candidate);
-        if (!result.ok) {
-          skipReason = result.reason;
-          break;
+        if (base === undefined) {
+          benches.push({ kind: 'missing', key: key_, presentIn: 'candidate' });
+          continue;
         }
+
+        const benchData = {
+          baseline: { samples: base.samples, noisy: base.noisy },
+          candidate: { samples: run.samples, noisy: run.noisy },
+        };
+
+        let skipReason: string | undefined;
+        for (const check of BENCH_CHECKS) {
+          const result = check(benchData.baseline, benchData.candidate);
+          if (!result.ok) {
+            skipReason = result.reason;
+            break;
+          }
+        }
+
+        if (skipReason !== undefined) {
+          benches.push({ kind: 'skipped', key: key_, reason: skipReason });
+          continue;
+        }
+
+        const candidateMedian = median(run.samples);
+        const deltaP50 = base.median > 0 ? (candidateMedian - base.median) / base.median : 0;
+        const deltaP99 = base.p99 > 0 ? (run.p99 - base.p99) / base.p99 : 0;
+        const { verdict, p, d, effectiveMinDelta } = classify(base.samples, run.samples, opts);
+
+        benches.push({
+          kind: 'eligible',
+          key: key_,
+          baselineP50: base.median,
+          candidateP50: candidateMedian,
+          baselineSamples: base.samples,
+          candidateSamples: run.samples,
+          deltaP50,
+          deltaP99,
+          p,
+          d,
+          verdict,
+          effectiveMinDelta,
+        });
       }
-
-      if (skipReason !== undefined) {
-        benches.push({ kind: 'skipped', key: key_, reason: skipReason });
-        continue;
-      }
-
-      const candidateMedian = median(candidateSamples);
-      const candidateP99 = trialP99(trial);
-      const deltaP50 = base.median > 0 ? (candidateMedian - base.median) / base.median : 0;
-      const deltaP99 = base.p99 > 0 ? (candidateP99 - base.p99) / base.p99 : 0;
-      const { verdict, p, d, effectiveMinDelta } = classify(base.samples, candidateSamples, opts);
-
-      benches.push({
-        kind: 'eligible',
-        key: key_,
-        baselineP50: base.median,
-        candidateP50: candidateMedian,
-        baselineSamples: base.samples,
-        candidateSamples,
-        deltaP50,
-        deltaP99,
-        p,
-        d,
-        verdict,
-        effectiveMinDelta,
-      });
     }
   }
 
