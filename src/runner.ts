@@ -7,6 +7,7 @@ import type { LabsConfig } from './config.ts';
 import { printReportBox, replayReport } from './report.ts';
 import {
   type FreqSample,
+  type SavedContext,
   type SavedResult,
   type WorkerResult,
   clearResults,
@@ -21,6 +22,7 @@ import {
   setLastComparison,
   saveResult,
   setBaseline,
+  trimStats,
 } from './store.ts';
 import { BLUE, CYAN, DIM, GREEN, RED, RESET } from './utils/ansi.ts';
 
@@ -484,7 +486,6 @@ export async function runCLI(args: string[]) {
   let hardwareSet = false;
   const saveEnvData: FreqSample[] = [];
   const saveNoisyAliases: string[] = [];
-  let savedLayout: SavedResult['layout'];
   let savedNoop: SavedResult['context'] | undefined;
 
   for (const { file, resultFile } of workerOutputs) {
@@ -498,7 +499,6 @@ export async function runCLI(args: string[]) {
         runtime: workerResult.context.runtime,
         freq: workerResult.context.cpu.freq,
       };
-      savedLayout = workerResult.layout;
       if (workerResult.context.noop) {
         savedNoop = {
           version: workerResult.context.version,
@@ -517,7 +517,7 @@ export async function runCLI(args: string[]) {
     files.push({
       file: suiteName(file),
       layout: workerResult.layout,
-      context: workerResult.context,
+      context: trimContext(workerResult.context),
       benchmarks: workerResult.benchmarks.map((trial) => {
         return {
           alias: trial.alias,
@@ -530,7 +530,7 @@ export async function runCLI(args: string[]) {
           runs: trial.runs.map((run) => ({
             name: run.name,
             args: run.args,
-            ...(run.stats ? { stats: run.stats } : {}),
+            ...(run.stats ? { stats: trimStats(run.stats) } : {}),
             ...(run.error !== undefined ? { error: run.error } : {}),
           })),
         };
@@ -543,7 +543,6 @@ export async function runCLI(args: string[]) {
     ...(description ? { description } : {}),
     timestamp: new Date().toISOString(),
     hardware,
-    layout: savedLayout,
     context: savedNoop,
     files,
     environment: { freqs: saveEnvData },
@@ -579,4 +578,25 @@ export async function runCLI(args: string[]) {
       }
     }
   }
+}
+
+function trimContext(context: WorkerResult['context']): SavedContext {
+  return {
+    cpu: {
+      freq: context.cpu.freq,
+      name: context.cpu.name,
+    },
+    arch: context.arch,
+    runtime: context.runtime,
+    version: context.version,
+    ...(context.noop
+      ? {
+          noop: {
+            ...(context.noop.fn ? { fn: { avg: context.noop.fn.avg } } : {}),
+            ...(context.noop.iter ? { iter: { avg: context.noop.iter.avg } } : {}),
+            ...(context.noop.fn_gc ? { fn_gc: { avg: context.noop.fn_gc.avg } } : {}),
+          },
+        }
+      : {}),
+  };
 }
