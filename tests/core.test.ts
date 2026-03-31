@@ -45,6 +45,43 @@ describe('measure', () => {
     assertStats(s);
   }, 20_000);
 
+  it('generator/yield with after hook runs between samples', async () => {
+    let afterCount = 0;
+    const s = await measure(function* () {
+      yield {
+        bench: () => 1 + 1,
+        after: () => { afterCount++; },
+      };
+    }, fast);
+    expect(s.kind).toBe('yield');
+    assertStats(s);
+    expect(afterCount).toBeGreaterThanOrEqual(s.samples.length);
+  }, 20_000);
+
+  it('generator/yield with async after hook', async () => {
+    let afterCount = 0;
+    const s = await measure(async function* () {
+      yield {
+        bench: () => 1 + 1,
+        after: async () => { afterCount++; },
+      };
+    }, fast);
+    expect(s.kind).toBe('yield');
+    assertStats(s);
+    expect(afterCount).toBeGreaterThanOrEqual(s.samples.length);
+  }, 20_000);
+
+  it('after hook resets state between samples', async () => {
+    let arr = [3, 1, 2];
+    const s = await measure(function* () {
+      yield {
+        bench: () => arr.sort(),
+        after: () => { arr = [3, 1, 2]; },
+      };
+    }, fast);
+    assertStats(s);
+  }, 20_000);
+
   it('rejects non-benchmarkable values', async () => {
     await expect(measure(42 as any, fast)).rejects.toThrow();
   });

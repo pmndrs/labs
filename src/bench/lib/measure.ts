@@ -40,6 +40,7 @@ export async function benchGenerator(gen: (...args: any[]) => any, opts: any = {
   if (!n.value?.heap && null != n.value?.heap) opts.heap = false;
   opts.concurrency ??= n.value?.concurrency ?? opts.args?.concurrency;
   if (!n.value?.counters && null != n.value?.counters) opts.$counters = false;
+  if (n.value?.after) opts.after = n.value.after;
 
   if (n.done || 'fn' !== kind($fn)) {
     $fn = n.value?.bench || n.value?.manual;
@@ -94,6 +95,8 @@ export async function benchFn(fn: (...args: any[]) => any, opts: any = {}): Prom
       t1 = now();
     }
 
+    if (opts.after) await opts.after();
+
     if (t1 - t0 <= opts.warmup_threshold) {
       for (let o = 0; o < opts.warmup_samples; o++) {
         for (let oo = 0; oo < params.length; oo++) {
@@ -103,6 +106,7 @@ export async function benchFn(fn: (...args: any[]) => any, opts: any = {}): Prom
         const t0 = now();
         await fn(...$p);
         const t1 = now();
+        if (opts.after) await opts.after();
         if ((batch = t1 - t0 <= opts.batch_threshold)) break;
       }
     }
@@ -120,6 +124,7 @@ export async function benchFn(fn: (...args: any[]) => any, opts: any = {}): Prom
     '$heap',
     '$params',
     '$counters',
+    '$after',
     `
     ${!opts.$counters ? '' : 'let _hc = false;'}
     ${!opts.$counters ? '' : 'try { $counters.init(); _hc = true; } catch {}'}
@@ -282,6 +287,7 @@ export async function benchFn(fn: (...args: any[]) => any, opts: any = {}): Prom
       const diff = ${opts.manual ? 't2' : 't1 - t0'};
       t += ${'manual' === opts.manual ? 't2' : 't1 - t0'};
       samples[_] = diff ${!batch ? '' : `/ ${opts.batch_samples}`};
+      ${!opts.after ? '' : 'await $after();'}
       ${
         !opts.target_rel_ci
           ? ''
@@ -326,7 +332,7 @@ export async function benchFn(fn: (...args: any[]) => any, opts: any = {}): Prom
   return {
     kind: 'fn' as const,
     debug: loop.toString(),
-    ...(await loop(fn, opts.gc, opts.now, opts.heap, opts.params, opts.$counters)),
+    ...(await loop(fn, opts.gc, opts.now, opts.heap, opts.params, opts.$counters, opts.after)),
   };
 }
 
