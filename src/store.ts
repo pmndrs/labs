@@ -174,6 +174,10 @@ export function getResultsDir(labsDir: string): string {
   return join(labsDir, 'results');
 }
 
+export function resultExists(labsDir: string, name: string): boolean {
+  return existsSync(join(getResultsDir(labsDir), `${name}.json`));
+}
+
 export function saveResult(labsDir: string, result: SavedResult): void {
   const dir = getResultsDir(labsDir);
   mkdirSync(dir, { recursive: true });
