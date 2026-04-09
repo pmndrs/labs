@@ -18,6 +18,7 @@ import {
   isEnvironmentStable,
   listResults,
   loadResult,
+  resultExists,
   resultMedianFreq,
   setLastComparison,
   saveResult,
@@ -449,6 +450,19 @@ export async function runCLI(args: string[]) {
   const defaultName = () =>
     new Date().toISOString().replace(/[:.]/g, '-').replace('T', '_').slice(0, 19);
   const saveName = flagValue(benchArgs, '-n') ?? flagValue(benchArgs, '--name') ?? defaultName();
+
+  const forceOverwrite = benchArgs.includes('--force') || benchArgs.includes('-f');
+  if (!forceOverwrite && resultExists(labsDir, saveName)) {
+    const { confirm, isCancel } = await import('@clack/prompts');
+    const overwrite = await confirm({
+      message: `A result named "${saveName}" already exists. Overwrite?`,
+    });
+    if (isCancel(overwrite) || !overwrite) {
+      console.log(`${DIM}Cancelled${RESET}`);
+      return;
+    }
+  }
+
   const description = flagValue(benchArgs, '-m') ?? flagValue(benchArgs, '--message');
   const setAsBaseline = benchArgs.includes('--baseline') || benchArgs.includes('-b');
   const shouldCompare = benchArgs.includes('--compare') || benchArgs.includes('-c');
