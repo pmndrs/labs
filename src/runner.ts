@@ -197,12 +197,43 @@ export async function runCLI(args: string[]) {
   }
 
   if (subcmd === 'delete') {
-    if (!subcmdArg) error('Usage: bench delete <name>');
-    try {
-      deleteResult(labsDir, subcmdArg);
-      console.log(`${GREEN}✔${RESET} Deleted "${subcmdArg}"`);
-    } catch (e: any) {
-      error(e.message);
+    if (subcmdArg) {
+      try {
+        deleteResult(labsDir, subcmdArg);
+        console.log(`${GREEN}✔${RESET} Deleted "${subcmdArg}"`);
+      } catch (e: any) {
+        error(e.message);
+      }
+    } else {
+      const results = listResults(labsDir);
+      if (results.length === 0) {
+        console.log(`${DIM}No saved results${RESET}`);
+        return;
+      }
+      const baselineName = getBaseline(labsDir);
+      const { multiselect, isCancel } = await import('@clack/prompts');
+      const chosen = await multiselect({
+        message: 'Select results to delete',
+        options: results.map((r) => ({
+          value: r.name,
+          label: r.name,
+          hint: r.name === baselineName ? 'baseline' : undefined,
+        })),
+        required: false,
+      });
+      if (isCancel(chosen)) {
+        console.log(`${DIM}Cancelled${RESET}`);
+        return;
+      }
+      const names = chosen as string[];
+      if (names.length === 0) {
+        console.log(`${DIM}Nothing selected${RESET}`);
+        return;
+      }
+      for (const name of names) {
+        deleteResult(labsDir, name);
+        console.log(`${GREEN}✔${RESET} Deleted "${name}"`);
+      }
     }
     return;
   }
