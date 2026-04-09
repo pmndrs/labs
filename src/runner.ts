@@ -121,6 +121,16 @@ function fileHasAnyTag(file: string, tags: string[]): boolean {
   return tags.some((tag) => content.includes(tag));
 }
 
+const DEFAULT_NAME_RE = /^\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}$/;
+
+function dateHint(r: { name: string; timestamp: string }): string | undefined {
+  if (DEFAULT_NAME_RE.test(r.name)) return undefined;
+  const d = new Date(r.timestamp);
+  if (isNaN(d.getTime())) return undefined;
+  const mon = d.toLocaleDateString('en-US', { month: 'short' });
+  return `${mon} ${d.getDate()} ${d.getFullYear()}`;
+}
+
 function error(msg: string): never {
   console.error(`${RED}✖${RESET} ${msg}`);
   process.exit(1);
@@ -168,6 +178,8 @@ export async function runCLI(args: string[]) {
       options: results.map((r) => {
         const stable = isEnvironmentStable(r);
         const hints: string[] = [];
+        const dh = dateHint(r);
+        if (dh) hints.push(dh);
         if (r.name === baselineName) hints.push('baseline');
         if (!stable) hints.push('unstable');
         if (r.description) hints.push(r.description);
@@ -214,11 +226,17 @@ export async function runCLI(args: string[]) {
       const { multiselect, isCancel } = await import('@clack/prompts');
       const chosen = await multiselect({
         message: 'Select results to delete',
-        options: results.map((r) => ({
-          value: r.name,
-          label: r.name,
-          hint: r.name === baselineName ? 'baseline' : undefined,
-        })),
+        options: results.map((r) => {
+          const hints: string[] = [];
+          const dh = dateHint(r);
+          if (dh) hints.push(dh);
+          if (r.name === baselineName) hints.push('baseline');
+          return {
+            value: r.name,
+            label: r.name,
+            hint: hints.length > 0 ? hints.join(', ') : undefined,
+          };
+        }),
         required: false,
       });
       if (isCancel(chosen)) {
@@ -268,6 +286,8 @@ export async function runCLI(args: string[]) {
         options: results.map((r) => {
           const stable = isEnvironmentStable(r);
           const hints: string[] = [];
+          const dh = dateHint(r);
+          if (dh) hints.push(dh);
           if (r.name === current) hints.push('current');
           if (!stable) hints.push('unstable');
           return {
@@ -326,6 +346,8 @@ export async function runCLI(args: string[]) {
         message: `Select result to compare against baseline "${baselineName}"`,
         options: candidates.map((r) => {
           const hints: string[] = [];
+          const dh = dateHint(r);
+          if (dh) hints.push(dh);
           if (r.name === latestCandidate.name) hints.push('latest');
           const freq = resultMedianFreq(r);
           if (baselineFreq > 0 && freq > 0) {
