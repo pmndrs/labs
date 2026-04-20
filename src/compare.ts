@@ -577,3 +577,177 @@ export function printCompareReport(result: CompareResult, config: LabsConfig): v
   console.log(`${DIM}compared: ${eligible.length}  matched: ${result.benches.length}${RESET}`);
   console.log('');
 }
+
+export function renderCompareMarkdown(result: CompareResult, config: LabsConfig): string {
+  return renderCompareMarkdownWithAssets(result, config);
+}
+
+export function renderCompareMarkdownWithAssets(
+  result: CompareResult,
+  config: LabsConfig,
+  assets: { chartImages?: string[] } = {}
+): string {
+  const lines: string[] = [];
+  lines.push(`# Comparison Report: ${result.baselineName} -> ${result.candidateName}`);
+  lines.push('');
+  lines.push('## Metadata');
+  lines.push('');
+  lines.push('| Field | Value |');
+  lines.push('| --- | --- |');
+  lines.push(`| CPU | ${result.hardware.cpu ?? 'unknown'} |`);
+  lines.push(`| Test | Mann-Whitney U |`);
+  lines.push(`| Alpha | ${config.alpha} |`);
+  lines.push(`| Min Delta | ${(config.minDelta * 100).toFixed(0)}% |`);
+  lines.push(`| Min Effect | ${config.minEffect} |`);
+  lines.push('');
+
+  lines.push(...renderCompareMarkdownSections(result, assets));
+
+  return lines.join('\n').trimEnd() + '\n';
+}
+
+function renderCompareMarkdownSections(
+  result: CompareResult,
+  assets: { chartImages?: string[] }
+): string[] {
+  const lines: string[] = [];
+
+  if (result.environmentWarnings.length > 0) {
+    lines.push('## Environment Warnings');
+    lines.push('');
+    for (const reason of result.environmentWarnings) lines.push(`- ${reason}`);
+    lines.push('');
+  }
+
+  if (result.environmentFailures.length > 0) {
+    lines.push('## Environment Failure');
+    lines.push('');
+    lines.push(`Comparison blocked by environment checks.`);
+    lines.push('');
+    for (const reason of result.environmentFailures) lines.push(`- ${reason}`);
+    lines.push('');
+    return lines;
+  }
+
+  const eligible = result.benches.filter((b): b is EligibleBench => b.kind === 'eligible');
+  const skipped = result.benches.filter((b): b is SkippedBench => b.kind === 'skipped');
+  const baselineOnly = result.benches.filter(
+    (b): b is MissingBench => b.kind === 'missing' && b.presentIn === 'baseline'
+  );
+  const candidateOnly = result.benches.filter(
+    (b): b is MissingBench => b.kind === 'missing' && b.presentIn === 'candidate'
+  );
+
+  if (eligible.length === 0 && skipped.length === 0 && candidateOnly.length === 0) {
+    lines.push('## Results');
+    lines.push('');
+    lines.push(`No benchmarks to compare.`);
+    lines.push('');
+    return lines;
+  }
+
+  if (assets.chartImages && assets.chartImages.length > 0 && eligible.length > 0) {
+    lines.push('## Chart');
+    lines.push('');
+    assets.chartImages.forEach((chartImage, index) => {
+      lines.push(`### Batch ${index + 1}`);
+      lines.push('');
+      lines.push(`![p50 dumbbell chart batch ${index + 1}](${chartImage})`);
+      lines.push('');
+    });
+    lines.push('');
+  }
+
+  lines.push('## Results');
+  lines.push('');
+  lines.push('| File | Bench | Baseline | Candidate | Δp50 | Δp99 | p | ±Δ | Verdict |');
+  lines.push('| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |');
+
+  const NAME_MAX = 36;
+  const nameCol =
+    eligible.length > 0
+      ? Math.min(
+          NAME_MAX,
+          Math.max(16, ...eligible.map((b) => (b.key.name || b.key.group || 'anonymous').length))
+        )
+      : 16;
+  const TIME_COL = 10;
+  const truncate = (s: string) =>
+    s.length > nameCol ? s.slice(0, nameCol - 1) + '…' : s.padEnd(nameCol);
+  const formatThreshold = (v: number) => `±${(v * 100).toFixed(0)}%`;
+  const sparkBlocks: string[] = [];
+
+  if (eligible.length > 0) {
+    for (const bench of eligible) {
+      const { symbol } = verdictStyle(bench.verdict);
+      const label = formatBenchLabel(bench.key.group, bench.key.name);
+      lines.push(
+        `| ${bench.key.file} | ${label} | ${formatTime(bench.baselineP50)} | ${formatTime(bench.candidateP50)} | ${formatDelta(bench.deltaP50)} | ${formatDelta(bench.deltaP99)} | ${formatP(bench.p)} | ${formatThreshold(bench.effectiveMinDelta)} | ${symbol} ${bench.verdict} |`
+      );
+
+      const dist = renderDistributions(bench.baselineSamples, bench.candidateSamples, TIME_COL);
+      sparkBlocks.push(`${bench.key.file} :: ${label}`);
+      sparkBlocks.push(
+        `${truncate(bench.key.name || bench.key.group || 'anonymous')} ${stripAnsi(dist.baseline)} ${stripAnsi(dist.candidate)}`
+      );
+      sparkBlocks.push('');
+    }
+    lines.push('');
+    lines.push('### Distributions');
+    lines.push('');
+    lines.push('```text');
+    lines.push(...sparkBlocks);
+    lines.push('```');
+    lines.push('');
+  }
+
+  if (skipped.length > 0) {
+    lines.push('## Skipped');
+    lines.push('');
+    for (const b of skipped)
+      lines.push(`- ${formatBenchLabel(b.key.group, b.key.name)}: ${b.reason}`);
+    lines.push('');
+  }
+
+  if (candidateOnly.length > 0) {
+    lines.push('## New In Candidate');
+    lines.push('');
+    for (const b of candidateOnly) lines.push(`- ${formatBenchLabel(b.key.group, b.key.name)}`);
+    lines.push('');
+  }
+
+  if (baselineOnly.length > 0) {
+    lines.push('## Removed From Candidate');
+    lines.push('');
+    for (const b of baselineOnly) lines.push(`- ${formatBenchLabel(b.key.group, b.key.name)}`);
+    lines.push('');
+  }
+
+  const faster = eligible.filter((b) => b.verdict === 'faster').length;
+  const slower = eligible.filter((b) => b.verdict === 'slower').length;
+  const neutral = eligible.length - faster - slower;
+  const parts: string[] = [];
+  if (faster > 0) parts.push(`${faster} faster`);
+  if (slower > 0) parts.push(`${slower} slower`);
+  if (neutral > 0) parts.push(`${neutral} neutral`);
+  if (skipped.length > 0) parts.push(`${skipped.length} skipped`);
+  lines.push('## Summary');
+  lines.push('');
+  lines.push(`- Verdicts: ${parts.join(', ') || 'none'}`);
+  lines.push(`- Compared: ${eligible.length}`);
+  lines.push(`- Matched: ${result.benches.length}`);
+  lines.push('');
+  return lines;
+}
+
+function formatBenchLabel(group: string, name: string): string {
+  return group && group !== name ? `${group} > ${name || 'anonymous'}` : name || 'anonymous';
+}
+
+function stripAnsi(value: string): string {
+  return value.replace(new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, 'g'), '');
+}
+
+export function eligibleBenches(result: CompareResult): EligibleBench[] {
+  return result.benches.filter((b): b is EligibleBench => b.kind === 'eligible');
+}

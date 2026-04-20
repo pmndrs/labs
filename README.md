@@ -151,6 +151,7 @@ pnpm bench run --last                  # replay last selection, no save
 
 ```sh
 pnpm bench list                        # list all saved results
+pnpm bench list --report               # pick a saved result and write a markdown report to .labs/reports/
 pnpm bench delete "v1.2.0"             # delete a specific saved result
 pnpm bench prune                       # remove results with unstable CPU clocks
 pnpm bench clear                       # delete all saved results
@@ -171,10 +172,17 @@ pnpm bench -b                         # shorthand for --baseline
 
 ```sh
 pnpm bench compare                     # interactive picker (latest preselected)
+pnpm bench compare --report            # interactive picker, write markdown instead of ANSI
 pnpm bench compare "v1.3.0"           # compare named result vs baseline
+pnpm bench compare "v1.3.0" --report  # compare named result, write markdown
 pnpm bench compare --last             # replay the last compared pair
+pnpm bench compare --last --report    # replay the last pair, write markdown
 pnpm bench compare -l                 # shorthand for --last
 ```
+
+Reports are written to `<benchDir>/.labs/reports/`. Saved-run reports use `<result-name>.md`; comparison reports use `<baseline-name>--<candidate-name>.md`.
+
+Comparison reports also write sibling p50 change chart SVGs named `<baseline-name>--<candidate-name>-p50-change.svg` or, when split into batches of 8 benches, `<baseline-name>--<candidate-name>-p50-change-<batch>.svg`.
 
 Outputs a colored table for each eligible benchmark:
 

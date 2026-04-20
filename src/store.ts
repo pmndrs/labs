@@ -174,6 +174,10 @@ export function getResultsDir(labsDir: string): string {
   return join(labsDir, 'results');
 }
 
+export function getReportsDir(labsDir: string): string {
+  return join(labsDir, 'reports');
+}
+
 export function resultExists(labsDir: string, name: string): boolean {
   return existsSync(join(getResultsDir(labsDir), `${name}.json`));
 }

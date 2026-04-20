@@ -2,9 +2,15 @@ import { execSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { compare, printCompareReport } from './compare.ts';
+import {
+  compare,
+  eligibleBenches,
+  printCompareReport,
+  renderCompareMarkdownWithAssets,
+} from './compare.ts';
 import type { LabsConfig } from './config.ts';
-import { printReportBox, replayReport } from './report.ts';
+import { renderP50DumbbellChartSvg, splitEligibleBenchesForCharts } from './report-chart.ts';
+import { printReportBox, renderSavedResultMarkdown, replayReport } from './report.ts';
 import {
   type FreqSample,
   type SavedContext,
@@ -15,6 +21,7 @@ import {
   getBaseline,
   getLastComparison,
   getLabsDir,
+  getReportsDir,
   isEnvironmentStable,
   listResults,
   loadResult,
@@ -162,7 +169,9 @@ export async function runCLI(args: string[]) {
 
   // Subcommands: first arg is a known keyword — no bench run occurs.
   const subcmd = args[0];
-  const subcmdArg = args[1]; // optional positional arg for the subcommand
+  const subcmdArgs = args.slice(1);
+  const subcmdArg = firstPositionalArg(subcmdArgs);
+  const wantsReport = subcmdArgs.includes('--report');
 
   if (subcmd === 'list') {
     const results = listResults(labsDir);
@@ -198,7 +207,11 @@ export async function runCLI(args: string[]) {
     }
 
     const result = loadResult(labsDir, chosen as string);
-    replayReport(result, config);
+    if (wantsReport) {
+      const file = writeBenchReportFile(labsDir, result.name, renderSavedResultMarkdown(result, config));
+      console.log(`${GREEN}✔${RESET} Wrote report to "${file}"`);
+    }
+    else replayReport(result, config);
     return;
   }
 
@@ -324,7 +337,7 @@ export async function runCLI(args: string[]) {
     if (!baselineName) error('No baseline set. Run: bench baseline <name>');
     let compareBaselineName = baselineName;
     let candidateName: string;
-    if (subcmdArg === '--last' || subcmdArg === '-l') {
+    if (subcmdArgs.includes('--last') || subcmdArgs.includes('-l')) {
       const last = getLastComparison(labsDir);
       if (!last) error('No previous comparison found');
       compareBaselineName = last.baselineName;
@@ -373,7 +386,21 @@ export async function runCLI(args: string[]) {
     try {
       const baseline = loadResult(labsDir, compareBaselineName);
       const candidate = loadResult(labsDir, candidateName);
-      printCompareReport(compare(baseline, candidate, config), config);
+      const result = compare(baseline, candidate, config);
+      if (wantsReport) {
+        const files = writeCompareReportFiles(
+          labsDir,
+          compareBaselineName,
+          candidateName,
+          result,
+          config
+        );
+        console.log(`${GREEN}✔${RESET} Wrote report to "${files.markdownFile}"`);
+        for (const chartFile of files.chartFiles) {
+          console.log(`${GREEN}✔${RESET} Wrote chart to "${chartFile}"`);
+        }
+      }
+      else printCompareReport(result, config);
       setLastComparison(labsDir, compareBaselineName, candidateName);
     } catch (e: any) {
       error(e.message);
@@ -645,6 +672,95 @@ export async function runCLI(args: string[]) {
       }
     }
   }
+}
+
+function firstPositionalArg(args: string[]): string | undefined {
+  for (const arg of args) {
+    if (!arg.startsWith('-')) return arg;
+  }
+  return undefined;
+}
+
+export function reportFilename(name: string): string {
+  return `${sanitizeReportSegment(name)}.md`;
+}
+
+export function compareReportFilename(baselineName: string, candidateName: string): string {
+  return `${sanitizeReportSegment(baselineName)}--${sanitizeReportSegment(candidateName)}.md`;
+}
+
+export function compareReportChartFilename(baselineName: string, candidateName: string): string {
+  return `${sanitizeReportSegment(baselineName)}--${sanitizeReportSegment(candidateName)}-p50-dumbbell.svg`;
+}
+
+export function compareReportChartBatchFilename(
+  baselineName: string,
+  candidateName: string,
+  batch: number
+): string {
+  return `${sanitizeReportSegment(baselineName)}--${sanitizeReportSegment(candidateName)}-p50-dumbbell-${batch}.svg`;
+}
+
+function writeBenchReportFile(labsDir: string, name: string, markdown: string): string {
+  return writeReportFile(labsDir, reportFilename(name), markdown);
+}
+
+function writeCompareReportFile(
+  labsDir: string,
+  baselineName: string,
+  candidateName: string,
+  markdown: string
+): string {
+  return writeReportFile(labsDir, compareReportFilename(baselineName, candidateName), markdown);
+}
+
+function writeCompareReportFiles(
+  labsDir: string,
+  baselineName: string,
+  candidateName: string,
+  result: ReturnType<typeof compare>,
+  config: LabsConfig
+): { markdownFile: string; chartFiles: string[] } {
+  const eligible = eligibleBenches(result);
+  const chartFiles: string[] = [];
+  const chartImages: string[] = [];
+  const chunks = splitEligibleBenchesForCharts(eligible);
+
+  chunks.forEach((chunk, index) => {
+    const batch = index + 1;
+    const chartSvg = renderP50DumbbellChartSvg(
+      chunk,
+      `${baselineName} vs ${candidateName} p50${chunks.length > 1 ? ` (batch ${batch})` : ''}`
+    );
+    if (!chartSvg) return;
+    const chartFilename =
+      chunks.length === 1
+        ? compareReportChartFilename(baselineName, candidateName)
+        : compareReportChartBatchFilename(baselineName, candidateName, batch);
+    chartFiles.push(writeReportFile(labsDir, chartFilename, chartSvg));
+    chartImages.push(chartFilename);
+  });
+
+  const markdown = renderCompareMarkdownWithAssets(result, config, {
+    chartImages,
+  });
+  const markdownFile = writeCompareReportFile(labsDir, baselineName, candidateName, markdown);
+  return { markdownFile, chartFiles };
+}
+
+function writeReportFile(labsDir: string, filename: string, markdown: string): string {
+  const reportsDir = getReportsDir(labsDir);
+  mkdirSync(reportsDir, { recursive: true });
+  const file = join(reportsDir, filename);
+  writeFileSync(file, markdown);
+  return file;
+}
+
+function sanitizeReportSegment(value: string): string {
+  return value
+    .trim()
+    .replace(/[^a-zA-Z0-9._-]+/g, '-')
+    .replace(/^-+|-+$/g, '') || 'report';
 }
 
 function trimContext(context: WorkerResult['context']): SavedContext {
