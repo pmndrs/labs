@@ -1,12 +1,12 @@
 export { measure } from './lib/measure.ts';
 export { do_not_optimize } from './lib/runtime.ts';
-import { kind, _print } from './lib/runtime.ts';
-import { measure } from './lib/measure.ts';
-import { ansi, COLOR_NAMES } from '../utils/ansi.ts';
+import { COLOR_NAMES } from '../utils/ansi.ts';
 import { formatNs } from '../utils/units.ts';
+import { arch, colors, cpu, runtime, version } from './env.ts';
+import { measure } from './lib/measure.ts';
+import { _print, kind } from './lib/runtime.ts';
 import { renderMitata, type RenderedCollection } from './render.ts';
-import type { Collection, Trial, Context, Stats } from './types.ts';
-import { colors, cpu, version, runtime, arch } from './env.ts';
+import type { Collection, Context, Stats, Trial } from './types.ts';
 
 let FLAGS = 0;
 let $counters: any = null;
