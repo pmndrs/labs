@@ -2,30 +2,31 @@ import { execSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { compare, printCompareReport } from './compare.ts';
-import type { LabsConfig } from './config.ts';
-import { printReportBox, replayReport } from './report.ts';
+import { compare, printCompareReport } from '../compare.ts';
+import type { LabsConfig } from '../config.ts';
+import { printReportBox } from '../report.ts';
 import {
   type FreqSample,
   type SavedContext,
   type SavedResult,
   type WorkerResult,
   clearResults,
-  deleteResult,
   getBaseline,
-  getLastComparison,
   getLabsDir,
-  isEnvironmentStable,
-  listResults,
   loadResult,
   resultExists,
-  resultMedianFreq,
-  setLastComparison,
   saveResult,
   setBaseline,
+  setLastComparison,
   trimStats,
-} from './store.ts';
-import { BLUE, CYAN, DIM, GREEN, RED, RESET } from './utils/ansi.ts';
+} from '../store.ts';
+import { BLUE, CYAN, DIM, GREEN, RED, RESET } from '../utils/ansi.ts';
+import { runBaselineCommand } from './commands/baseline.ts';
+import { runCompareCommand } from './commands/compare.ts';
+import { runDeleteCommand } from './commands/delete.ts';
+import { runListCommand } from './commands/list.ts';
+import { runPruneCommand } from './commands/prune.ts';
+import { error } from './utils.ts';
 
 function collectEnvData(
   workerResult: WorkerResult,
@@ -48,7 +49,7 @@ function collectEnvData(
 }
 
 const WORKER_EXT = import.meta.url.endsWith('.ts') ? 'ts' : 'mjs';
-const WORKER = fileURLToPath(new URL(`./worker.${WORKER_EXT}`, import.meta.url));
+const WORKER = fileURLToPath(new URL(`../worker.${WORKER_EXT}`, import.meta.url));
 
 function globBenchFiles(dir: string, pattern: string): string[] {
   const suffix = pattern.replace(/^\*\*\/\*/, '');
@@ -121,22 +122,7 @@ function fileHasAnyTag(file: string, tags: string[]): boolean {
   return tags.some((tag) => content.includes(tag));
 }
 
-const DEFAULT_NAME_RE = /^\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}$/;
-
-function dateHint(r: { name: string; timestamp: string }): string | undefined {
-  if (DEFAULT_NAME_RE.test(r.name)) return undefined;
-  const d = new Date(r.timestamp);
-  if (isNaN(d.getTime())) return undefined;
-  const mon = d.toLocaleDateString('en-US', { month: 'short' });
-  return `${mon} ${d.getDate()} ${d.getFullYear()}`;
-}
-
-function error(msg: string): never {
-  console.error(`${RED}✖${RESET} ${msg}`);
-  process.exit(1);
-}
-
-/** Parse a named flag value: --flag value → value, or undefined if flag absent. */
+/** Parse a named flag value: --flag value -> value, or undefined if flag absent. */
 function flagValue(args: string[], flag: string): string | undefined {
   const i = args.indexOf(flag);
   if (i === -1) return undefined;
@@ -159,46 +145,14 @@ export async function runCLI(args: string[]) {
   }
 
   const labsDir = getLabsDir(dirname(configPath), config.resultsDir);
+  const ctx = { config, configPath, labsDir };
 
-  // Subcommands: first arg is a known keyword — no bench run occurs.
+  // Subcommands: first arg is a known keyword - no bench run occurs.
   const subcmd = args[0];
-  const subcmdArg = args[1]; // optional positional arg for the subcommand
+  const subcmdArg = args[1];
 
   if (subcmd === 'list') {
-    const results = listResults(labsDir);
-    const baselineName = getBaseline(labsDir);
-    if (results.length === 0) {
-      console.log(`${DIM}No saved results${RESET}`);
-      return;
-    }
-
-    const { select, isCancel } = await import('@clack/prompts');
-    const chosen = await select({
-      message: 'Select a result to view its report',
-      options: results.map((r) => {
-        const stable = isEnvironmentStable(r);
-        const hints: string[] = [];
-        const dh = dateHint(r);
-        if (dh) hints.push(dh);
-        if (r.name === baselineName) hints.push('baseline');
-        if (!stable) hints.push('unstable');
-        if (r.description) hints.push(r.description);
-        const freq = resultMedianFreq(r);
-        if (freq > 0) hints.push(`${freq.toFixed(2)} GHz`);
-        return {
-          value: r.name,
-          label: r.name,
-          hint: hints.length > 0 ? hints.join(', ') : undefined,
-        };
-      }),
-    });
-    if (isCancel(chosen)) {
-      console.log(`${DIM}Cancelled${RESET}`);
-      return;
-    }
-
-    const result = loadResult(labsDir, chosen as string);
-    replayReport(result, config);
+    await runListCommand(ctx);
     return;
   }
 
@@ -209,179 +163,25 @@ export async function runCLI(args: string[]) {
   }
 
   if (subcmd === 'delete') {
-    if (subcmdArg) {
-      try {
-        deleteResult(labsDir, subcmdArg);
-        console.log(`${GREEN}✔${RESET} Deleted "${subcmdArg}"`);
-      } catch (e: any) {
-        error(e.message);
-      }
-    } else {
-      const results = listResults(labsDir);
-      if (results.length === 0) {
-        console.log(`${DIM}No saved results${RESET}`);
-        return;
-      }
-      const baselineName = getBaseline(labsDir);
-      const { multiselect, isCancel } = await import('@clack/prompts');
-      const chosen = await multiselect({
-        message: 'Select results to delete',
-        options: results.map((r) => {
-          const hints: string[] = [];
-          const dh = dateHint(r);
-          if (dh) hints.push(dh);
-          if (r.name === baselineName) hints.push('baseline');
-          return {
-            value: r.name,
-            label: r.name,
-            hint: hints.length > 0 ? hints.join(', ') : undefined,
-          };
-        }),
-        required: false,
-      });
-      if (isCancel(chosen)) {
-        console.log(`${DIM}Cancelled${RESET}`);
-        return;
-      }
-      const names = chosen as string[];
-      if (names.length === 0) {
-        console.log(`${DIM}Nothing selected${RESET}`);
-        return;
-      }
-      for (const name of names) {
-        deleteResult(labsDir, name);
-        console.log(`${GREEN}✔${RESET} Deleted "${name}"`);
-      }
-    }
+    await runDeleteCommand(ctx, subcmdArg);
     return;
   }
 
   if (subcmd === 'prune') {
-    const results = listResults(labsDir);
-    const baseline = getBaseline(labsDir);
-    const unstable = results.filter((r) => r.name !== baseline && !isEnvironmentStable(r));
-    if (unstable.length === 0) {
-      console.log(`${GREEN}✔${RESET} No unstable results to prune`);
-    } else {
-      for (const r of unstable) deleteResult(labsDir, r.name);
-      console.log(
-        `${GREEN}✔${RESET} Pruned ${unstable.length} unstable result${unstable.length !== 1 ? 's' : ''}`
-      );
-      for (const r of unstable) console.log(`  ${DIM}· ${r.name}${RESET}`);
-    }
+    runPruneCommand(ctx);
     return;
   }
 
   if (subcmd === 'baseline') {
-    if (!subcmdArg) {
-      const results = listResults(labsDir);
-      if (results.length === 0) {
-        console.log(`${DIM}No saved results${RESET}`);
-        return;
-      }
-      const current = getBaseline(labsDir);
-      const { select, isCancel } = await import('@clack/prompts');
-      const chosen = await select({
-        message: 'Select a baseline',
-        options: results.map((r) => {
-          const stable = isEnvironmentStable(r);
-          const hints: string[] = [];
-          const dh = dateHint(r);
-          if (dh) hints.push(dh);
-          if (r.name === current) hints.push('current');
-          if (!stable) hints.push('unstable');
-          return {
-            value: r.name,
-            label: r.name,
-            hint: hints.length ? hints.join(', ') : undefined,
-          };
-        }),
-        initialValue: current,
-      });
-      if (isCancel(chosen)) {
-        console.log(`${DIM}Cancelled${RESET}`);
-        return;
-      }
-      try {
-        setBaseline(labsDir, chosen as string);
-        console.log(`${GREEN}\u2714${RESET} Baseline set to "${chosen}"`);
-      } catch (e: any) {
-        error(e.message);
-      }
-    } else {
-      try {
-        setBaseline(labsDir, subcmdArg);
-        console.log(`${GREEN}✔${RESET} Baseline set to "${subcmdArg}"`);
-      } catch (e: any) {
-        error(e.message);
-      }
-    }
+    await runBaselineCommand(ctx, subcmdArg);
     return;
   }
 
   if (subcmd === 'compare') {
-    const baselineName = getBaseline(labsDir);
-    if (!baselineName) error('No baseline set. Run: bench baseline <name>');
-    let compareBaselineName = baselineName;
-    let candidateName: string;
-    if (subcmdArg === '--last' || subcmdArg === '-l') {
-      const last = getLastComparison(labsDir);
-      if (!last) error('No previous comparison found');
-      compareBaselineName = last.baselineName;
-      candidateName = last.candidateName;
-      console.log(
-        `${CYAN}labs${RESET} ${DIM}(replaying last compare: ${compareBaselineName} -> ${candidateName})${RESET}`
-      );
-    } else if (subcmdArg) {
-      candidateName = subcmdArg;
-    } else {
-      const all = listResults(labsDir);
-      const candidates = all.filter((r) => r.name !== baselineName);
-      if (candidates.length === 0) error('No saved result to compare. Save a result first with -s.');
-      const latestCandidate = candidates[candidates.length - 1]!;
-      const baselineResult = all.find((r) => r.name === baselineName);
-      const baselineFreq = baselineResult ? resultMedianFreq(baselineResult) : 0;
-      const { select, isCancel } = await import('@clack/prompts');
-      const chosen = await select({
-        message: `Select result to compare against baseline "${baselineName}"`,
-        options: candidates.map((r) => {
-          const hints: string[] = [];
-          const dh = dateHint(r);
-          if (dh) hints.push(dh);
-          if (r.name === latestCandidate.name) hints.push('latest');
-          const freq = resultMedianFreq(r);
-          if (baselineFreq > 0 && freq > 0) {
-            const diff = (freq - baselineFreq) / baselineFreq;
-            const sign = diff >= 0 ? '+' : '';
-            hints.push(`clk: ${sign}${(diff * 100).toFixed(1)}%`);
-          }
-          if (!isEnvironmentStable(r)) hints.push('unstable');
-          return {
-            value: r.name,
-            label: r.name,
-            hint: hints.length > 0 ? hints.join(', ') : undefined,
-          };
-        }),
-        initialValue: latestCandidate.name,
-      });
-      if (isCancel(chosen)) {
-        console.log(`${DIM}Cancelled${RESET}`);
-        return;
-      }
-      candidateName = chosen as string;
-    }
-    try {
-      const baseline = loadResult(labsDir, compareBaselineName);
-      const candidate = loadResult(labsDir, candidateName);
-      printCompareReport(compare(baseline, candidate, config), config);
-      setLastComparison(labsDir, compareBaselineName, candidateName);
-    } catch (e: any) {
-      error(e.message);
-    }
+    await runCompareCommand(ctx, subcmdArg);
     return;
   }
 
-  // `run` subcommand — execute without saving results.
   const shouldSave = subcmd !== 'run';
   const benchArgs = shouldSave ? args : args.slice(1);
   if (benchArgs.includes('--run') || benchArgs.includes('--runs')) {
@@ -406,13 +206,12 @@ export async function runCLI(args: string[]) {
     if (selected.length === 0) error('No previous selection found');
     console.log(`${CYAN}labs${RESET} ${DIM}(replaying last)${RESET}`);
   } else {
-    // Single positional arg is the filter string (must be quoted on CLI).
-    const FLAG_TAKES_VALUE = new Set(['-n', '--name', '-m', '--message']);
+    const flagTakesValue = new Set(['-n', '--name', '-m', '--message']);
     let filterArg: string | undefined;
     for (let i = 0; i < benchArgs.length; i++) {
       const a = benchArgs[i];
       if (a.startsWith('-')) {
-        if (FLAG_TAKES_VALUE.has(a)) i++;
+        if (flagTakesValue.has(a)) i++;
         continue;
       }
       filterArg = a;
@@ -499,7 +298,6 @@ export async function runCLI(args: string[]) {
     return;
   }
 
-  // Save path: run workers, collect results, persist.
   const defaultName = () =>
     new Date().toISOString().replace(/[:.]/g, '-').replace('T', '_').slice(0, 19);
   const saveName = flagValue(benchArgs, '-n') ?? flagValue(benchArgs, '--name') ?? defaultName();
@@ -585,23 +383,21 @@ export async function runCLI(args: string[]) {
       file: suiteName(file),
       layout: workerResult.layout,
       context: trimContext(workerResult.context),
-      benchmarks: workerResult.benchmarks.map((trial) => {
-        return {
-          alias: trial.alias,
-          group: trial.group,
-          baseline: trial.baseline,
-          gcMode: trial.gcMode ?? 'once',
-          groupName: trial.groupName,
-          kind: trial.kind ?? 'static',
-          style: trial.style ?? { compact: false, highlight: false },
-          runs: trial.runs.map((run) => ({
-            name: run.name,
-            args: run.args,
-            ...(run.stats ? { stats: trimStats(run.stats) } : {}),
-            ...(run.error !== undefined ? { error: run.error } : {}),
-          })),
-        };
-      }),
+      benchmarks: workerResult.benchmarks.map((trial) => ({
+        alias: trial.alias,
+        group: trial.group,
+        baseline: trial.baseline,
+        gcMode: trial.gcMode ?? 'once',
+        groupName: trial.groupName,
+        kind: trial.kind ?? 'static',
+        style: trial.style ?? { compact: false, highlight: false },
+        runs: trial.runs.map((run) => ({
+          name: run.name,
+          args: run.args,
+          ...(run.stats ? { stats: trimStats(run.stats) } : {}),
+          ...(run.error !== undefined ? { error: run.error } : {}),
+        })),
+      })),
     });
   }
 
@@ -625,16 +421,16 @@ export async function runCLI(args: string[]) {
   }
 
   const baselineNote = markedBaseline ? ` ${CYAN}(baseline)${RESET}` : '';
-  const saveMsg = `${GREEN}\u2714${RESET} Saved "${saveName}"${baselineNote} (${files.length} file${files.length !== 1 ? 's' : ''})`;
+  const saveMsg = `${GREEN}✔${RESET} Saved "${saveName}"${baselineNote} (${files.length} file${files.length !== 1 ? 's' : ''})`;
 
   printReportBox(saveEnvData, saveNoisyAliases, config.maxCpuTime!, saveMsg, hardware.cpu);
 
   if (shouldCompare) {
     const baselineName = getBaseline(labsDir);
     if (!baselineName) {
-      console.log(`\n${DIM}No baseline set — skipping compare. Run: bench baseline <name>${RESET}`);
+      console.log(`\n${DIM}No baseline set - skipping compare. Run: bench baseline <name>${RESET}`);
     } else if (baselineName === saveName) {
-      console.log(`\n${DIM}Saved result is the baseline — nothing to compare${RESET}`);
+      console.log(`\n${DIM}Saved result is the baseline - nothing to compare${RESET}`);
     } else {
       try {
         const baselineResult = loadResult(labsDir, baselineName);
