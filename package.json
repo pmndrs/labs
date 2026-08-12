@@ -38,12 +38,13 @@
   },
   "scripts": {
     "bench": "node bin/labs.js",
-    "build": "unbuild --config .config/build.config.ts",
-    "release": "pnpm run build && pnpm publish --access public",
+    "build": "unbuild",
+    "release": "pnpm run build && pnpm publish",
     "test": "vitest",
     "lint": "oxlint -c .config/oxlint.json",
-    "format": "prettier --config .config/prettier.json --write .",
-    "typecheck": "tsc --build --noEmit"
+    "format": "prettier --config .config/prettier.json --ignore-path .config/prettierignore --write .",
+    "typecheck": "tsc --build --noEmit",
+    "typecheck:watch": "tsc --build --watch"
   },
   "dependencies": {
     "@clack/prompts": "^1.0.1",
@@ -52,14 +53,15 @@
   "devDependencies": {
     "@types/node": "^25.5.0",
     "oxlint": "^1.56.0",
+    "oxlint-tsgolint": "^0.22.1",
     "prettier": "^3.8.1",
     "typescript": "^5.9.3",
     "unbuild": "^3.6.1",
     "vitest": "^4.1.0"
   },
-  "packageManager": "pnpm@10.32.1",
+  "packageManager": "pnpm@11.21.0",
   "engines": {
-    "pnpm": ">=10.0.0",
+    "pnpm": ">=11.0.0",
     "node": ">=25.0.0"
   }
 }

@@ -1,7 +1,9 @@
+# managed:start
 node_modules
-.pnpm-store
 dist
 *.tsbuildinfo
 .env
 .env.*
 !.env.example
+.pnpm-store
+# managed:end

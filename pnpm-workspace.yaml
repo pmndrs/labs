@@ -1,4 +1,4 @@
-manage-package-manager-versions: true
+pmOnFail: download
 
-onlyBuiltDependencies:
-  - esbuild
+allowBuilds:
+  esbuild: true

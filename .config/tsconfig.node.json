@@ -11,7 +11,8 @@
     "skipLibCheck": true,
     "composite": true,
     "rewriteRelativeImportExtensions": true,
-    "erasableSyntaxOnly": true
+    "erasableSyntaxOnly": true,
+    "types": ["node"]
   },
   "include": ["../*.config.ts", "./*.ts"]
 }
