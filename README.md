@@ -22,7 +22,7 @@ export default defineConfig({
 })
 ```
 
-Chain `.gc('inner')` to force GC between samples to control for collection and measure its impact. Use `@tags` in the name string for filtering.
+Labs forces garbage collection before every benchmark run. By default, it also collects between samples and reports algorithm and GC time separately. Chain `.gc(false)` to let GC occur naturally during the samples instead. Use `@tags` in the name string for filtering.
 
 ```ts
 // array-push.bench.ts
@@ -34,7 +34,7 @@ group('array @stress', () => {
     yield () => {
       for (let i = 0; i < 1000; i++) arr.push(i)
     }
-  }).gc('inner')
+  })
 })
 ```
 
@@ -217,7 +217,7 @@ group('my-group @mytag', () => {
       // measured code
     }
     // teardown
-  }).gc('inner')
+  })
 })
 ```
 
@@ -227,8 +227,8 @@ Tags are `@`-prefixed tokens in the `group` or `bench` name string. They are str
 
 ```ts
 group('relation-queries @relation', () => {
-  bench('ChildOf(parent)', function* () { ... }).gc('inner');
-  bench('wildcard @slow', function* () { ... }).gc('inner');
+  bench('ChildOf(parent)', function* () { ... });
+  bench('wildcard @slow', function* () { ... }).gc(false);
 });
 ```
 

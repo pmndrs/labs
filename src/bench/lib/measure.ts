@@ -133,7 +133,7 @@ export async function benchFn(fn: (...args: any[]) => any, opts: any = {}): Prom
     let samples = new Array(2 ** 20);
     ${!opts.target_rel_ci ? '' : 'let _lm = 0; let _lm2 = 0; let _noisy = false;'}
     ${!opts.heap ? '' : 'const heap = { _: 0, total: 0, min: Infinity, max: -Infinity };'}
-    ${!(opts.gc && opts.inner_gc && !opts.gc.fallback) ? '' : 'const gc = { total: 0, min: Infinity, max: -Infinity };'}
+    ${!(opts.gc && opts.sample_gc && !opts.gc.fallback) ? '' : 'const gc = { total: 0, min: Infinity, max: -Infinity };'}
 
     ${
       !params.length
@@ -189,7 +189,7 @@ export async function benchFn(fn: (...args: any[]) => any, opts: any = {}): Prom
       }
 
       ${
-        !(opts.gc && opts.inner_gc)
+        !(opts.gc && opts.sample_gc)
           ? ''
           : `
         igc: {
@@ -269,7 +269,7 @@ export async function benchFn(fn: (...args: any[]) => any, opts: any = {}): Prom
       }
 
       ${
-        !(opts.gc && opts.inner_gc && !opts.gc.fallback)
+        !(opts.gc && opts.sample_gc && !opts.gc.fallback)
           ? ''
           : `
         igc: {
@@ -320,7 +320,7 @@ export async function benchFn(fn: (...args: any[]) => any, opts: any = {}): Prom
       avg: samples.reduce((a, v) => a + v, 0) / samples.length,
       ticks: samples.length ${!batch ? '' : `* ${opts.batch_samples}`},
       ${!opts.heap ? '' : 'heap: { ...heap, avg: heap.total / heap._ },'}
-      ${!(opts.gc && opts.inner_gc && !opts.gc.fallback) ? '' : 'gc: { ...gc, avg: gc.total / _ },'}
+      ${!(opts.gc && opts.sample_gc && !opts.gc.fallback) ? '' : 'gc: { ...gc, avg: gc.total / _ },'}
       ${!opts.$counters ? '' : `...(!_hc ? {} : { counters: $counters.translate(${!batch ? 1 : opts.batch_samples}, _) }),`}
       ${!opts.target_rel_ci ? '' : 'noisy: _noisy,'}
     };
@@ -392,6 +392,7 @@ export async function benchIter(iter: (...args: any[]) => any, opts: any = {}): 
       (_.debug = `
       let _ = 0; let t = 0;
       ${!opts.target_rel_ci ? '' : 'let _lm = 0; let _lm2 = 0;'}
+      ${!(opts.gc && opts.sample_gc && !opts.gc.fallback) ? '' : 'const gc = { total: 0, min: Infinity, max: -Infinity };'}
 
       ${!opts.gc ? '' : `$gc();`}
 
@@ -399,14 +400,15 @@ export async function benchIter(iter: (...args: any[]) => any, opts: any = {}): 
         ${!opts.target_rel_ci ? `if (_ >= ${opts.min_samples} && t >= ${opts.min_cpu_time}) break;` : ''}
 
         ${
-          !(opts.gc && opts.inner_gc)
+          !(opts.gc && opts.sample_gc)
             ? ''
             : `
-          let inner_gc_cost = 0;
+          let sample_gc_cost = 0;
 
           igc: {
             const t0 = $now(); $gc();
-            inner_gc_cost = $now() - t0;
+            sample_gc_cost = $now() - t0;
+            ${opts.gc.fallback ? '' : 'gc.total += sample_gc_cost; gc.min = Math.min(sample_gc_cost, gc.min); gc.max = Math.max(sample_gc_cost, gc.max);'}
           }
         `
         }
@@ -427,7 +429,7 @@ export async function benchIter(iter: (...args: any[]) => any, opts: any = {}): 
         const diff = t1 - t0;
 
         $samples[_] = diff ${!batch ? '' : `/ ${opts.batch_samples}`};
-        t += diff ${!(opts.gc && opts.inner_gc) ? '' : '+ inner_gc_cost'};
+        t += diff ${!(opts.gc && opts.sample_gc) ? '' : '+ sample_gc_cost'};
         ${
           !opts.target_rel_ci
             ? ''
@@ -445,6 +447,7 @@ export async function benchIter(iter: (...args: any[]) => any, opts: any = {}): 
       }
 
       $samples.length = _;
+      ${!(opts.gc && opts.sample_gc && !opts.gc.fallback) ? '' : '$state.gc = { ...gc, avg: gc.total / _ };'}
     `)
     )(opts.gc, opts.now, samples, _);
 
@@ -473,6 +476,7 @@ export async function benchIter(iter: (...args: any[]) => any, opts: any = {}): 
     p999: samples[(0.999 * (samples.length - 1)) | 0],
     avg: samples.reduce((a, v) => a + v, 0) / samples.length,
     ticks: samples.length * (!_.batch ? 1 : opts.batch_samples),
+    ...(_.gc ? { gc: _.gc } : {}),
     ...(opts.target_rel_ci ? { noisy: _.noisy ?? false } : {}),
   };
 }

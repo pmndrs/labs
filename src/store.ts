@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import type { Stats } from './bench/types.ts';
+import type { GcMode, Stats } from './bench/types.ts';
 
 export interface GitInfo {
   /** Full sha of HEAD when the run was saved. */
@@ -44,7 +44,7 @@ export interface WorkerBenchmarkTrial {
   alias: string;
   group: number;
   baseline: boolean;
-  gcMode?: string | boolean;
+  gcMode?: GcMode;
   runs: WorkerBenchmarkRun[];
   groupName?: string;
   kind?: 'args' | 'static' | 'multi-args';
@@ -65,7 +65,7 @@ export interface SavedBenchmarkTrial {
   alias: string;
   group: number;
   baseline: boolean;
-  gcMode: string | boolean;
+  gcMode: GcMode;
   groupName?: string;
   kind: 'args' | 'static' | 'multi-args';
   style: {
