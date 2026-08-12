@@ -99,21 +99,25 @@ export function cliffsD(a: number[], b: number[]): number {
 }
 
 /**
- * Noise-adjusted delta threshold. Uses relative MAD (MAD/median) as a robust
- * measure of per-sample noise, then scales by 3× (roughly a 2σ equivalent for
- * the median). Takes the noisier of the two distributions as the reference.
+ * Smallest relative Δp50 worth believing, given how noisy the samples are.
  *
- * Stable system (pinned freq): MAD/median ≈ 0.5% → floor ≈ 1.5%
- * Noisy system (Apple Silicon): MAD/median ≈ 2%   → floor ≈ 6%
+ * Guards against between-run environmental drift (clock speed, thermal state,
+ * background load): offsets that shift every sample equally, so they don't
+ * shrink with sample count and the MW-U test can't detect them. Per-sample
+ * jitter (MAD/median of the noisier run) is used as a proxy for that drift,
+ * scaled by a heuristic 3×. Never returns less than `floor`.
+ *
+ * Stable system (pinned freq): MAD/median ≈ 0.5% → max(floor, 1.5%)
+ * Noisy system (Apple Silicon): MAD/median ≈ 2%   → 6%
  */
 const NOISE_SCALE = 3;
 
-export function noiseFloor(a: number[], b: number[]): number {
+export function minMeaningfulDelta(a: number[], b: number[], floor: number): number {
   const medA = median(a);
   const medB = median(b);
   const relA = medA > 0 ? mad(a) / medA : 0;
   const relB = medB > 0 ? mad(b) / medB : 0;
-  return NOISE_SCALE * Math.max(relA, relB);
+  return Math.max(floor, NOISE_SCALE * Math.max(relA, relB));
 }
 
 export type Verdict = 'faster' | 'slower' | 'neutral';
@@ -147,7 +151,7 @@ export function classify(
   const alpha = opts?.alpha ?? 0.05;
   const minDelta = opts?.minDelta ?? 0.05;
   const minEffect = opts?.minEffect ?? 0.474;
-  const effectiveMinDelta = Math.max(minDelta, noiseFloor(baselineSamples, candidateSamples));
+  const effectiveMinDelta = minMeaningfulDelta(baselineSamples, candidateSamples, minDelta);
   const { p } = mannWhitneyU(baselineSamples, candidateSamples);
   const d = cliffsD(baselineSamples, candidateSamples);
 
