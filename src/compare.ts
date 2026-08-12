@@ -1,7 +1,8 @@
 import type { LabsConfig } from './config.ts';
 import { renderDistributions } from './histogram.ts';
 import { type ClassifyOptions, type Verdict, classify, median } from './stats.ts';
-import { type FreqSample, type SavedResult, isEnvironmentStable } from './store.ts';
+import { type FreqSample, type GitInfo, type SavedResult, isEnvironmentStable } from './store.ts';
+import { gitHint } from './cli/utils.ts';
 import { BOLD, CYAN, DARK_GRAY, DIM, GRAY, GREEN, RED, RESET, WHITE, YELLOW } from './utils/ansi.ts';
 import { formatDelta, formatP, formatTime } from './utils/format.ts';
 
@@ -172,6 +173,8 @@ export type BenchResult = EligibleBench | SkippedBench | MissingBench;
 export interface CompareResult {
   baselineName: string;
   candidateName: string;
+  baselineGit?: GitInfo;
+  candidateGit?: GitInfo;
   hardware: SavedResult['hardware'];
   environmentFailures: string[];
   environmentWarnings: string[];
@@ -293,6 +296,8 @@ export function compare(
     return {
       baselineName: baseline.name,
       candidateName: candidate.name,
+      ...(baseline.git ? { baselineGit: baseline.git } : {}),
+      ...(candidate.git ? { candidateGit: candidate.git } : {}),
       hardware: baseline.hardware,
       environmentFailures,
       environmentWarnings,
@@ -371,6 +376,8 @@ export function compare(
   return {
     baselineName: baseline.name,
     candidateName: candidate.name,
+    ...(baseline.git ? { baselineGit: baseline.git } : {}),
+    ...(candidate.git ? { candidateGit: candidate.git } : {}),
     hardware: baseline.hardware,
     environmentFailures,
     environmentWarnings,
@@ -394,8 +401,9 @@ function verdictStyle(verdict: Verdict): { color: string; symbol: string } {
 // ─── Report ──────────────────────────────────────────────────────────────────
 
 export function printCompareReport(result: CompareResult, config: LabsConfig): void {
+  const side = (name: string, git?: GitInfo) => (git ? `${name} (${gitHint(git)})` : name);
   console.log(
-    `\n${BOLD}${CYAN}━━ compare${RESET} ${DIM}${result.baselineName} -> ${result.candidateName}${RESET}`
+    `\n${BOLD}${CYAN}━━ compare${RESET} ${DIM}${side(result.baselineName, result.baselineGit)} -> ${side(result.candidateName, result.candidateGit)}${RESET}`
   );
   console.log(`${DIM}${result.hardware.cpu ?? 'unknown CPU'}${RESET}`);
   console.log(

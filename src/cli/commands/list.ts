@@ -9,7 +9,7 @@ import {
 } from '../../store.ts';
 import { DIM, RESET } from '../../utils/ansi.ts';
 import type { CLIContext } from '../types.ts';
-import { dateHint } from '../utils.ts';
+import { dateHint, gitHint } from '../utils.ts';
 
 export async function runListCommand(ctx: CLIContext): Promise<void> {
   const results = listResults(ctx.labsDir);
@@ -26,6 +26,7 @@ export async function runListCommand(ctx: CLIContext): Promise<void> {
       const hints: string[] = [];
       const dh = dateHint(r);
       if (dh) hints.push(dh);
+      if (r.git) hints.push(gitHint(r.git));
       if (r.name === baselineName) hints.push('baseline');
       if (!stable) hints.push('unstable');
       if (r.description) hints.push(r.description);

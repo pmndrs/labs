@@ -43,7 +43,7 @@ group('array @stress', () => {
 Each bench runs in an isolated worker process. CPU clock speed is measured before and after the run — if it drifted, Labs flags the result so it doesn't pollute comparisons. Adaptive sampling collects more samples until the confidence interval converges, or marks the bench `noisy` if it can't.
 
 ```sh
-# Run benches all, save with auto timestamp
+# Run all benches, save named after the current commit
 bench
 # Or filter by tag
 bench "@mytag"
@@ -116,10 +116,10 @@ Linux gives the most controls getting the best possible environment for testing.
 
 ## API report (to be edited)
 
-Every run saves results by default (auto-timestamped). Use `bench run` to execute without saving.
+Every run saves results by default, named after the current commit (`abc1234`, with `-dirty` when the tree has uncommitted changes, and a counter for repeat runs: `abc1234-2`). Outside a git repo, names fall back to a timestamp. Each result also records the commit, branch, and dirty state it was produced from. Use `bench run` to execute without saving.
 
 ```sh
-pnpm bench                              # run all, save with auto timestamp
+pnpm bench                              # run all, save named after the current commit
 pnpm bench "relation"                   # partial match on file name, save
 pnpm bench "relation churn"             # separator-agnostic match, save
 pnpm bench "@relation"                  # filter by tag, save

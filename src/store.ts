@@ -2,6 +2,15 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync
 import { join } from 'node:path';
 import type { Stats } from './bench/types.ts';
 
+export interface GitInfo {
+  /** Full sha of HEAD when the run was saved. */
+  commit: string;
+  /** Branch name, or null when HEAD is detached. */
+  branch: string | null;
+  /** True when the working tree had uncommitted changes. */
+  dirty: boolean;
+}
+
 export interface HardwareInfo {
   cpu: string | null;
   arch: string | null;
@@ -114,6 +123,7 @@ export interface SavedResult {
   name: string;
   description?: string;
   timestamp: string;
+  git?: GitInfo;
   hardware: HardwareInfo;
   context?: {
     version?: string | null;
@@ -178,6 +188,15 @@ export function resultExists(labsDir: string, name: string): boolean {
   return existsSync(join(getResultsDir(labsDir), `${name}.json`));
 }
 
+/** First free name among `base`, `base-2`, `base-3`, ... */
+export function uniqueResultName(labsDir: string, base: string): string {
+  if (!resultExists(labsDir, base)) return base;
+  for (let i = 2; ; i++) {
+    const name = `${base}-${i}`;
+    if (!resultExists(labsDir, name)) return name;
+  }
+}
+
 export function saveResult(labsDir: string, result: SavedResult): void {
   const dir = getResultsDir(labsDir);
   mkdirSync(dir, { recursive: true });
@@ -197,6 +216,34 @@ export function listResults(labsDir: string): SavedResult[] {
     .filter((f) => f.endsWith('.json'))
     .map((f) => normalizeSavedResult(JSON.parse(readFileSync(join(dir, f), 'utf-8')) as SavedResult))
     .sort((a, b) => a.timestamp.localeCompare(b.timestamp));
+}
+
+const SHA_PREFIX_RE = /^[0-9a-f]{4,40}$/;
+
+/**
+ * Resolve a user-supplied ref to a saved result name. Exact names win;
+ * otherwise a hex string of ≥4 chars is treated as a commit sha prefix.
+ * When one commit has several runs, the most recent one is returned.
+ */
+export function resolveResultName(labsDir: string, ref: string): string {
+  if (resultExists(labsDir, ref)) return ref;
+
+  const prefix = ref.toLowerCase();
+  if (!SHA_PREFIX_RE.test(prefix)) throw new Error(`No saved result named "${ref}"`);
+
+  // listResults sorts by timestamp ascending, so the last match is the newest.
+  const matches = listResults(labsDir).filter((r) => r.git?.commit.startsWith(prefix));
+  if (matches.length === 0) {
+    throw new Error(`No saved result named "${ref}" or from a commit matching ${ref}`);
+  }
+
+  const commits = new Set(matches.map((r) => r.git!.commit));
+  if (commits.size > 1) {
+    const shas = [...commits].map((c) => c.slice(0, 7)).join(', ');
+    throw new Error(`Commit prefix ${ref} is ambiguous (matches ${shas})`);
+  }
+
+  return matches[matches.length - 1].name;
 }
 
 function normalizeSavedResult(result: SavedResult): SavedResult {

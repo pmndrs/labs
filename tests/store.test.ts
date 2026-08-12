@@ -9,6 +9,7 @@ import {
   loadResult,
   resultExists,
   saveResult,
+  uniqueResultName,
 } from '../src/store.ts';
 
 function stubResult(name: string): SavedResult {
@@ -64,5 +65,62 @@ describe('resultExists', () => {
     const loaded = loadResult(labsDir, 'my-run');
     expect(loaded.hardware.cpu).toBe('cpu-v2');
     expect(listResults(labsDir)).toHaveLength(1);
+  });
+});
+
+describe('git metadata', () => {
+  let labsDir: string;
+
+  beforeEach(() => {
+    labsDir = mkdtempSync(join(tmpdir(), 'labs-test-'));
+  });
+
+  afterEach(() => {
+    rmSync(labsDir, { recursive: true, force: true });
+  });
+
+  it('round-trips git info through save/load', () => {
+    const result = stubResult('my-run');
+    result.git = { commit: 'a'.repeat(40), branch: 'main', dirty: true };
+    saveResult(labsDir, result);
+
+    const loaded = loadResult(labsDir, 'my-run');
+    expect(loaded.git).toEqual({ commit: 'a'.repeat(40), branch: 'main', dirty: true });
+  });
+
+  it('results without git info load as undefined', () => {
+    saveResult(labsDir, stubResult('my-run'));
+    expect(loadResult(labsDir, 'my-run').git).toBeUndefined();
+  });
+});
+
+describe('uniqueResultName', () => {
+  let labsDir: string;
+
+  beforeEach(() => {
+    labsDir = mkdtempSync(join(tmpdir(), 'labs-test-'));
+  });
+
+  afterEach(() => {
+    rmSync(labsDir, { recursive: true, force: true });
+  });
+
+  it('returns the base name when free', () => {
+    expect(uniqueResultName(labsDir, 'abc1234')).toBe('abc1234');
+  });
+
+  it('counts up past taken names', () => {
+    saveResult(labsDir, stubResult('abc1234'));
+    expect(uniqueResultName(labsDir, 'abc1234')).toBe('abc1234-2');
+
+    saveResult(labsDir, stubResult('abc1234-2'));
+    expect(uniqueResultName(labsDir, 'abc1234')).toBe('abc1234-3');
+  });
+
+  it('fills gaps left by deleted results', () => {
+    saveResult(labsDir, stubResult('abc1234'));
+    saveResult(labsDir, stubResult('abc1234-2'));
+    deleteResult(labsDir, 'abc1234-2');
+    expect(uniqueResultName(labsDir, 'abc1234')).toBe('abc1234-2');
   });
 });
