@@ -2,7 +2,7 @@ import { isCancel, multiselect } from '@clack/prompts';
 import { deleteResult, getBaseline, listResults } from '../../store.ts';
 import { DIM, GREEN, RESET } from '../../utils/ansi.ts';
 import type { CLIContext } from '../types.ts';
-import { dateHint, error } from '../utils.ts';
+import { dateHint, error, gitHint } from '../utils.ts';
 
 export async function runDeleteCommand(ctx: CLIContext, name?: string): Promise<void> {
   if (name) {
@@ -28,6 +28,7 @@ export async function runDeleteCommand(ctx: CLIContext, name?: string): Promise<
       const hints: string[] = [];
       const dh = dateHint(r);
       if (dh) hints.push(dh);
+      if (r.git) hints.push(gitHint(r.git));
       if (r.name === baselineName) hints.push('baseline');
       return {
         value: r.name,

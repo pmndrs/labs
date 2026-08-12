@@ -7,6 +7,7 @@ import type { LabsConfig } from '../config.ts';
 import { printReportBox } from '../report.ts';
 import {
   type FreqSample,
+  type GitInfo,
   type SavedContext,
   type SavedResult,
   type WorkerResult,
@@ -19,6 +20,7 @@ import {
   setBaseline,
   setLastComparison,
   trimStats,
+  uniqueResultName,
 } from '../store.ts';
 import { BLUE, CYAN, DIM, GREEN, RED, RESET } from '../utils/ansi.ts';
 import { runBaselineCommand } from './commands/baseline.ts';
@@ -26,7 +28,7 @@ import { runCompareCommand } from './commands/compare.ts';
 import { runDeleteCommand } from './commands/delete.ts';
 import { runListCommand } from './commands/list.ts';
 import { runPruneCommand } from './commands/prune.ts';
-import { error } from './utils.ts';
+import { error, gitHint } from './utils.ts';
 
 function collectEnvData(
   workerResult: WorkerResult,
@@ -120,6 +122,22 @@ function fileHasAnyTag(file: string, tags: string[]): boolean {
   if (tags.length === 0) return true;
   const content = readFileSync(file, 'utf-8');
   return tags.some((tag) => content.includes(tag));
+}
+
+/** Snapshot of the git state a run was produced from. Undefined outside a repo. */
+function captureGitInfo(dir: string): GitInfo | undefined {
+  const git = (cmd: string) =>
+    execSync(`git ${cmd}`, { cwd: dir, stdio: ['ignore', 'pipe', 'ignore'] })
+      .toString()
+      .trim();
+  try {
+    const commit = git('rev-parse HEAD');
+    const ref = git('rev-parse --abbrev-ref HEAD');
+    const dirty = git('status --porcelain').length > 0;
+    return { commit, branch: ref === 'HEAD' ? null : ref, dirty };
+  } catch {
+    return undefined;
+  }
 }
 
 /** Parse a named flag value: --flag value -> value, or undefined if flag absent. */
@@ -298,8 +316,16 @@ export async function runCLI(args: string[]) {
     return;
   }
 
-  const defaultName = () =>
-    new Date().toISOString().replace(/[:.]/g, '-').replace('T', '_').slice(0, 19);
+  const git = captureGitInfo(dirname(configPath));
+
+  // Default names come from the commit when in a repo (abc1234, abc1234-dirty,
+  // abc1234-2, ...), falling back to a timestamp otherwise.
+  const defaultName = () => {
+    if (git) {
+      return uniqueResultName(labsDir, `${git.commit.slice(0, 7)}${git.dirty ? '-dirty' : ''}`);
+    }
+    return new Date().toISOString().replace(/[:.]/g, '-').replace('T', '_').slice(0, 19);
+  };
   const saveName = flagValue(benchArgs, '-n') ?? flagValue(benchArgs, '--name') ?? defaultName();
 
   const forceOverwrite = benchArgs.includes('--force') || benchArgs.includes('-f');
@@ -405,6 +431,7 @@ export async function runCLI(args: string[]) {
     name: saveName,
     ...(description ? { description } : {}),
     timestamp: new Date().toISOString(),
+    ...(git ? { git } : {}),
     hardware,
     context: savedNoop,
     files,
@@ -421,7 +448,8 @@ export async function runCLI(args: string[]) {
   }
 
   const baselineNote = markedBaseline ? ` ${CYAN}(baseline)${RESET}` : '';
-  const saveMsg = `${GREEN}✔${RESET} Saved "${saveName}"${baselineNote} (${files.length} file${files.length !== 1 ? 's' : ''})`;
+  const gitNote = git ? ` ${DIM}${gitHint(git)}${RESET}` : '';
+  const saveMsg = `${GREEN}✔${RESET} Saved "${saveName}"${gitNote}${baselineNote} (${files.length} file${files.length !== 1 ? 's' : ''})`;
 
   printReportBox(saveEnvData, saveNoisyAliases, config.maxCpuTime!, saveMsg, hardware.cpu);
 

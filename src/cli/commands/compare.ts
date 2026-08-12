@@ -11,7 +11,7 @@ import {
 } from '../../store.ts';
 import { CYAN, DIM, RESET } from '../../utils/ansi.ts';
 import type { CLIContext } from '../types.ts';
-import { dateHint, error } from '../utils.ts';
+import { dateHint, error, gitHint } from '../utils.ts';
 
 export async function runCompareCommand(ctx: CLIContext, candidateArg?: string): Promise<void> {
   const baselineName = getBaseline(ctx.labsDir);
@@ -44,6 +44,7 @@ export async function runCompareCommand(ctx: CLIContext, candidateArg?: string):
         const hints: string[] = [];
         const dh = dateHint(r);
         if (dh) hints.push(dh);
+        if (r.git) hints.push(gitHint(r.git));
         if (r.name === latestCandidate.name) hints.push('latest');
         const freq = resultMedianFreq(r);
         if (baselineFreq > 0 && freq > 0) {
