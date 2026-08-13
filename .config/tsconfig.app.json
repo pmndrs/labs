@@ -12,7 +12,9 @@
     "composite": true,
     "rewriteRelativeImportExtensions": true,
     "erasableSyntaxOnly": true,
-    "types": ["node"]
+    "types": ["node"],
+    "noUncheckedSideEffectImports": true,
+    "libReplacement": false
   },
   "include": ["../src", "../tests"]
 }

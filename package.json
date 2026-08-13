@@ -24,7 +24,7 @@
     "bench": "tsx src/cli/cli.ts",
     "build": "unbuild --config .config/build.config.ts",
     "prepack": "unbuild --config .config/build.config.ts",
-    "release": "pnpm publish",
+    "release": "pnpm run build && pnpm publish",
     "test": "vitest",
     "lint": "oxlint -c .config/oxlint.json",
     "format": "prettier --config .config/prettier.json --ignore-path .config/prettierignore --write .",
@@ -32,17 +32,17 @@
     "typecheck:watch": "tsc --build --watch"
   },
   "dependencies": {
-    "@clack/prompts": "^1.0.1",
-    "tsx": "^4.21.0"
+    "@clack/prompts": "^1.7.0",
+    "tsx": "^4.23.12"
   },
   "devDependencies": {
-    "@types/node": "^25.5.0",
-    "oxlint": "^1.56.0",
-    "oxlint-tsgolint": "^0.22.1",
-    "prettier": "^3.8.1",
-    "typescript": "^5.9.3",
+    "@types/node": "^25.9.5",
+    "oxlint": "^1.78.0",
+    "oxlint-tsgolint": "^7.0.2001",
+    "prettier": "^3.9.6",
+    "typescript": "^7.0.2",
     "unbuild": "^3.6.1",
-    "vitest": "^4.1.0"
+    "vitest": "^4.1.10"
   },
   "packageManager": "pnpm@11.21.0",
   "engines": {

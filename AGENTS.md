@@ -1,4 +1,5 @@
 <!-- managed:start -->
+
 ## Workspace Tools
 
 - **Package Manager:** pnpm
@@ -23,17 +24,5 @@ pnpm lint -- src/App.tsx src/core/systems/move-entity.ts
 pnpm format
 pnpm lint
 ```
+
 <!-- managed:end -->
-
-# @pmndrs/labs
-
-- **Type:** standalone project
-- **Package Manager:** pnpm
-- **Linter:** oxlint
-- **Formatter:** prettier
-
-## Commands
-
-- `pnpm test` — run tests
-- `pnpm build` — build
-- `pnpm lint` and `pnpm format` — run before committing
