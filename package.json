@@ -2,7 +2,7 @@
   "name": "@pmndrs/labs",
   "description": "🏆 JS benchmarks you can trust",
   "type": "module",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "license": "ISC",
   "main": "./dist/index.mjs",
   "module": "./dist/index.mjs",
