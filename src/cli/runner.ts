@@ -1,5 +1,6 @@
-import { execSync } from 'node:child_process';
+import { execFileSync, execSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { basename, dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { compare, printCompareReport } from '../compare.ts';
@@ -52,6 +53,7 @@ function collectEnvData(
 
 const WORKER_EXT = import.meta.url.endsWith('.ts') ? 'ts' : 'mjs';
 const WORKER = fileURLToPath(new URL(`../worker.${WORKER_EXT}`, import.meta.url));
+const TSX_LOADER = pathToFileURL(createRequire(import.meta.url).resolve('tsx')).href;
 
 function globBenchFiles(dir: string, pattern: string): string[] {
   const suffix = pattern.replace(/^\*\*\/\*/, '');
@@ -102,7 +104,7 @@ function runBench(
   resultFile?: string
 ): void {
   console.log(`\n${BLUE}▶ ${label}${RESET} ${DIM}(tsx + v8 flags)${RESET}`);
-  execSync(`pnpm tsx ${nodeFlags.join(' ')} "${WORKER}"`, {
+  execFileSync(process.execPath, ['--import', TSX_LOADER, ...nodeFlags, WORKER], {
     stdio: 'inherit',
     env: {
       ...process.env,
