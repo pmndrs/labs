@@ -19,7 +19,7 @@ export interface Stats {
 
 export interface MeasureOptions {
   now?: () => number;
-  inner_gc?: boolean;
+  sample_gc?: boolean;
   heap?: (() => number) | null | false;
   concurrency?: number;
   min_samples?: number;
@@ -42,6 +42,7 @@ export interface MeasureOptions {
 }
 
 export type FnKind = 'fn' | 'iter' | 'yield';
+export type GcMode = boolean | 'once' | 'inner';
 
 export type Color =
   | 'red'
@@ -65,7 +66,7 @@ export interface Trial {
   runs: Run[];
   alias: string;
   group: number;
-  gcMode: string | boolean;
+  gcMode: GcMode;
   baseline: boolean;
   args: Record<string, any[]>;
   kind: 'args' | 'static' | 'multi-args';

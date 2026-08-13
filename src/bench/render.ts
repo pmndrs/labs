@@ -5,12 +5,12 @@ import * as histogramFmt from './format/histogram.ts';
 import * as boxplotFmt from './format/boxplot.ts';
 import * as barplotFmt from './format/barplot.ts';
 import * as lineplotFmt from './format/lineplot.ts';
-import type { Context, Trial } from './types.ts';
+import type { Context, GcMode, Trial } from './types.ts';
 
 export interface RenderedTrial {
   highlight: false | string | null;
   compact: boolean;
-  gcMode: string | boolean;
+  gcMode: GcMode;
   bench: Trial;
 }
 
@@ -115,7 +115,7 @@ export function renderMitata(
         const noop =
           'iter' === r.stats!.kind
             ? ctx.noop.iter
-            : trial.gcMode !== 'inner'
+            : trial.gcMode !== true && trial.gcMode !== 'inner'
               ? ctx.noop.fn
               : ctx.noop.fn_gc;
         const optimized_out = r.stats!.avg < 1.42 * noop.avg;
