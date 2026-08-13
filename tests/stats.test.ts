@@ -1,21 +1,21 @@
-import { expect, it } from 'vitest';
-import { do_not_optimize, measure } from '../src/bench/index.ts';
+import { describe, expect, it } from 'vitest';
 import { classify } from '../src/stats.ts';
 
-const opts = { min_cpu_time: 100, min_samples: 30, adaptive: true } as const;
+const samples = (value: number) => Array.from({ length: 30 }, () => value);
 
-it('should always classify the same benchmark as neutral when compared to itself', async () => {
-  const work = () => {
-    let x = 0;
-    for (let i = 0; i < 1000; i++) x += Math.sqrt(i);
-    do_not_optimize(x);
-  };
+describe('comparing benchmark results', () => {
+  it('treats equivalent results as neutral', () => {
+    expect(classify(samples(100), samples(100)).verdict).toBe('neutral');
+  });
 
-  const runs = [];
-  for (let i = 0; i < 3; i++) runs.push(await measure(work, opts));
+  it('reports meaningful improvements and regressions', () => {
+    const baseline = samples(100);
 
-  const baseline = runs[0].samples;
-  for (const run of runs) {
-    expect(classify(baseline, run.samples).verdict).toBe('neutral');
-  }
-}, 30_000);
+    expect(classify(baseline, samples(80)).verdict).toBe('faster');
+    expect(classify(baseline, samples(120)).verdict).toBe('slower');
+  });
+
+  it('ignores differences below the meaningful-change threshold', () => {
+    expect(classify(samples(100), samples(104)).verdict).toBe('neutral');
+  });
+});

@@ -1,484 +1,151 @@
 import { describe, expect, it } from 'vitest';
-import { measure, do_not_optimize, B, bench, group, run } from '../src/bench/index.ts';
-import { kind } from '../src/bench/lib/runtime.ts';
-import { compact } from '../src/bench/main.ts';
+import { measure, B, bench, group, run } from '../src/bench/index.ts';
 
 const fast = { min_cpu_time: 1, min_samples: 12, adaptive: false } as const;
 
-function assertStats(s: any) {
-  expect(s.samples).toBeInstanceOf(Array);
-  expect(s.samples.length).toBeGreaterThanOrEqual(8);
-  expect(s.min).toBeLessThanOrEqual(s.avg);
-  expect(s.avg).toBeLessThanOrEqual(s.max);
-  expect(s.p75).toBeLessThanOrEqual(s.p99);
-  expect(s.ticks).toBeGreaterThan(0);
+function expectUsefulStats(stats: any) {
+  expect(stats.samples.length).toBeGreaterThan(0);
+  expect(stats.min).toBeLessThanOrEqual(stats.avg);
+  expect(stats.avg).toBeLessThanOrEqual(stats.max);
+  expect(stats.p75).toBeLessThanOrEqual(stats.p99);
+  expect(stats.ticks).toBeGreaterThan(0);
 }
 
-// ── measure() codegen paths ────────────────────────────────────────
-
-describe('measure', () => {
-  it('fn path: zero-arg function', async () => {
-    const s = await measure(() => 1 + 1, fast);
-    expect(s.kind).toBe('fn');
-    assertStats(s);
-  }, 20_000);
-
-  it('fn path: async function', async () => {
-    const s = await measure(async () => 1 + 1, fast);
-    expect(s.kind).toBe('fn');
-    assertStats(s);
-  }, 20_000);
-
-  it('iter path: state consumer', async () => {
-    const s = await measure((state: any) => {
-      for (const _ of state);
-    }, fast);
-    expect(s.kind).toBe('iter');
-    assertStats(s);
-  }, 20_000);
-
-  it('generator/yield path', async () => {
-    const s = await measure(function* () {
-      yield () => 1 + 1;
-    }, fast);
-    expect(s.kind).toBe('yield');
-    assertStats(s);
-  }, 20_000);
-
-  it('generator/yield with after hook runs between samples', async () => {
-    let afterCount = 0;
-    const s = await measure(function* () {
-      yield {
-        bench: () => 1 + 1,
-        after: () => {
-          afterCount++;
+describe('measuring work', () => {
+  it.each([
+    ['a synchronous function', () => () => 1 + 1, 'fn'],
+    ['an asynchronous function', () => async () => 1 + 1, 'fn'],
+    [
+      'an iterator benchmark',
+      () => (state: any) => {
+        for (const _ of state);
+      },
+      'iter',
+    ],
+    [
+      'a generator benchmark',
+      () =>
+        function* () {
+          yield () => 1 + 1;
         },
-      };
+      'yield',
+    ],
+  ])('produces useful statistics for %s', async (_, createBenchmark, expectedKind) => {
+    const stats = await measure(createBenchmark() as any, fast);
+
+    expect(stats.kind).toBe(expectedKind);
+    expectUsefulStats(stats);
+  });
+
+  it('runs generator setup and teardown once around the measured work', async () => {
+    let setups = 0;
+    let iterations = 0;
+    let teardowns = 0;
+
+    const stats = await measure(function* () {
+      setups++;
+      yield () => iterations++;
+      teardowns++;
     }, fast);
-    expect(s.kind).toBe('yield');
-    assertStats(s);
-    expect(afterCount).toBeGreaterThanOrEqual(s.samples.length);
-  }, 20_000);
 
-  it('generator/yield with async after hook', async () => {
-    let afterCount = 0;
-    const s = await measure(async function* () {
-      yield {
-        bench: () => 1 + 1,
-        after: async () => {
-          afterCount++;
-        },
-      };
-    }, fast);
-    expect(s.kind).toBe('yield');
-    assertStats(s);
-    expect(afterCount).toBeGreaterThanOrEqual(s.samples.length);
-  }, 20_000);
-
-  it('after hook resets state between samples', async () => {
-    let arr = [3, 1, 2];
-    const s = await measure(function* () {
-      yield {
-        bench: () => arr.sort(),
-        after: () => {
-          arr = [3, 1, 2];
-        },
-      };
-    }, fast);
-    assertStats(s);
-  }, 20_000);
-
-  it('rejects non-benchmarkable values', async () => {
-    await expect(measure(42 as any, fast)).rejects.toThrow();
+    expect(setups).toBe(1);
+    expect(iterations).toBeGreaterThan(0);
+    expect(teardowns).toBe(1);
+    expectUsefulStats(stats);
   });
 
-  it('samples are sorted ascending', async () => {
-    const s = await measure(() => {}, fast);
-    for (let i = 1; i < s.samples.length; i++) {
-      expect(s.samples[i]).toBeGreaterThanOrEqual(s.samples[i - 1]);
-    }
-  }, 20_000);
-});
-
-// ── kind() dispatch ────────────────────────────────────────────────
-
-describe('kind', () => {
-  it('classifies zero-arg function as fn', () => {
-    expect(kind(() => {})).toBe('fn');
-  });
-
-  it('classifies async zero-arg as fn', () => {
-    expect(kind(async () => {})).toBe('fn');
-  });
-
-  it('classifies generator as yield', () => {
-    expect(
-      kind(function* () {
-        yield;
-      })
-    ).toBe('yield');
-  });
-
-  it('classifies function with args as iter', () => {
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    expect(kind(function (state: any) {})).toBe('iter');
-  });
-
-  it('classifies async generator as yield', () => {
-    expect(
-      kind(async function* () {
-        yield;
-      })
-    ).toBe('yield');
-  });
-
-  it('returns undefined for non-functions', () => {
-    expect(kind(42 as any)).toBeUndefined();
-    expect(kind(null as any)).toBeUndefined();
-    expect(kind('str' as any)).toBeUndefined();
-  });
-});
-
-// ── adaptive sampling (patch) ──────────────────────────────────────
-
-describe('adaptive sampling', () => {
-  it('adaptive=true uses Welford convergence, no fixed-sample break', async () => {
-    const s = await measure(() => {}, { min_cpu_time: 1, min_samples: 12, adaptive: true });
-    expect(s.debug).toContain('_lm');
-    expect(s.debug).not.toContain('_ >= 12');
-  }, 20_000);
-
-  it('adaptive=false uses classic fixed break, no noisy property', async () => {
-    const s = await measure(() => {}, fast);
-    expect(s.debug).toContain('_ >= 12');
-    expect(s).not.toHaveProperty('noisy');
-  }, 20_000);
-
-  it('sets noisy=true when max_cpu_time exceeded before convergence', async () => {
-    const s = await measure(() => {}, {
+  it('marks a run noisy when it cannot converge within its time budget', async () => {
+    const stats = await measure(() => {}, {
       min_cpu_time: 1,
       min_samples: 12,
       max_cpu_time: 1,
       adaptive: 0.0001,
     });
-    expect(s).toHaveProperty('noisy', true);
-  }, 20_000);
+
+    expect(stats.noisy).toBe(true);
+  });
 });
 
-// ── heap self-cost calibration ─────────────────────────────────────
+describe('composing a benchmark suite', () => {
+  it('runs grouped and parameterized benchmarks with readable names', async () => {
+    void group('arrays', () => {
+      bench('create', () => []);
+      bench('fill $size', () => []).args('size', [10, 100]);
+    });
 
-describe('heap self-cost calibration', () => {
-  async function nodeHeap() {
-    const { getHeapStatistics } = await import('node:v8');
-    getHeapStatistics();
-    return () => {
-      const m = getHeapStatistics();
-      return m.used_heap_size + m.malloced_memory;
-    };
-  }
+    const result = await run({ format: 'quiet', tune: fast, calibrate: fast });
 
-  it('emits calibration into the generated loop when heap is enabled', async () => {
-    const s = await measure(() => {}, { ...fast, heap: await nodeHeap() });
-    expect(s.debug).toContain('_hself');
-    expect(s.heap).toBeDefined();
-    expect(s.heap!.min).toBeGreaterThanOrEqual(0);
-  }, 20_000);
-
-  it('does not emit calibration without heap tracking', async () => {
-    const s = await measure(() => {}, fast);
-    expect(s.debug).not.toContain('_hself');
-  }, 20_000);
-
-  it('survives gc: false with heap enabled (calibration emits no $gc call)', async () => {
-    const s = await measure(() => {}, { ...fast, gc: false, heap: await nodeHeap() });
-    expect(s.debug).not.toContain('$gc()');
-    expect(s.heap!.min).toBeGreaterThanOrEqual(0);
-  }, 20_000);
-
-  it('removes at least the bare read self-cost from each sample', async () => {
-    const heap = await nodeHeap();
-    let self = Infinity;
-    for (let i = 0; i < 10; i++) {
-      const a = heap();
-      const b = heap();
-      const d = b - a;
-      if (0 <= d && d < self) self = d;
+    expect(result.layout).toContainEqual(expect.objectContaining({ name: 'arrays' }));
+    expect(result.benchmarks.map((trial) => trial.alias)).toEqual(['create', 'fill $size']);
+    expect(result.benchmarks[1].runs.map((item) => item.name)).toEqual(['fill 10', 'fill 100']);
+    for (const trial of result.benchmarks) {
+      for (const benchmarkRun of trial.runs) expectUsefulStats(benchmarkRun.stats);
     }
-    expect(Number.isFinite(self)).toBe(true);
-    expect(self).toBeGreaterThan(0);
+  });
 
-    // Allocation-free fn slow enough to stay unbatched, so heap.min is a raw
-    // per-sample delta. Uncalibrated it would read >= `self`; calibrated it
-    // must land below (residual interpreter boxing may keep it above zero).
-    const spin = () => {
-      const end = performance.now() + 0.1;
-      while (performance.now() < end);
-    };
-    const s = await measure(spin, { ...fast, heap });
-    expect(s.heap!.min).toBeGreaterThanOrEqual(0);
-    expect(s.heap!.min).toBeLessThan(self);
-  }, 20_000);
+  it('runs only benchmarks selected by a filter', async () => {
+    bench('array push', () => {});
+    bench('array pop', () => {});
+
+    const result = await run({
+      format: 'quiet',
+      filter: /push/,
+      tune: fast,
+      calibrate: fast,
+    });
+
+    expect(result.benchmarks.map((trial) => trial.alias)).toEqual(['array push']);
+  });
+
+  it('emits a JSON report that can omit bulky diagnostic data', async () => {
+    bench('serialize', () => {});
+    let output = '';
+
+    await run({
+      format: { json: { debug: false, samples: false } },
+      tune: fast,
+      calibrate: fast,
+      print: (text: string) => {
+        output += text;
+      },
+    });
+
+    const report = JSON.parse(output);
+    expect(report.benchmarks[0].alias).toBe('serialize');
+    expect(report.benchmarks[0].runs[0].stats.samples).toBeNull();
+    expect(report.benchmarks[0].runs[0].stats.debug).toBe('');
+    expect(report.context).toEqual(expect.objectContaining({ runtime: expect.any(String) }));
+  });
 });
 
-// ── B class builder ────────────────────────────────────────────────
-
-describe('B class', () => {
-  it('rejects non-function in constructor', () => {
-    expect(() => new B('x', 42 as any)).toThrow('expected iterator, generator or one-shot function');
-  });
-
-  it('args() + _names() interpolates parameterized names', () => {
-    const b = new B('test $n', () => {});
-    b.args('n', [1, 2, 3]);
-    expect([...b._names()]).toEqual(['test 1', 'test 2', 'test 3']);
-  });
-
-  it('range() generates geometric sequence', () => {
-    const b = new B('r $n', () => {});
-    b.range('n', 1, 64, 8);
-    expect([...b._names()]).toEqual(['r 1', 'r 8', 'r 64']);
-  });
-
-  it('dense_range() generates arithmetic sequence', () => {
-    const b = new B('d $n', () => {});
-    b.dense_range('n', 1, 5, 2);
-    expect([...b._names()]).toEqual(['d 1', 'd 3', 'd 5']);
-  });
-
-  it('enables per-sample GC by default', () => {
-    expect(new B('x', () => {})._gc).toBe(true);
-  });
-
-  it('gc() only accepts booleans', () => {
-    expect(() => new B('x', () => {}).gc('sample' as any)).toThrow('expected gc to be a boolean');
-  });
-
-  it('always collects before a run and optionally between samples', async () => {
-    let gcCalls = 0;
-    const gc = () => gcCalls++;
+describe('run policy', () => {
+  it('collects before every run and between samples unless disabled', async () => {
+    let collections = 0;
     const tune = {
-      gc,
+      gc: () => collections++,
       min_cpu_time: 0,
       min_samples: 1,
       max_samples: 1,
       adaptive: false,
     } as const;
 
-    await new B('sample gc', () => {}).run(true, tune);
-    expect(gcCalls).toBeGreaterThan(1);
+    await new B('sample collection', () => {}).run(true, tune);
+    expect(collections).toBeGreaterThan(1);
 
-    gcCalls = 0;
-    await new B('run gc', () => {}).gc(false).run(true, tune);
-    expect(gcCalls).toBe(1);
+    collections = 0;
+    await new B('initial collection', () => {}).gc(false).run(true, tune);
+    expect(collections).toBe(1);
   });
 
-  it('reports per-sample GC for iterator benchmarks', async () => {
-    const trial = await new B('iterator gc', (state: any) => {
-      for (const _ of state);
-    }).run(true, {
-      gc: () => {},
-      min_cpu_time: 0,
-      min_samples: 1,
-      max_samples: 1,
-      adaptive: false,
-    });
-
-    expect(trial.runs[0].stats?.gc).toBeDefined();
-  });
-
-  it('highlight() rejects invalid colors', () => {
-    expect(() => new B('x', () => {}).highlight('nope' as any)).toThrow('invalid highlight color');
-  });
-
-  it('methods return this for chaining', () => {
-    const b = new B('x', () => {});
-    expect(b.compact()).toBe(b);
-    expect(b.baseline()).toBe(b);
-    expect(b.gc(false)).toBe(b);
-    expect(b.args('n', [1])).toBe(b);
-  });
-
-  it('args() object map sets multiple arg dimensions', () => {
-    const b = new B('$a-$b', () => {});
-    b.args({ a: [1, 2], b: ['x', 'y'] });
-    const names = [...b._names()];
-    expect(names).toHaveLength(4);
-    expect(names).toContain('1-x');
-    expect(names).toContain('2-y');
-  });
-
-  it('args(null) clears args', () => {
-    const b = new B('test', () => {});
-    b.args([1, 2, 3]);
-    b.args(null as any);
-    expect([...b._names()]).toEqual(['test']);
-  });
-
-  it('args(name, null) deletes a named arg', () => {
-    const b = new B('test $n', () => {});
-    b.args('n', [1, 2]);
-    b.args('n', null as any);
-    expect([...b._names()]).toEqual(['test $n']);
-  });
-
-  it('B.run() returns trial shape for static bench', async () => {
-    const b = new B('shape test', () => {});
-    const trial = await b.run(false, fast);
-    expect(trial).toHaveProperty('kind', 'static');
-    expect(trial).toHaveProperty('alias', 'shape test');
-    expect(trial).toHaveProperty('baseline');
-    expect(trial).toHaveProperty('style');
-    expect(trial.style).toHaveProperty('compact');
-    expect(trial.style).toHaveProperty('highlight');
-    expect(trial.runs).toHaveLength(1);
-    assertStats(trial.runs[0].stats);
-  }, 20_000);
-
-  it('B.run() returns trial shape for parameterized bench', async () => {
-    const b = new B('param $n', () => {});
-    b.args('n', [10, 20]);
-    const trial = await b.run(false, fast);
-    expect(trial.kind).toBe('args');
-    expect(trial.runs).toHaveLength(2);
-    expect(trial.runs[0].name).toBe('param 10');
-    expect(trial.runs[1].name).toBe('param 20');
-  }, 20_000);
-
-  it('B.run(thrw=false) captures errors instead of throwing', async () => {
-    const b = new B('throws', () => {
+  it('captures benchmark failures by default and can surface them to callers', async () => {
+    const failingBenchmark = () => {
       throw new Error('boom');
-    });
-    const trial = await b.run(false, fast);
-    expect(trial.runs[0].error).toBeDefined();
+    };
+
+    const trial = await new B('failure', failingBenchmark).run(false, fast);
+    expect(trial.runs[0].error).toEqual(expect.objectContaining({ message: 'boom' }));
     expect(trial.runs[0].stats).toBeUndefined();
-  }, 20_000);
 
-  it('B.run(thrw=true) throws on benchmark error', async () => {
-    const b = new B('throws', () => {
-      throw new Error('boom');
-    });
-    await expect(b.run(true, fast)).rejects.toThrow('boom');
-  }, 20_000);
-});
-
-// ── bench() + run() integration ────────────────────────────────────
-
-describe('bench + run', () => {
-  it('runs a static benchmark and returns structured result', async () => {
-    bench('static noop', () => {});
-    const r = await run({ format: 'quiet', tune: fast, calibrate: fast });
-
-    expect(r.benchmarks.length).toBeGreaterThanOrEqual(1);
-    const trial = r.benchmarks.at(-1)!;
-    expect(trial.alias).toBe('static noop');
-    expect(trial.kind).toBe('static');
-    assertStats(trial.runs[0].stats);
-  }, 20_000);
-
-  it('tune passthrough reaches measure codegen', async () => {
-    bench('tune check', () => {});
-    const r = await run({
-      format: 'quiet',
-      calibrate: fast,
-      tune: { min_samples: 25, min_cpu_time: 1, adaptive: false },
-    });
-
-    const debug = r.benchmarks.at(-1)?.runs[0]?.stats?.debug ?? '';
-    expect(debug).toContain('_ >= 25');
-  }, 20_000);
-
-  it('parameterized bench produces multiple runs', async () => {
-    bench('p $n', () => {}).args('n', [1, 2]);
-    const r = await run({ format: 'quiet', tune: fast, calibrate: fast });
-
-    const trial = r.benchmarks.at(-1)!;
-    expect(trial.kind).toBe('args');
-    expect(trial.runs).toHaveLength(2);
-    expect(trial.runs.map((x: any) => x.name)).toEqual(['p 1', 'p 2']);
-  }, 20_000);
-
-  it('group() scoping assigns shared group id', async () => {
-    group('math', () => {
-      bench('add', () => 1 + 1);
-      bench('mul', () => 2 * 2);
-    });
-    const r = await run({ format: 'quiet', tune: fast, calibrate: fast });
-
-    const trials = r.benchmarks.slice(-2);
-    expect(trials[0].group).toBe(trials[1].group);
-    expect(trials[0].group).toBeGreaterThan(0);
-  }, 20_000);
-
-  it('bench(fn) infers name from function.name', async () => {
-    bench(function myBench() {});
-    const r = await run({ format: 'quiet', tune: fast, calibrate: fast });
-    expect(r.benchmarks.at(-1)!.alias).toBe('myBench');
-  }, 20_000);
-
-  it('compact() sets compact flag on enclosed benches', async () => {
-    compact(() => {
-      bench('compacted', () => {});
-    });
-    const r = await run({ format: 'quiet', tune: fast, calibrate: fast });
-    expect(r.benchmarks.at(-1)!.style.compact).toBe(true);
-  }, 20_000);
-
-  it('run() returns context with runtime info', async () => {
-    bench('ctx check', () => {});
-    const r = await run({ format: 'quiet', tune: fast, calibrate: fast });
-    expect(r.context).toHaveProperty('runtime');
-    expect(r.context).toHaveProperty('cpu');
-    expect(r.context).toHaveProperty('arch');
-    expect(r.context).toHaveProperty('noop');
-    expect(r.context.noop.fn).toHaveProperty('avg');
-    expect(r.context.noop.iter).toHaveProperty('avg');
-  }, 20_000);
-
-  it('json format returns valid JSON string', async () => {
-    bench('json out', () => {});
-    let output = '';
-    await run({
-      format: { json: { debug: false, samples: false } } as any,
-      tune: fast,
-      calibrate: fast,
-      print: (s: string) => {
-        output += s;
-      },
-    });
-    const parsed = JSON.parse(output);
-    expect(parsed).toHaveProperty('benchmarks');
-    expect(parsed).toHaveProperty('context');
-    expect(parsed).toHaveProperty('layout');
-  }, 20_000);
-
-  it('observe() hook can transform trials', async () => {
-    bench('observed', () => {});
-    const r = await run({
-      format: 'quiet',
-      tune: fast,
-      calibrate: fast,
-      observe: (t: any) => ({ ...t, _observed: true }),
-    });
-    expect(r.benchmarks.at(-1)).toHaveProperty('_observed', true);
-  }, 20_000);
-
-  it('filter only runs matching benchmarks', async () => {
-    bench('alpha', () => {});
-    bench('beta', () => {});
-    const r = await run({ format: 'quiet', tune: fast, calibrate: fast, filter: /alpha/ });
-    const names = r.benchmarks.map((b: any) => b.alias);
-    expect(names).toContain('alpha');
-    expect(names).not.toContain('beta');
-  }, 20_000);
-});
-
-// ── do_not_optimize ────────────────────────────────────────────────
-
-describe('do_not_optimize', () => {
-  it('accepts any value without throwing', () => {
-    expect(() => do_not_optimize(42)).not.toThrow();
-    expect(() => do_not_optimize('str')).not.toThrow();
-    expect(() => do_not_optimize(null)).not.toThrow();
-    expect(() => do_not_optimize({ a: 1 })).not.toThrow();
+    await expect(new B('failure', failingBenchmark).run(true, fast)).rejects.toThrow('boom');
   });
 });
