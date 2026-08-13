@@ -22,7 +22,7 @@ export default defineConfig({
 })
 ```
 
-Chain `.gc('inner')` to force GC between samples to control for collection and measure its impact. Use `@tags` in the name string for filtering.
+Use `@tags` in the name string for filtering.
 
 ```ts
 // array-push.bench.ts
@@ -34,13 +34,13 @@ group('array @stress', () => {
     yield () => {
       for (let i = 0; i < 1000; i++) arr.push(i)
     }
-  }).gc('inner')
+  })
 })
 ```
 
 ### Run
 
-Each bench runs in an isolated worker process. CPU clock speed is measured before and after the run — if it drifted, Labs flags the result so it doesn't pollute comparisons. Adaptive sampling collects more samples until the confidence interval converges, or marks the bench `noisy` if it can't.
+Each bench runs in an isolated worker process. CPU clock speed is measured before and after the run and if it drifts, Labs flags the result so it doesn't pollute comparisons. Adaptive sampling collects more samples until the confidence interval converges, or marks the bench `noisy` if it can't. Each sample has garbage collection (GC) reset so previous runs do not pollute it and measures its impact.
 
 ```sh
 # Run all benches, save named after the current commit
@@ -217,7 +217,7 @@ group('my-group @mytag', () => {
       // measured code
     }
     // teardown
-  }).gc('inner')
+  })
 })
 ```
 
@@ -227,8 +227,8 @@ Tags are `@`-prefixed tokens in the `group` or `bench` name string. They are str
 
 ```ts
 group('relation-queries @relation', () => {
-  bench('ChildOf(parent)', function* () { ... }).gc('inner');
-  bench('wildcard @slow', function* () { ... }).gc('inner');
+  bench('ChildOf(parent)', function* () { ... });
+  bench('wildcard @slow', function* () { ... }).gc(false);
 });
 ```
 

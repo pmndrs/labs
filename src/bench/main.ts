@@ -22,7 +22,7 @@ export class B {
   _args: Record<string, any[]> = {};
   _name: string = '';
   _group: number = 0;
-  _gc: string | boolean = 'once';
+  _gc = true;
   flags: number = FLAGS;
   _highlight: string | false = false;
 
@@ -36,8 +36,8 @@ export class B {
     return ((this._name = name), this.highlight(color), this);
   }
 
-  gc(gc: string | boolean = 'once'): this {
-    if (![true, false, 'once', 'inner'].includes(gc as any)) throw new TypeError('invalid gc type');
+  gc(gc = true): this {
+    if ('boolean' !== typeof gc) throw new TypeError('expected gc to be a boolean');
     return ((this._gc = gc), this);
   }
 
@@ -129,9 +129,12 @@ export class B {
 
     const tune = {
       $counters,
-      inner_gc: 'inner' === this._gc,
-      gc: !this._gc ? false : undefined,
       ..._tune,
+      sample_gc: this._gc,
+      // A benchmark run always starts with a collection. Preserve custom GC
+      // implementations used by runtimes/tests, but do not allow `false` to
+      // disable the initial collection.
+      gc: 'function' === typeof _tune.gc ? _tune.gc : undefined,
 
       heap: await (async () => {
         if ((globalThis as any).Bun) {
@@ -318,7 +321,7 @@ export async function run(
   const cal = opts.calibrate ?? {};
   const noop = await measure(() => {}, cal);
   const _cpu = await measure(() => {}, { ...cal, batch_unroll: 1 });
-  const noop_inner_gc = await measure(() => {}, { ...cal, inner_gc: true });
+  const noop_sample_gc = await measure(() => {}, { ...cal, sample_gc: true });
   const noop_iter = await measure((state: any) => {
     for (const _ of state);
   }, cal);
@@ -337,7 +340,7 @@ export async function run(
     noop: {
       fn: noop,
       iter: noop_iter,
-      fn_gc: noop_inner_gc,
+      fn_gc: noop_sample_gc,
     },
   };
 
