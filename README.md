@@ -56,7 +56,7 @@ And get the pretty results.
 ```bash
 labs
 
-▶ relation-churn.bench.ts (tsx + v8 flags)
+▶ relation-churn.bench.ts
 clk: ~4.32 GHz
 cpu: Apple M4 Pro
 runtime: node 25.8.0 (arm64-darwin)

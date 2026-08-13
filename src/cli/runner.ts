@@ -103,7 +103,7 @@ function runBench(
   tagFilter?: string,
   resultFile?: string
 ): void {
-  console.log(`\n${BLUE}▶ ${label}${RESET} ${DIM}(tsx + v8 flags)${RESET}`);
+  console.log(`\n${BLUE}▶ ${label}${RESET}`);
   execFileSync(process.execPath, ['--import', TSX_LOADER, ...nodeFlags, WORKER], {
     stdio: 'inherit',
     env: {
