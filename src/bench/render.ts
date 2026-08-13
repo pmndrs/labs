@@ -157,11 +157,7 @@ export function renderMitata(
           l += _h(name) + ' ';
           const p75 = formatNs(r.stats!.p75).padStart(9);
           const bins = histogramFmt.bins(r.stats!, 21, 0.99);
-          const histogram = histogramFmt.ascii(
-            bins,
-            r.stats!.gc && r.stats!.heap ? 2 : !(r.stats!.gc || r.stats!.heap) ? 2 : 3,
-            { colors: opts.colors }
-          );
+          const histogram = histogramFmt.ascii(bins, 2, { colors: opts.colors });
 
           if (!opts.colors) l += avg + '/iter' + ' ' + p75 + ' ' + histogram[0];
           else
@@ -220,8 +216,9 @@ export function renderMitata(
             l += ' '.repeat(k_legend - 10);
             const gcm = formatNs(r.stats!.gc.min).padStart(9);
             const gcx = formatNs(r.stats!.gc.max).padStart(9);
+            const tail = formatNs(r.stats!.gc.avg).padStart(9);
 
-            if (!opts.colors) l += 'gc(' + gcm + ' … ' + gcx + ')';
+            if (!opts.colors) l += 'gc(' + gcm + ' … ' + gcx + ') ' + tail;
             else
               l +=
                 ansi.gray +
@@ -237,56 +234,28 @@ export function renderMitata(
                 gcx +
                 ansi.reset +
                 ansi.gray +
-                ')' +
+                ') ' +
+                ansi.reset +
+                ansi.blue +
+                tail +
                 ansi.reset;
 
-            if (r.stats!.heap) {
-              l += ' ';
-              const ha = formatBytes(r.stats!.heap.avg).padStart(9);
-              const hm = formatBytes(r.stats!.heap.min).padStart(9);
-              const hx = formatBytes(r.stats!.heap.max).padStart(9);
-
-              if (!opts.colors) l += ha + ' (' + hm + '…' + hx + ')';
-              else
-                l +=
-                  ansi.yellow +
-                  ha +
-                  ansi.reset +
-                  ansi.gray +
-                  ' (' +
-                  ansi.reset +
-                  ansi.yellow +
-                  hm +
-                  ansi.reset +
-                  ansi.gray +
-                  '…' +
-                  ansi.reset +
-                  ansi.yellow +
-                  hx +
-                  ansi.reset +
-                  ansi.gray +
-                  ')' +
-                  ansi.reset;
-            } else {
-              l += ' ';
-              const gca = formatNs(r.stats!.gc.avg).padStart(9);
-              if (!opts.colors) l += gca + ' ' + histogram[2];
-              else l += ansi.blue + gca + ansi.reset + ' ' + histogram[2];
-            }
-
             print(l);
-          } else if (r.stats!.heap) {
+          }
+
+          if (r.stats!.heap) {
+            l = '';
             prev_run_gap = true;
-            l = ' '.repeat(k_legend - 8);
+            l += ' '.repeat(k_legend - 12);
             const ha = formatBytes(r.stats!.heap.avg).padStart(9);
             const hm = formatBytes(r.stats!.heap.min).padStart(9);
             const hx = formatBytes(r.stats!.heap.max).padStart(9);
 
-            if (!opts.colors) l += '(' + hm + ' … ' + hx + ') ' + ha + ' ' + histogram[2];
+            if (!opts.colors) l += 'heap(' + hm + ' … ' + hx + ') ' + ha + '/iter';
             else
               l +=
                 ansi.gray +
-                '(' +
+                'heap(' +
                 ansi.reset +
                 ansi.yellow +
                 hm +
@@ -303,8 +272,9 @@ export function renderMitata(
                 ansi.yellow +
                 ha +
                 ansi.reset +
-                ' ' +
-                histogram[2];
+                ansi.gray +
+                '/iter' +
+                ansi.reset;
 
             print(l);
           }

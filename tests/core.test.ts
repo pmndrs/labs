@@ -165,6 +165,61 @@ describe('adaptive sampling', () => {
   }, 20_000);
 });
 
+// ── heap self-cost calibration ─────────────────────────────────────
+
+describe('heap self-cost calibration', () => {
+  async function nodeHeap() {
+    const { getHeapStatistics } = await import('node:v8');
+    getHeapStatistics();
+    return () => {
+      const m = getHeapStatistics();
+      return m.used_heap_size + m.malloced_memory;
+    };
+  }
+
+  it('emits calibration into the generated loop when heap is enabled', async () => {
+    const s = await measure(() => {}, { ...fast, heap: await nodeHeap() });
+    expect(s.debug).toContain('_hself');
+    expect(s.heap).toBeDefined();
+    expect(s.heap!.min).toBeGreaterThanOrEqual(0);
+  }, 20_000);
+
+  it('does not emit calibration without heap tracking', async () => {
+    const s = await measure(() => {}, fast);
+    expect(s.debug).not.toContain('_hself');
+  }, 20_000);
+
+  it('survives gc: false with heap enabled (calibration emits no $gc call)', async () => {
+    const s = await measure(() => {}, { ...fast, gc: false, heap: await nodeHeap() });
+    expect(s.debug).not.toContain('$gc()');
+    expect(s.heap!.min).toBeGreaterThanOrEqual(0);
+  }, 20_000);
+
+  it('removes at least the bare read self-cost from each sample', async () => {
+    const heap = await nodeHeap();
+    let self = Infinity;
+    for (let i = 0; i < 10; i++) {
+      const a = heap();
+      const b = heap();
+      const d = b - a;
+      if (0 <= d && d < self) self = d;
+    }
+    expect(Number.isFinite(self)).toBe(true);
+    expect(self).toBeGreaterThan(0);
+
+    // Allocation-free fn slow enough to stay unbatched, so heap.min is a raw
+    // per-sample delta. Uncalibrated it would read >= `self`; calibrated it
+    // must land below (residual interpreter boxing may keep it above zero).
+    const spin = () => {
+      const end = performance.now() + 0.1;
+      while (performance.now() < end);
+    };
+    const s = await measure(spin, { ...fast, heap });
+    expect(s.heap!.min).toBeGreaterThanOrEqual(0);
+    expect(s.heap!.min).toBeLessThan(self);
+  }, 20_000);
+});
+
 // ── B class builder ────────────────────────────────────────────────
 
 describe('B class', () => {
