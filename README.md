@@ -273,20 +273,20 @@ export default defineConfig({
 })
 ```
 
-| Option       | Default                                     | Description                                                                                                        |
+| Option | Default | Description |
 | ------------ | ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ | --------- | ------------------------------------------------------------------------------------- |
-| `benchDir`   | (required)                                  | Directory to search, relative to config file                                                                       |
-| `benchMatch` | `**/*.bench.ts`                             | Glob pattern for discovery                                                                                         |
-| `nodeFlags`  | `['--allow-natives-syntax', '--expose-gc']` | Node flags per worker process                                                                                      |
-| `resultsDir` | `.labs`                                     | Directory for saved results, relative to config                                                                    |
-| `adaptive`   | `true`                                      | Adaptive sampling mode: `true` uses default CI threshold, `false` disables, number sets CI threshold (e.g. `0.01`) |
-| `maxCpuTime` | `5`                                         | Max CPU budget in seconds for adaptive sampling; benches that don't converge or reach `minSamples` are `noisy`     |
-| `minCpuTime` | `0.642`                                     | Minimum CPU time budget per benchmark in seconds; set to raise/lower runtime budget                                |
-| `minSamples` | `20`                                        | Minimum sample count per benchmark; set to increase/decrease sample floor                                          |
-| `maxSamples` | `1e9`                                       | Maximum sample cap per benchmark to prevent pathological long runs                                                 |
-| `alpha`      | `0.05`                                      | Mann-Whitney U significance level                                                                                  |
-| `minDelta`   | `0.05`                                      | Floor for the noise-adjusted ±Δ threshold; the effective threshold per bench is `max(minDelta, 3 × relative MAD)`  |
-| `minEffect`  | `0.474`                                     | Minimum                                                                                                            | Cliff's d | to flag a verdict; filters noise on high-variance benches where distributions overlap |
+| `benchDir` | (required) | Directory to search, relative to config file |
+| `benchMatch` | `**/*.bench.ts` | Glob pattern for discovery |
+| `nodeFlags` | `['--allow-natives-syntax', '--expose-gc']` | Node flags per worker process |
+| `resultsDir` | `.labs` | Directory for saved results, relative to config |
+| `adaptive` | `true` | Adaptive sampling mode: `true` uses default CI threshold, `false` disables, number sets CI threshold (e.g. `0.01`) |
+| `maxCpuTime` | `5` | Max CPU budget in seconds for adaptive sampling; benches that don't converge or reach `minSamples` are `noisy` |
+| `minCpuTime` | `0.642` | Minimum CPU time budget per benchmark in seconds; set to raise/lower runtime budget |
+| `minSamples` | `20` | Minimum sample count per benchmark; set to increase/decrease sample floor |
+| `maxSamples` | `1e9` | Maximum sample cap per benchmark to prevent pathological long runs |
+| `alpha` | `0.05` | Mann-Whitney U significance level |
+| `minDelta` | `0.05` | Floor for the noise-adjusted ±Δ threshold; the effective threshold per bench is `max(minDelta, 3 × relative MAD)` |
+| `minEffect` | `0.474` | Minimum | Cliff's d | to flag a verdict; filters noise on high-variance benches where distributions overlap |
 
 Sampling behavior:
 
