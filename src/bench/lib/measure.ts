@@ -151,6 +151,26 @@ export async function benchFn(fn: (...args: any[]) => any, opts: any = {}): Prom
 
     ${!opts.gc ? '' : `$gc();`}
 
+    ${
+      !opts.heap
+        ? ''
+        : `
+      // $heap() itself allocates (e.g. getHeapStatistics materializes a stats
+      // object), and h0's allocation is still in the heap when the closing
+      // read happens - biasing every sample by one self-allocation. Calibrate
+      // that cost as the min of back-to-back read deltas: a floor, so
+      // subtracting it can never overshoot into real allocations.
+      let _hself = Infinity;
+      for (let _i = 0; _i < 10; _i++) {
+        const _c1 = $heap();
+        const _c2 = $heap();
+        const _d = _c2 - _c1;
+        if (0 <= _d && _d < _hself) _hself = _d;
+      }
+      if (!Number.isFinite(_hself)) _hself = 0;
+    `
+    }
+
     for (; _ < ${opts.max_samples}; _++) {
       ${!opts.target_rel_ci ? `if (_ >= ${opts.min_samples} && t >= ${opts.min_cpu_time}) break;` : ''}
 
@@ -256,7 +276,7 @@ export async function benchFn(fn: (...args: any[]) => any, opts: any = {}): Prom
           : `
         heap: {
           const t0 = $now();
-          const h1 = ($heap() - h0) ${!batch ? '' : `/ ${opts.batch_samples}`}; t += $now() - t0;
+          const h1 = ($heap() - h0 - _hself) ${!batch ? '' : `/ ${opts.batch_samples}`}; t += $now() - t0;
 
           if (0 <= h1) {
             heap._++;
