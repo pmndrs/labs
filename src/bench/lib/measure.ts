@@ -79,7 +79,7 @@ export async function benchFn(fn: (...args: any[]) => any, opts: any = {}): Prom
   let batch = false;
   const params: string[] = Object.keys(opts.params);
 
-  warmup: {
+  {
     const $p = Array.from({ length: params.length }, () => 0);
 
     for (let o = 0; o < params.length; o++) {
@@ -389,7 +389,7 @@ export async function benchIter(iter: (...args: any[]) => any, opts: any = {}): 
   const gen: Generator = (function* () {
     let batch = false;
 
-    warmup: {
+    {
       const t0 = now();
       yield void 0;
       const t1 = now();
