@@ -40,7 +40,7 @@ group('array @stress', () => {
 
 ### Run
 
-Each bench runs in an isolated worker process. CPU clock speed is measured before and after the run and if it drifts, Labs flags the result so it doesn't pollute comparisons. Adaptive sampling collects more samples until the confidence interval converges, or marks the bench `noisy` if it can't. Each sample has garbage collection (GC) reset so previous runs do not pollute it and measures its impact.
+Each bench runs in an isolated worker process. CPU clock speed is measured before and after the run and if it drifts, Labs flags the result so it doesn't pollute comparisons. Adaptive sampling collects more samples until the confidence interval converges, or marks the bench `noisy` if it can't. Each sample has garbage collection (GC) reset so previous runs do not pollute it while measuring its impact.
 
 ```sh
 # Run all benches, save named after the current commit
@@ -67,8 +67,14 @@ benchmark                   avg (min … max) p75 / p99    (min … top 1%)
 ------------------------------------------- -------------------------------
 ■ big test                    17.80 ms/iter  18.02 ms      ▃▃██▃ ▃ ▃▆▃
                       (17.25 ms … 19.10 ms)  18.45 ms ▄███████████████▁▄▄▄▄
-                  gc(  1.09 ms …   3.12 ms)  47.63 mb ( 41.19 mb… 50.10 mb)
+                  gc(  1.09 ms …   3.12 ms)   1.58 ms
+                heap( 41.19 mb …  50.10 mb)  47.63 mb/iter
 ```
+
+- `avg/iter p75`: Average time per iteration and p75, this is the most useful top metric.
+- `(min … max) p99`: Fastest, slowest, and tail time that 99% of samples finish within. This tells you the distrubtion which is visualized by the histogram.
+- `gc(min … max) avg`: Time spent collecting after each sample. Higher times usually mean the bench keeps more objects alive.
+- `heap(min … max) avg/iter`: Bytes allocated per iteration before collection. Higher values mean more garbage for the runtime to clean up.
 
 ### Compare
 
