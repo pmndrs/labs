@@ -161,7 +161,7 @@ export async function runCLI(args: string[]) {
   try {
     config = await loadConfig(configPath);
   } catch (err) {
-    error(`Failed to load config: ${configPath}\n${err}`);
+    error(`Failed to load config: ${configPath}\n${String(err)}`);
   }
 
   const labsDir = getLabsDir(dirname(configPath), config.resultsDir);
