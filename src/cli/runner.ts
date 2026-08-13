@@ -415,7 +415,7 @@ export async function runCLI(args: string[]) {
         alias: trial.alias,
         group: trial.group,
         baseline: trial.baseline,
-        gcMode: trial.gcMode ?? 'once',
+        gcMode: trial.gcMode ?? true,
         groupName: trial.groupName,
         kind: trial.kind ?? 'static',
         style: trial.style ?? { compact: false, highlight: false },

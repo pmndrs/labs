@@ -24,8 +24,8 @@ export const tuning = {
   warmup_threshold: 500_000,
   /** CPU time rescale factor when heap tracking is enabled. */
   cpu_time_rescale_heap: 1.1,
-  /** CPU time rescale factor when inner GC is enabled. */
-  cpu_time_rescale_inner_gc: 2,
+  /** CPU time rescale factor when per-sample GC is enabled. */
+  cpu_time_rescale_sample_gc: 2,
 } as const;
 
 /**
@@ -39,7 +39,7 @@ export function defaults(opts: any): void {
   opts.heap ??= null;
   opts.params ??= {};
   opts.manual ??= false;
-  opts.inner_gc ??= false;
+  opts.sample_gc ??= false;
   opts.$counters ??= false;
   opts.concurrency ??= tuning.concurrency;
   opts.min_samples ??= tuning.min_samples;
@@ -59,5 +59,5 @@ export function defaults(opts: any): void {
   }
 
   if (opts.heap) opts.min_cpu_time *= tuning.cpu_time_rescale_heap;
-  if (opts.gc && opts.inner_gc) opts.min_cpu_time *= tuning.cpu_time_rescale_inner_gc;
+  if (opts.gc && opts.sample_gc) opts.min_cpu_time *= tuning.cpu_time_rescale_sample_gc;
 }

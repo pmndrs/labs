@@ -50,7 +50,9 @@ describe('measure', () => {
     const s = await measure(function* () {
       yield {
         bench: () => 1 + 1,
-        after: () => { afterCount++; },
+        after: () => {
+          afterCount++;
+        },
       };
     }, fast);
     expect(s.kind).toBe('yield');
@@ -63,7 +65,9 @@ describe('measure', () => {
     const s = await measure(async function* () {
       yield {
         bench: () => 1 + 1,
-        after: async () => { afterCount++; },
+        after: async () => {
+          afterCount++;
+        },
       };
     }, fast);
     expect(s.kind).toBe('yield');
@@ -76,7 +80,9 @@ describe('measure', () => {
     const s = await measure(function* () {
       yield {
         bench: () => arr.sort(),
-        after: () => { arr = [3, 1, 2]; },
+        after: () => {
+          arr = [3, 1, 2];
+        },
       };
     }, fast);
     assertStats(s);
@@ -184,8 +190,45 @@ describe('B class', () => {
     expect([...b._names()]).toEqual(['d 1', 'd 3', 'd 5']);
   });
 
-  it('gc() rejects invalid values', () => {
-    expect(() => new B('x', () => {}).gc('bad' as any)).toThrow('invalid gc type');
+  it('enables per-sample GC by default', () => {
+    expect(new B('x', () => {})._gc).toBe(true);
+  });
+
+  it('gc() only accepts booleans', () => {
+    expect(() => new B('x', () => {}).gc('sample' as any)).toThrow('expected gc to be a boolean');
+  });
+
+  it('always collects before a run and optionally between samples', async () => {
+    let gcCalls = 0;
+    const gc = () => gcCalls++;
+    const tune = {
+      gc,
+      min_cpu_time: 0,
+      min_samples: 1,
+      max_samples: 1,
+      adaptive: false,
+    } as const;
+
+    await new B('sample gc', () => {}).run(true, tune);
+    expect(gcCalls).toBeGreaterThan(1);
+
+    gcCalls = 0;
+    await new B('run gc', () => {}).gc(false).run(true, tune);
+    expect(gcCalls).toBe(1);
+  });
+
+  it('reports per-sample GC for iterator benchmarks', async () => {
+    const trial = await new B('iterator gc', (state: any) => {
+      for (const _ of state);
+    }).run(true, {
+      gc: () => {},
+      min_cpu_time: 0,
+      min_samples: 1,
+      max_samples: 1,
+      adaptive: false,
+    });
+
+    expect(trial.runs[0].stats?.gc).toBeDefined();
   });
 
   it('highlight() rejects invalid colors', () => {
@@ -196,7 +239,7 @@ describe('B class', () => {
     const b = new B('x', () => {});
     expect(b.compact()).toBe(b);
     expect(b.baseline()).toBe(b);
-    expect(b.gc('once')).toBe(b);
+    expect(b.gc(false)).toBe(b);
     expect(b.args('n', [1])).toBe(b);
   });
 
