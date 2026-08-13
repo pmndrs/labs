@@ -1,11 +1,29 @@
-import { defineBuildConfig } from 'unbuild';
+import { fileURLToPath } from 'node:url';
 
-export default defineBuildConfig({
-  entries: ['./src/index', './src/cli/cli', './src/worker'],
-  declaration: true,
+import { defineConfig } from 'tsdown';
+
+const cwd = fileURLToPath(new URL('..', import.meta.url));
+
+export default defineConfig({
+  cwd,
+  entry: {
+    index: './src/index.ts',
+    'cli/cli': './src/cli/cli.ts',
+    worker: './src/worker.ts',
+  },
+  format: ['esm', 'cjs'],
+  outExtensions({ format }) {
+    return {
+      js: format === 'es' ? '.mjs' : '.cjs',
+      dts: format === 'es' ? '.d.ts' : '.d.cts',
+    };
+  },
+  tsconfig: './tsconfig.build.json',
+  dts: {
+    generator: 'tsgo',
+  },
   clean: true,
-  externals: ['@mitata/counters', 'bun:jsc'],
-  rollup: {
-    emitCJS: true,
+  deps: {
+    neverBundle: ['@mitata/counters', 'bun:jsc'],
   },
 });
