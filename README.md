@@ -220,12 +220,17 @@ group('my-group @mytag', () => {
   bench('my-bench', function* () {
     // setup
     yield () => {
-      // measured code
+      const result = /* measured computation */ 1 + 1
+      return result
     }
     // teardown
   })
 })
 ```
+
+## Dead Code Elimination
+
+Engines may remove pure computations whose results are never used, making a benchmark appear impossibly fast. When benchmarking pure work, return its result; Labs consumes non-`undefined` returns from automatically timed function benchmarks inside the timed region. The returned value must depend on the measured work—no return is needed when the work already has observable side effects.
 
 ## Tags
 
