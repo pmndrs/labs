@@ -80,7 +80,7 @@ export function printReportBox(
 
 export function replayReport(result: SavedResult, config: LabsConfig): void {
   for (const file of result.files) {
-    console.log(`\n${BLUE}▶ ${file.file}${RESET} ${DIM}(tsx + v8 flags)${RESET}`);
+    console.log(`\n${BLUE}▶ ${file.file}${RESET}`);
     renderMitata(
       replayContext(file, result),
       {
