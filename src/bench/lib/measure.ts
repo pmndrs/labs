@@ -1,5 +1,5 @@
 import type { MeasureOptions, Stats } from '../types.ts';
-import { AsyncFunction, GeneratorFunction, kind, now } from './runtime.ts';
+import { AsyncFunction, do_not_optimize, GeneratorFunction, kind, now } from './runtime.ts';
 import { defaults } from './constants.ts';
 
 /**
@@ -75,6 +75,7 @@ export async function benchGenerator(gen: (...args: any[]) => any, opts: any = {
  */
 export async function benchFn(fn: (...args: any[]) => any, opts: any = {}): Promise<Stats> {
   defaults(opts);
+  const consume = opts.$consume ?? do_not_optimize;
   let async = false;
   let batch = false;
   const params: string[] = Object.keys(opts.params);
@@ -88,10 +89,14 @@ export async function benchFn(fn: (...args: any[]) => any, opts: any = {}): Prom
 
     const t0 = now();
     const r = fn(...$p);
-    let t1 = now();
+    let t1: number;
 
     if ((async = r instanceof Promise)) {
-      await r;
+      const value = await r;
+      if (!opts.manual && value !== void 0) consume(value);
+      t1 = now();
+    } else {
+      if (!opts.manual && r !== void 0) consume(r);
       t1 = now();
     }
 
@@ -104,7 +109,8 @@ export async function benchFn(fn: (...args: any[]) => any, opts: any = {}): Prom
         }
 
         const t0 = now();
-        await fn(...$p);
+        const value = await fn(...$p);
+        if (!opts.manual && value !== void 0) consume(value);
         const t1 = now();
         if (opts.after) await opts.after();
         if ((batch = t1 - t0 <= opts.batch_threshold)) break;
@@ -117,6 +123,41 @@ export async function benchFn(fn: (...args: any[]) => any, opts: any = {}): Prom
     opts.concurrency = 1;
   }
 
+  const call = (concurrency: number, unroll?: number): string => {
+    if (!params.length) return '$fn()';
+
+    const args = params.map((_, parameter) => {
+      if (unroll === void 0) return `param_${parameter}_${concurrency}`;
+      return `param_${parameter}_${concurrency}[${unroll === 0 ? '' : `${unroll} + `}param_offset]`;
+    });
+    return `$fn(${args.join(', ')})`;
+  };
+
+  const calls = (unroll?: number): string => {
+    if (opts.manual) return `t2 += ${async ? 'await ' : ''}${call(0, unroll)};`;
+
+    if (async && opts.concurrency > 1) {
+      return `
+        {
+          const _result = await Promise.all([
+            ${Array.from({ length: opts.concurrency }, (_, concurrency) => `${call(concurrency, unroll)},`).join('\n')}
+          ]);
+          $consume(_result);
+        }
+      `;
+    }
+
+    return Array.from(
+      { length: opts.concurrency },
+      (_, concurrency) => `
+        {
+          const _result = ${async ? 'await ' : ''}${call(concurrency, unroll)};
+          if (void 0 !== _result) $consume(_result);
+        }
+      `
+    ).join('\n');
+  };
+
   const loop: (...args: any[]) => Promise<any> = new AsyncFunction(
     '$fn',
     '$gc',
@@ -124,6 +165,7 @@ export async function benchFn(fn: (...args: any[]) => any, opts: any = {}): Prom
     '$heap',
     '$params',
     '$counters',
+    '$consume',
     '$after',
     `
     ${!opts.$counters ? '' : 'let _hc = false;'}
@@ -226,43 +268,13 @@ export async function benchFn(fn: (...args: any[]) => any, opts: any = {}): Prom
       ${
         !batch
           ? `
-        ${!async ? '' : 1 >= opts.concurrency ? '' : 'await Promise.all(['}
-          ${Array.from({ length: opts.concurrency }, (_, c) =>
-            `
-            ${!opts.manual ? '' : 't2 +='} ${!async ? '' : 1 < opts.concurrency ? '' : 'await'} ${(!params.length
-              ? `
-              $fn()
-            `
-              : `
-              $fn(${Array.from({ length: params.length }, (_, o) => `param_${o}_${c}`).join(', ')})
-            `
-            ).trim()}${!async ? ';' : 1 < opts.concurrency ? ',' : ';'}
-          `.trim()
-          ).join('\n')}
-        ${!async ? '' : 1 >= opts.concurrency ? '' : `]);`}
+        ${calls()}
       `
           : `
         for (let o = 0; o < ${(opts.batch_samples / opts.batch_unroll) | 0}; o++) {
           ${!params.length ? '' : `const param_offset = o * ${opts.batch_unroll};`}
 
-          ${Array.from({ length: opts.batch_unroll }, (_, u) =>
-            `
-            ${!async ? '' : 1 >= opts.concurrency ? '' : 'await Promise.all(['}
-              ${Array.from({ length: opts.concurrency }, (_, c) =>
-                `
-                ${!async ? '' : 1 < opts.concurrency ? '' : 'await'} ${(!params.length
-                  ? `
-                  $fn()
-                `
-                  : `
-                  $fn(${Array.from({ length: params.length }, (_, o) => `param_${o}_${c}[${u === 0 ? '' : `${u} + `}param_offset]`).join(', ')})
-                `
-                ).trim()}${!async ? ';' : 1 < opts.concurrency ? ',' : ';'}
-              `.trim()
-              ).join(' ')}
-            ${!async ? '' : 1 >= opts.concurrency ? '' : ']);'}
-          `.trim()
-          ).join('\n')}
+          ${Array.from({ length: opts.batch_unroll }, (_, unroll) => calls(unroll)).join('\n')}
         }
       `
       }
@@ -352,7 +364,16 @@ export async function benchFn(fn: (...args: any[]) => any, opts: any = {}): Prom
   return {
     kind: 'fn' as const,
     debug: loop.toString(),
-    ...(await loop(fn, opts.gc, opts.now, opts.heap, opts.params, opts.$counters, opts.after)),
+    ...(await loop(
+      fn,
+      opts.gc,
+      opts.now,
+      opts.heap,
+      opts.params,
+      opts.$counters,
+      consume,
+      opts.after
+    )),
   };
 }
 

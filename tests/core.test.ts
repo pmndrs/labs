@@ -64,6 +64,42 @@ describe('measuring work', () => {
 
     expect(stats.noisy).toBe(true);
   });
+
+  it('protects returned benchmark results from dead-code elimination', async () => {
+    let result = 0;
+    const consumed: number[] = [];
+    const tune = {
+      ...fast,
+      batch_threshold: 0,
+      $consume: (value: number) => consumed.push(value),
+    } as any;
+
+    await measure(function* () {
+      yield () => ++result;
+    }, tune);
+
+    expect(consumed.at(-1)).toBe(result);
+
+    const consumedResults = consumed.length;
+    await measure(function* () {
+      yield () => {
+        result++;
+      };
+    }, tune);
+
+    expect(consumed).toHaveLength(consumedResults);
+  });
+
+  it('supports async manual-timing benchmarks', async () => {
+    const stats = await measure(
+      function* () {
+        yield { budget: 'manual', manual: async () => 1 };
+      },
+      { ...fast, min_samples: 2, max_samples: 3 }
+    );
+
+    expect(stats.samples).toEqual([1, 1]);
+  });
 });
 
 describe('composing a benchmark suite', () => {
