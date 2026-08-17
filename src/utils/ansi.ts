@@ -26,7 +26,7 @@ export const WHITE = '\x1b[37m';
 export const BLACK = '\x1b[30m';
 
 /**
- * 256-color light gray — used by the CLI comparison / table layer.
+ * 256-color light gray used by the CLI comparison and table layer.
  * Distinct from {@link DARK_GRAY} which is the standard bright-black.
  */
 export const GRAY = '\x1b[38;5;248m';

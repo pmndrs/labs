@@ -1,6 +1,6 @@
 /**
  * Non-parametric benchmark sample comparison.
- * Mann-Whitney U test — robust to GC-induced outliers and
+ * Mann-Whitney U test that is robust to GC-induced outliers and
  * non-normal distributions. No external dependencies.
  */
 
@@ -11,7 +11,7 @@ export function median(a: number[]): number {
   return s.length % 2 === 1 ? s[mid] : (s[mid - 1] + s[mid]) / 2;
 }
 
-/** Median absolute deviation — robust spread metric paired with median. */
+/** Median absolute deviation, a robust spread metric paired with median. */
 export function mad(a: number[]): number {
   if (a.length < 2) return 0;
   const m = median(a);
@@ -73,7 +73,7 @@ function erfc(x: number): number {
 }
 
 /**
- * Cliff's delta — non-parametric effect size measuring how separated two
+ * Cliff's delta is a non-parametric effect size measuring how separated two
  * distributions are. Returns a value in [-1, +1]: 0 = perfect overlap,
  * ±1 = no overlap. Positive when `a` tends to be larger than `b`.
  *
@@ -133,9 +133,9 @@ export interface ClassifyOptions {
 
 /**
  * Three-gate classification:
- *   1. p ≤ alpha                    — statistical significance (Mann-Whitney U)
- *   2. |Δp50| ≥ effectiveMinDelta   — practical magnitude, noise-adjusted
- *   3. |cliff's d| ≥ minEffect      — effect size ("are the distributions actually separated?")
+ *   1. p ≤ alpha: statistical significance (Mann-Whitney U)
+ *   2. |Δp50| ≥ effectiveMinDelta: practical magnitude, noise-adjusted
+ *   3. |cliff's d| ≥ minEffect: effect size ("are the distributions actually separated?")
  * All three must hold to declare faster or slower.
  */
 export function classify(

@@ -131,7 +131,7 @@ export class B {
       $counters,
       ..._tune,
       sample_gc: this._gc,
-      // Always request initial collection; custom GC hooks remain supported.
+      // Always request initial collection. Custom GC hooks remain supported.
       gc: 'function' === typeof _tune.gc ? _tune.gc : undefined,
 
       heap: await (async () => {

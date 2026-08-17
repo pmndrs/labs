@@ -226,7 +226,7 @@ export function listResults(labsDir: string): SavedResult[] {
 const SHA_PREFIX_RE = /^[0-9a-f]{4,40}$/;
 
 /**
- * Resolve a user-supplied ref to a saved result name. Exact names win;
+ * Resolve a user-supplied ref to a saved result name. Exact names win.
  * otherwise a hex string of ≥4 chars is treated as a commit sha prefix.
  * When one commit has several runs, the most recent one is returned.
  */

@@ -15,7 +15,7 @@ export interface LabsConfig {
   maxSamples?: number;
   /**
    * Adaptive sampling mode. `true` uses the default CI threshold (2.5%). A number sets a custom
-   * threshold (e.g. `0.01` for 1% — stricter, more samples). `false` uses fixed
+   * threshold (e.g. `0.01` for a stricter 1%). `false` uses fixed
    * minCpuTime + minSamples stopping. @default true
    */
   adaptive?: boolean | number;

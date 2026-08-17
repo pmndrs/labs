@@ -86,7 +86,7 @@ export interface RunOptions {
   tune?: MeasureOptions;
   calibrate?: MeasureOptions;
   format?: string | Record<string, any>;
-  /** Executes one registered trial; the default runs it in-process. */
+  /** Executes one registered trial. The default runs it in-process. */
   run_trial?: (trial: any, index: number) => Trial | Promise<Trial>;
 }
 

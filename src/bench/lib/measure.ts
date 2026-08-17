@@ -377,7 +377,7 @@ export async function benchFn(fn: (...args: any[]) => any, opts: any = {}): Prom
 /**
  * Benchmark engine for iterator-style benchmarks.
  *
- * The caller receives an iterable context; each `for..of` / `for await..of`
+ * The caller receives an iterable context. Each `for..of` / `for await..of`
  * iteration is one timed sample.  Internally a {@link GeneratorFunction} loop
  * is code-generated with the same adaptive-stopping and batching logic as
  * {@link benchFn}.
