@@ -15,8 +15,8 @@ export interface LabsConfig {
   maxSamples?: number;
   /**
    * Adaptive sampling mode. `true` uses the default CI threshold (2.5%). A number sets a custom
-   * threshold (e.g. `0.01` for 1% — stricter, more samples). `false` disables adaptive sampling,
-   * reverting to fixed minCpuTime + minSamples stopping. @default true
+   * threshold (e.g. `0.01` for 1% — stricter, more samples). `false` uses fixed
+   * minCpuTime + minSamples stopping. @default true
    */
   adaptive?: boolean | number;
   /** Maximum CPU time budget in seconds for adaptive sampling. If hit before convergence, the benchmark is flagged `noisy`. @default 5 */
@@ -28,11 +28,8 @@ export interface LabsConfig {
   /** Minimum |Cliff's d| required to flag a verdict. Filters noise on high-variance benches where distributions overlap despite a median shift. @default 0.474 */
   minEffect: number;
   /**
-   * Run each bench in its own fresh worker process. Prevents order-dependent
-   * contamination between benches in a file (shared inline caches, heap
-   * layout, GC history — measured up to 2.4× skew). `false` reverts to one
-   * process per file, for suites that rely on shared in-process state or have
-   * expensive top-level setup. @default true
+   * Whether each bench runs in a fresh worker process. Disable for suites that
+   * require shared process state or have expensive module setup. @default true
    */
   isolate?: boolean;
 }

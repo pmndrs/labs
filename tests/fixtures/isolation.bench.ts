@@ -1,8 +1,6 @@
 import { bench, group } from '../../src/index.ts';
 
-// Module state acts as a contamination detector: in a shared process the
-// polluter's writes are visible to the victim; in per-bench isolation each
-// bench imports this module fresh and the flag is always false.
+// The victim observes this state only when both benches share a process.
 let polluted = false;
 
 group('isolation', () => {

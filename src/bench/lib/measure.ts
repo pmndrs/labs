@@ -197,11 +197,8 @@ export async function benchFn(fn: (...args: any[]) => any, opts: any = {}): Prom
       !opts.heap
         ? ''
         : `
-      // $heap() itself allocates (e.g. getHeapStatistics materializes a stats
-      // object), and h0's allocation is still in the heap when the closing
-      // read happens - biasing every sample by one self-allocation. Calibrate
-      // that cost as the min of back-to-back read deltas: a floor, so
-      // subtracting it can never overshoot into real allocations.
+      // Heap reads allocate, so subtract the minimum back-to-back read delta
+      // as the measurement's self-allocation floor.
       let _hself = Infinity;
       for (let _i = 0; _i < 10; _i++) {
         const _c1 = $heap();

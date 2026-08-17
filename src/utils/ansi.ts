@@ -51,7 +51,7 @@ export const COLOR_NAMES: readonly string[] = [
 
 /**
  * Lowercase ANSI code map used by the core benchmark output formatters.
- * `gray` maps to bright-black (`\x1b[90m`), matching the original mitata palette.
+ * `gray` maps to bright-black (`\x1b[90m`).
  */
 export const ansi: Record<string, string> = {
   bold: BOLD,
