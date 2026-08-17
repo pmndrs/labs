@@ -40,7 +40,7 @@ group('array @stress', () => {
 
 ### Run
 
-Each bench runs in an isolated worker process. CPU clock speed is measured before and after the run and if it drifts, Labs flags the result so it doesn't pollute comparisons. Adaptive sampling collects more samples until the confidence interval converges, or marks the bench `noisy` if it can't. Each sample has garbage collection (GC) reset so previous runs do not pollute it while measuring its impact.
+Run your benchmarks with the `bench` command.
 
 ```sh
 # Run all benches, save named after the current commit
@@ -71,10 +71,24 @@ benchmark                   avg (min … max) p75 / p99    (min … top 1%)
                 heap( 41.19 mb …  50.10 mb)  47.63 mb/iter
 ```
 
+<details>
+<summary>How to read the results</summary>
+
 - `avg/iter p75`: Average time per iteration and p75, this is the most useful top metric.
-- `(min … max) p99`: Fastest, slowest, and tail time that 99% of samples finish within. This tells you the distrubtion which is visualized by the histogram.
+- `(min … max) p99`: Fastest, slowest, and tail time that 99% of samples finish within. This shows the distribution visualized by the histogram.
 - `gc(min … max) avg`: Time spent collecting after each sample. Higher times usually mean the bench keeps more objects alive.
 - `heap(min … max) avg/iter`: Bytes allocated per iteration before collection. Higher values mean more garbage for the runtime to clean up.
+
+</details>
+
+#### Guarantees
+
+Labs promises to give results you can trust. To do this we make a number of guarantees when running benches.
+
+- Each bench runs in its own isolated worker process, preventing benches in the same file from contaminating each other's JIT state, heap layout, or GC history. Reordering benches can otherwise skew results by 2× or more. Opt out with `isolate: false` in the config or `--no-isolate` in the CLI.
+- CPU clock speed is measured before and after the run. If it drifts, Labs flags the result so it doesn't pollute comparisons.
+- Adaptive sampling continues until the confidence interval converges, or marks the bench `noisy` if it can't. This usually means the bench contains some random element and is not deterministic.
+- Each sample starts with a garbage collection (GC) reset so previous samples don't affect it.
 
 ### Compare
 
@@ -138,6 +152,7 @@ pnpm bench --baseline                   # save and set as baseline
 pnpm bench -b                           # shorthand for --baseline
 pnpm bench -n "v1.2.0" -b              # save with name and set as baseline
 pnpm bench --compare                    # save, then compare vs baseline
+pnpm bench --no-isolate                 # share one process per file (skip per-bench isolation)
 pnpm bench -c                           # shorthand for --compare
 pnpm bench --last                       # rerun previous selection, save
 ```
@@ -292,6 +307,7 @@ export default defineConfig({
 | `alpha` | `0.05` | Mann-Whitney U significance level |
 | `minDelta` | `0.05` | Floor for the noise-adjusted ±Δ threshold; the effective threshold per bench is `max(minDelta, 3 × relative MAD)` |
 | `minEffect` | `0.474` | Minimum | Cliff's d | to flag a verdict; filters noise on high-variance benches where distributions overlap |
+| `isolate` | `true` | Run each bench in its own fresh worker process so benches can't contaminate each other's JIT/heap state (order-dependent results); `false` shares one process per file |
 
 Sampling behavior:
 

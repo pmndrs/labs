@@ -27,6 +27,14 @@ export interface LabsConfig {
   minDelta: number;
   /** Minimum |Cliff's d| required to flag a verdict. Filters noise on high-variance benches where distributions overlap despite a median shift. @default 0.474 */
   minEffect: number;
+  /**
+   * Run each bench in its own fresh worker process. Prevents order-dependent
+   * contamination between benches in a file (shared inline caches, heap
+   * layout, GC history — measured up to 2.4× skew). `false` reverts to one
+   * process per file, for suites that rely on shared in-process state or have
+   * expensive top-level setup. @default true
+   */
+  isolate?: boolean;
 }
 
 export function defineConfig(config: Partial<LabsConfig> & Pick<LabsConfig, 'benchDir'>): LabsConfig {
@@ -41,6 +49,7 @@ export function defineConfig(config: Partial<LabsConfig> & Pick<LabsConfig, 'ben
     alpha: 0.05,
     minDelta: 0.05,
     minEffect: 0.474,
+    isolate: true,
     ...config,
   };
 }
