@@ -131,9 +131,7 @@ export class B {
       $counters,
       ..._tune,
       sample_gc: this._gc,
-      // A benchmark run always starts with a collection. Preserve custom GC
-      // implementations used by runtimes/tests, but do not allow `false` to
-      // disable the initial collection.
+      // Always request initial collection. Custom GC hooks remain supported.
       gc: 'function' === typeof _tune.gc ? _tune.gc : undefined,
 
       heap: await (async () => {
@@ -313,10 +311,7 @@ function defaults(opts: any): void {
   opts.run_trial ??= (trial: B, _index: number) => trial.run(opts.throw, opts.tune);
 }
 
-/**
- * Load `@mitata/counters` when the platform supports it. Hardware counter
- * state is per-process, so isolated bench workers call this on their own.
- */
+/** Initialize process-local hardware counters when supported. */
 async function initCounters(arch: string | null, runtime: string | null): Promise<void> {
   if ($counters || !['bun', 'node', 'deno'].includes(runtime as string)) return;
 
@@ -338,11 +333,7 @@ async function initCounters(arch: string | null, runtime: string | null): Promis
   }
 }
 
-/**
- * Run a single registered trial by global registration index (the order
- * `bench()` calls executed, across all collections). Entry point for isolated
- * per-bench child workers: skips context calibration and rendering entirely.
- */
+/** Run one registered trial by its global registration index. */
 export async function runTrialAt(index: number, tune: any = {}): Promise<Trial> {
   const trials = COLLECTIONS.flatMap((c) => c.trials) as B[];
   const trial = trials[index];

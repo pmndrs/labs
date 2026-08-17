@@ -67,10 +67,8 @@ describe('worker bench isolation', () => {
 
       expect(result.benchmarks).toHaveLength(2);
       expect(polluter.runs[0].stats.samples.length).toBeGreaterThan(0);
-      // In a shared process the victim throws; in a fresh process it measures.
       expect(victim.runs[0].error).toBeUndefined();
       expect(victim.runs[0].stats.samples.length).toBeGreaterThan(0);
-      // groupName zipping via the registry still works with delegated trials.
       expect(victim.groupName).toBe('isolation');
     }
   );

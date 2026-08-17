@@ -26,7 +26,7 @@ export const WHITE = '\x1b[37m';
 export const BLACK = '\x1b[30m';
 
 /**
- * 256-color light gray — used by the CLI comparison / table layer.
+ * 256-color light gray used by the CLI comparison and table layer.
  * Distinct from {@link DARK_GRAY} which is the standard bright-black.
  */
 export const GRAY = '\x1b[38;5;248m';
@@ -51,7 +51,7 @@ export const COLOR_NAMES: readonly string[] = [
 
 /**
  * Lowercase ANSI code map used by the core benchmark output formatters.
- * `gray` maps to bright-black (`\x1b[90m`), matching the original mitata palette.
+ * `gray` maps to bright-black (`\x1b[90m`).
  */
 export const ansi: Record<string, string> = {
   bold: BOLD,

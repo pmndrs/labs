@@ -113,7 +113,7 @@ export interface SavedFile {
 
 export interface FreqSample {
   file: string;
-  /** @deprecated kept for backwards compat with old saved results */
+  /** @deprecated Use `runFreq` or `postFreq`. */
   preFreq?: number;
   runFreq: number;
   postFreq: number;
@@ -126,8 +126,8 @@ export interface SavedResult {
   git?: GitInfo;
   hardware: HardwareInfo;
   /**
-   * Bench isolation mode the run used: 'bench' = fresh process per bench,
-   * 'file' = one process per file. Absent on legacy results (implies 'file').
+   * Worker isolation used for the run. An omitted value means one worker per
+   * file.
    */
   isolation?: 'bench' | 'file';
   context?: {
@@ -226,7 +226,7 @@ export function listResults(labsDir: string): SavedResult[] {
 const SHA_PREFIX_RE = /^[0-9a-f]{4,40}$/;
 
 /**
- * Resolve a user-supplied ref to a saved result name. Exact names win;
+ * Resolve a user-supplied ref to a saved result name. Exact names win.
  * otherwise a hex string of ≥4 chars is treated as a commit sha prefix.
  * When one commit has several runs, the most recent one is returned.
  */

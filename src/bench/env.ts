@@ -1,7 +1,7 @@
 /**
- * Higher-level environment detection — runtime name, version, CPU model,
+ * Higher-level environment detection for runtime name, version, CPU model,
  * architecture, and color support.  All functions probe `globalThis` and
- * dynamic imports; none depend on benchmark state.
+ * dynamic imports. None depend on benchmark state.
  */
 
 /** Whether the terminal supports ANSI colors (`FORCE_COLOR` / `NO_COLOR`). */
