@@ -86,11 +86,7 @@ export interface RunOptions {
   tune?: MeasureOptions;
   calibrate?: MeasureOptions;
   format?: string | Record<string, any>;
-  /**
-   * Executes one registered trial; defaults to running it in-process.
-   * `index` is the trial's global registration order. Isolated workers
-   * override this to delegate each trial to a fresh child process.
-   */
+  /** Executes one registered trial. The default runs it in-process. */
   run_trial?: (trial: any, index: number) => Trial | Promise<Trial>;
 }
 

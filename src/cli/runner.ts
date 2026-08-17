@@ -105,10 +105,7 @@ function runBench(
 ): void {
   console.log(`\n${BLUE}▶ ${label}${RESET}`);
 
-  // The runner is the only source of truth for worker control variables:
-  // scrub inherited LABS_* so a leaked shell export can't silently change
-  // worker behavior (or worse, contradict the isolation mode recorded in
-  // the saved result).
+  // Worker behavior is determined only by the current run configuration.
   const env = { ...process.env };
   for (const key of Object.keys(env)) {
     if (key.startsWith('LABS_')) delete env[key];

@@ -58,21 +58,14 @@ function errorReplacer(_: string, v: any): any {
   return { message: String(v.message), stack: v.stack };
 }
 
-/**
- * Child mode: measure a single trial in this fresh process and write it out.
- * Skips calibration and rendering — the parent worker owns both.
- */
+/** Measure one trial without calibration or rendering. */
 async function childMain(index: number): Promise<void> {
   await import(file!);
   const trial = await runTrialAt(index, parseTuneEnv());
   writeFileSync(process.env.LABS_RESULT_FILE!, JSON.stringify({ trial }, errorReplacer));
 }
 
-/**
- * Runs one trial in a fresh child process (same script, same node flags,
- * `LABS_ONLY_INDEX` selecting the trial) so each bench measures against a
- * pristine V8 — no IC/heap contamination from earlier benches in the file.
- */
+/** Run a trial in a fresh process to isolate its JIT and heap state. */
 function runTrialIsolated(trial: any, index: number): Trial {
   const resultFile = join(tmpdir(), `labs-trial-${process.pid}-${index}.json`);
   try {

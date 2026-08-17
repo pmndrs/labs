@@ -191,7 +191,7 @@ export interface CompareResult {
   benches: BenchResult[];
 }
 
-// ─── Legacy trial helpers ────────────────────────────────────────────────────
+// ─── Trial normalization ────────────────────────────────────────────────────
 
 type LegacyTrial = {
   alias?: string;

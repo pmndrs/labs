@@ -11,7 +11,7 @@ import { ansi } from '../../utils/ansi.ts';
 /** Block elements used for bar height at sub-character resolution. */
 export const SYMBOLS = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
 
-/** Result of {@link bins} — a binned distribution ready for rendering. */
+/** Binned distribution from {@link bins}, ready for rendering. */
 export interface BinnedHistogram {
   min: number;
   max: number;
