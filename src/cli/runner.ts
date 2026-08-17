@@ -104,17 +104,27 @@ function runBench(
   resultFile?: string
 ): void {
   console.log(`\n${BLUE}▶ ${label}${RESET}`);
+
+  // The runner is the only source of truth for worker control variables:
+  // scrub inherited LABS_* so a leaked shell export can't silently change
+  // worker behavior (or worse, contradict the isolation mode recorded in
+  // the saved result).
+  const env = { ...process.env };
+  for (const key of Object.keys(env)) {
+    if (key.startsWith('LABS_')) delete env[key];
+  }
+
   execFileSync(process.execPath, ['--import', TSX_LOADER, ...nodeFlags, WORKER], {
     stdio: 'inherit',
     env: {
-      ...process.env,
+      ...env,
       LABS_BENCH_FILE: pathToFileURL(file).href,
+      LABS_ISOLATE: String(tune.isolate !== false),
       ...(tune.minCpuTime !== undefined ? { LABS_MIN_CPU_TIME: String(tune.minCpuTime * 1e9) } : {}),
       ...(tune.minSamples !== undefined ? { LABS_MIN_SAMPLES: String(tune.minSamples) } : {}),
       ...(tune.maxSamples !== undefined ? { LABS_MAX_SAMPLES: String(tune.maxSamples) } : {}),
       ...(tune.adaptive !== undefined ? { LABS_ADAPTIVE: String(tune.adaptive) } : {}),
       ...(tune.maxCpuTime !== undefined ? { LABS_MAX_CPU_TIME: String(tune.maxCpuTime * 1e9) } : {}),
-      ...(tune.isolate === false ? { LABS_ISOLATE: 'false' } : {}),
       ...(tagFilter ? { LABS_GREP_TAGS: tagFilter } : {}),
       ...(resultFile ? { LABS_RESULT_FILE: resultFile } : {}),
     },
