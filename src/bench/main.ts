@@ -310,6 +310,47 @@ function defaults(opts: any): void {
   opts.colors ??= colors();
   opts.tune ??= {};
   opts.observe ??= (trial: any) => trial;
+  opts.run_trial ??= (trial: B, _index: number) => trial.run(opts.throw, opts.tune);
+}
+
+/**
+ * Load `@mitata/counters` when the platform supports it. Hardware counter
+ * state is per-process, so isolated bench workers call this on their own.
+ */
+async function initCounters(arch: string | null, runtime: string | null): Promise<void> {
+  if ($counters || !['bun', 'node', 'deno'].includes(runtime as string)) return;
+
+  if (arch?.includes?.('darwin')) {
+    try {
+      const _c = '@mitata/counters';
+      $counters = await import(_c);
+      if (0 !== (globalThis as any).process.getuid()) throw (($counters = false), 1);
+    } catch {}
+  }
+
+  if (!$counters && arch?.includes?.('linux')) {
+    try {
+      const _c = '@mitata/counters';
+      $counters = await import(_c);
+    } catch (err: any) {
+      if (err?.message?.includes?.('PermissionDenied')) $counters = false;
+    }
+  }
+}
+
+/**
+ * Run a single registered trial by global registration index (the order
+ * `bench()` calls executed, across all collections). Entry point for isolated
+ * per-bench child workers: skips context calibration and rendering entirely.
+ */
+export async function runTrialAt(index: number, tune: any = {}): Promise<Trial> {
+  const trials = COLLECTIONS.flatMap((c) => c.trials) as B[];
+  const trial = trials[index];
+  if (!trial) {
+    throw new RangeError(`no bench registered at index ${index} (${trials.length} registered)`);
+  }
+  await initCounters(await arch(), runtime());
+  return await trial.run(false, tune);
 }
 
 export async function run(
@@ -344,30 +385,7 @@ export async function run(
     },
   };
 
-  if (
-    !$counters &&
-    context.arch?.includes?.('darwin') &&
-    ['bun', 'node', 'deno'].includes(context.runtime as string)
-  ) {
-    try {
-      const _c = '@mitata/counters';
-      $counters = await import(_c);
-      if (0 !== (globalThis as any).process.getuid()) throw (($counters = false), 1);
-    } catch {}
-  }
-
-  if (
-    !$counters &&
-    context.arch?.includes?.('linux') &&
-    ['bun', 'node', 'deno'].includes(context.runtime as string)
-  ) {
-    try {
-      const _c = '@mitata/counters';
-      $counters = await import(_c);
-    } catch (err: any) {
-      if (err?.message?.includes?.('PermissionDenied')) $counters = false;
-    }
-  }
+  await initCounters(context.arch, context.runtime);
 
   const layout = COLLECTIONS.map((c) => ({ name: c.name, types: c.types }));
   const format = 'string' === typeof opts.format ? opts.format : Object.keys(opts.format)[0];
@@ -385,10 +403,12 @@ export async function run(
 
 const formats = {
   async quiet(_: any, opts: any, benchmarks: Trial[]) {
+    let index = 0;
     for (const collection of COLLECTIONS) {
       for (const trial of collection.trials) {
+        const i = index++;
         if (opts.filter.test(trial._name))
-          benchmarks.push(opts.observe(await trial.run(opts.throw, opts.tune)));
+          benchmarks.push(opts.observe(await opts.run_trial(trial, i)));
       }
     }
   },
@@ -398,10 +418,12 @@ const formats = {
     const debug = opts.format?.debug ?? true;
     const samples = opts.format?.samples ?? true;
 
+    let index = 0;
     for (const collection of COLLECTIONS) {
       for (const trial of collection.trials) {
+        const i = index++;
         if (opts.filter.test(trial._name))
-          benchmarks.push(opts.observe(await trial.run(opts.throw, opts.tune)));
+          benchmarks.push(opts.observe(await opts.run_trial(trial, i)));
       }
     }
 
@@ -434,13 +456,15 @@ const formats = {
 
     print('');
 
+    let index = 0;
     for (const collection of COLLECTIONS) {
       const trials: Trial[] = [];
       if (!collection.trials.length) continue;
 
       for (const trial of collection.trials) {
+        const i = index++;
         if (opts.filter.test(trial._name)) {
-          let bench = await trial.run(opts.throw, opts.tune);
+          let bench = await opts.run_trial(trial, i);
 
           bench = opts.observe(bench);
           trials.push(bench);
@@ -485,11 +509,13 @@ const formats = {
   async mitata(ctx: any, opts: any, benchmarks: Trial[]) {
     const renderedCollections: RenderedCollection[] = [];
 
+    let index = 0;
     for (const collection of COLLECTIONS) {
       const renderedTrials: RenderedCollection['trials'] = [];
       for (const trial of collection.trials) {
+        const i = index++;
         if (!opts.filter.test(trial._name)) continue;
-        let bench = await trial.run(opts.throw, opts.tune);
+        let bench = await opts.run_trial(trial, i);
         bench = opts.observe(bench);
         benchmarks.push(bench);
         renderedTrials.push({

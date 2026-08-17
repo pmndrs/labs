@@ -89,7 +89,17 @@ export const warnClockDrift: EnvironmentWarning = (baseline, candidate) => {
   return warnings;
 };
 
-export const ENVIRONMENT_WARNINGS: EnvironmentWarning[] = [warnClockDrift];
+export const warnIsolationMismatch: EnvironmentWarning = (baseline, candidate) => {
+  const b = baseline.isolation ?? 'file';
+  const c = candidate.isolation ?? 'file';
+  if (b === c) return [];
+  return [
+    `runs used different bench isolation (baseline: per-${b}, candidate: per-${c}) — ` +
+      `benches sharing a process inherit each other's JIT/heap state, so absolute numbers may not be comparable`,
+  ];
+};
+
+export const ENVIRONMENT_WARNINGS: EnvironmentWarning[] = [warnClockDrift, warnIsolationMismatch];
 
 /** All environment checks in order. Any failure blocks the entire comparison. */
 export const ENVIRONMENT_CHECKS: EnvironmentCheck[] = [checkHardwareMatch];

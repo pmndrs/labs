@@ -1,6 +1,11 @@
-import { writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { getBenchRegistry } from '../index.ts';
 import { measure, run } from './index.ts';
+import { runTrialAt } from './main.ts';
+import type { Trial } from './types.ts';
 
 type TuneOptions = {
   min_cpu_time?: number;
@@ -47,9 +52,51 @@ async function calibrateFreq(): Promise<number> {
   return 1 / (r as any).avg;
 }
 
-async function main(): Promise<void> {
+/** Serializes Error instances the same way the `json` format does. */
+function errorReplacer(_: string, v: any): any {
+  if (!(v instanceof Error)) return v;
+  return { message: String(v.message), stack: v.stack };
+}
+
+/**
+ * Child mode: measure a single trial in this fresh process and write it out.
+ * Skips calibration and rendering — the parent worker owns both.
+ */
+async function childMain(index: number): Promise<void> {
   await import(file!);
-  const result = await run({ tune: parseTuneEnv() });
+  const trial = await runTrialAt(index, parseTuneEnv());
+  writeFileSync(process.env.LABS_RESULT_FILE!, JSON.stringify({ trial }, errorReplacer));
+}
+
+/**
+ * Runs one trial in a fresh child process (same script, same node flags,
+ * `LABS_ONLY_INDEX` selecting the trial) so each bench measures against a
+ * pristine V8 — no IC/heap contamination from earlier benches in the file.
+ */
+function runTrialIsolated(trial: any, index: number): Trial {
+  const resultFile = join(tmpdir(), `labs-trial-${process.pid}-${index}.json`);
+  try {
+    execFileSync(process.execPath, [...process.execArgv, process.argv[1]], {
+      stdio: ['ignore', 'inherit', 'inherit'],
+      env: { ...process.env, LABS_ONLY_INDEX: String(index), LABS_RESULT_FILE: resultFile },
+    });
+    return JSON.parse(readFileSync(resultFile, 'utf-8')).trial;
+  } catch (err) {
+    throw new Error(`isolated bench "${trial?._name ?? index}" failed: ${String(err)}`, {
+      cause: err,
+    });
+  } finally {
+    rmSync(resultFile, { force: true });
+  }
+}
+
+async function main(): Promise<void> {
+  const isolate = process.env.LABS_ISOLATE !== 'false';
+  await import(file!);
+  const result = await run({
+    tune: parseTuneEnv(),
+    ...(isolate ? { run_trial: runTrialIsolated } : {}),
+  });
   const postFreq = await calibrateFreq();
 
   const registry = getBenchRegistry();
@@ -60,9 +107,10 @@ async function main(): Promise<void> {
   if (process.env.LABS_RESULT_FILE) {
     writeFileSync(
       process.env.LABS_RESULT_FILE,
-      JSON.stringify({ ...result, environment: { postFreq } })
+      JSON.stringify({ ...result, environment: { postFreq } }, errorReplacer)
     );
   }
 }
 
-void main();
+const onlyIndex = process.env.LABS_ONLY_INDEX;
+void (onlyIndex !== undefined ? childMain(Number(onlyIndex)) : main());

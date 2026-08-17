@@ -40,7 +40,7 @@ group('array @stress', () => {
 
 ### Run
 
-Each bench runs in an isolated worker process. CPU clock speed is measured before and after the run and if it drifts, Labs flags the result so it doesn't pollute comparisons. Adaptive sampling collects more samples until the confidence interval converges, or marks the bench `noisy` if it can't. Each sample has garbage collection (GC) reset so previous runs do not pollute it while measuring its impact.
+Each bench runs in its own isolated worker process, so benches in the same file can't contaminate each other's JIT state (shared inline caches going polymorphic, heap layout, GC history) — without this, reordering benches in a file can skew results by 2× or more (opt out with `isolate: false` or `--no-isolate`). CPU clock speed is measured before and after the run and if it drifts, Labs flags the result so it doesn't pollute comparisons. Adaptive sampling collects more samples until the confidence interval converges, or marks the bench `noisy` if it can't. Each sample has garbage collection (GC) reset so previous runs do not pollute it while measuring its impact.
 
 ```sh
 # Run all benches, save named after the current commit
@@ -138,6 +138,7 @@ pnpm bench --baseline                   # save and set as baseline
 pnpm bench -b                           # shorthand for --baseline
 pnpm bench -n "v1.2.0" -b              # save with name and set as baseline
 pnpm bench --compare                    # save, then compare vs baseline
+pnpm bench --no-isolate                 # share one process per file (skip per-bench isolation)
 pnpm bench -c                           # shorthand for --compare
 pnpm bench --last                       # rerun previous selection, save
 ```
@@ -292,6 +293,7 @@ export default defineConfig({
 | `alpha` | `0.05` | Mann-Whitney U significance level |
 | `minDelta` | `0.05` | Floor for the noise-adjusted ±Δ threshold; the effective threshold per bench is `max(minDelta, 3 × relative MAD)` |
 | `minEffect` | `0.474` | Minimum | Cliff's d | to flag a verdict; filters noise on high-variance benches where distributions overlap |
+| `isolate` | `true` | Run each bench in its own fresh worker process so benches can't contaminate each other's JIT/heap state (order-dependent results); `false` shares one process per file |
 
 Sampling behavior:
 

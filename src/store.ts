@@ -125,6 +125,11 @@ export interface SavedResult {
   timestamp: string;
   git?: GitInfo;
   hardware: HardwareInfo;
+  /**
+   * Bench isolation mode the run used: 'bench' = fresh process per bench,
+   * 'file' = one process per file. Absent on legacy results (implies 'file').
+   */
+  isolation?: 'bench' | 'file';
   context?: {
     version?: string | null;
     noop?: {
