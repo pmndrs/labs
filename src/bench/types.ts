@@ -45,15 +45,7 @@ export type FnKind = 'fn' | 'iter' | 'yield';
 export type GcMode = boolean | 'once' | 'inner';
 
 export type Color =
-  | 'red'
-  | 'cyan'
-  | 'blue'
-  | 'green'
-  | 'yellow'
-  | 'magenta'
-  | 'gray'
-  | 'white'
-  | 'black';
+  'red' | 'cyan' | 'blue' | 'green' | 'yellow' | 'magenta' | 'gray' | 'white' | 'black';
 
 export interface Run {
   stats?: Stats;
@@ -94,6 +86,12 @@ export interface RunOptions {
   tune?: MeasureOptions;
   calibrate?: MeasureOptions;
   format?: string | Record<string, any>;
+  /**
+   * Executes one registered trial; defaults to running it in-process.
+   * `index` is the trial's global registration order. Isolated workers
+   * override this to delegate each trial to a fresh child process.
+   */
+  run_trial?: (trial: any, index: number) => Trial | Promise<Trial>;
 }
 
 export interface Collection {

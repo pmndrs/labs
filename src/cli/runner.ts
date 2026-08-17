@@ -98,17 +98,28 @@ function runBench(
   label: string,
   tune: Pick<
     Partial<LabsConfig>,
-    'minCpuTime' | 'minSamples' | 'maxSamples' | 'adaptive' | 'maxCpuTime'
+    'minCpuTime' | 'minSamples' | 'maxSamples' | 'adaptive' | 'maxCpuTime' | 'isolate'
   >,
   tagFilter?: string,
   resultFile?: string
 ): void {
   console.log(`\n${BLUE}▶ ${label}${RESET}`);
+
+  // The runner is the only source of truth for worker control variables:
+  // scrub inherited LABS_* so a leaked shell export can't silently change
+  // worker behavior (or worse, contradict the isolation mode recorded in
+  // the saved result).
+  const env = { ...process.env };
+  for (const key of Object.keys(env)) {
+    if (key.startsWith('LABS_')) delete env[key];
+  }
+
   execFileSync(process.execPath, ['--import', TSX_LOADER, ...nodeFlags, WORKER], {
     stdio: 'inherit',
     env: {
-      ...process.env,
+      ...env,
       LABS_BENCH_FILE: pathToFileURL(file).href,
+      LABS_ISOLATE: String(tune.isolate !== false),
       ...(tune.minCpuTime !== undefined ? { LABS_MIN_CPU_TIME: String(tune.minCpuTime * 1e9) } : {}),
       ...(tune.minSamples !== undefined ? { LABS_MIN_SAMPLES: String(tune.minSamples) } : {}),
       ...(tune.maxSamples !== undefined ? { LABS_MAX_SAMPLES: String(tune.maxSamples) } : {}),
@@ -282,26 +293,23 @@ export async function runCLI(args: string[]) {
     console.log(`${CYAN}labs${RESET}`);
   }
 
+  const isolate = config.isolate !== false && !benchArgs.includes('--no-isolate');
+  const benchTune = {
+    minCpuTime: config.minCpuTime,
+    minSamples: config.minSamples,
+    maxSamples: config.maxSamples,
+    adaptive: config.adaptive,
+    maxCpuTime: config.maxCpuTime,
+    isolate,
+  };
+
   if (!shouldSave) {
     const tmpDir = join(cwd, 'node_modules', '.cache', 'labs-tmp');
     mkdirSync(tmpDir, { recursive: true });
     const runOutputs: Array<{ file: string; resultFile: string }> = [];
     for (const f of selected) {
       const resultFile = join(tmpDir, `${basename(f, '.ts')}-${Date.now()}.json`);
-      runBench(
-        f,
-        config.nodeFlags,
-        suiteName(f),
-        {
-          minCpuTime: config.minCpuTime,
-          minSamples: config.minSamples,
-          maxSamples: config.maxSamples,
-          adaptive: config.adaptive,
-          maxCpuTime: config.maxCpuTime,
-        },
-        tagEnv,
-        resultFile
-      );
+      runBench(f, config.nodeFlags, suiteName(f), benchTune, tagEnv, resultFile);
       runOutputs.push({ file: f, resultFile });
     }
     const runEnvData: FreqSample[] = [];
@@ -352,20 +360,7 @@ export async function runCLI(args: string[]) {
   const workerOutputs: Array<{ file: string; resultFile: string }> = [];
   for (const f of selected) {
     const resultFile = join(tmpDir, `${basename(f, '.ts')}-${Date.now()}.json`);
-    runBench(
-      f,
-      config.nodeFlags,
-      suiteName(f),
-      {
-        minCpuTime: config.minCpuTime,
-        minSamples: config.minSamples,
-        maxSamples: config.maxSamples,
-        adaptive: config.adaptive,
-        maxCpuTime: config.maxCpuTime,
-      },
-      tagEnv,
-      resultFile
-    );
+    runBench(f, config.nodeFlags, suiteName(f), benchTune, tagEnv, resultFile);
     workerOutputs.push({ file: f, resultFile });
   }
 
@@ -435,6 +430,7 @@ export async function runCLI(args: string[]) {
     timestamp: new Date().toISOString(),
     ...(git ? { git } : {}),
     hardware,
+    isolation: isolate ? 'bench' : 'file',
     context: savedNoop,
     files,
     environment: { freqs: saveEnvData },
