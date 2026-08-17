@@ -85,7 +85,7 @@ benchmark                   avg (min … max) p75 / p99    (min … top 1%)
 
 Labs promises to give results you can trust. To do this we make a number of guarantees when running benches.
 
-- Each bench runs in its own isolated worker process, preventing benches in the same file from contaminating each other's JIT state, heap layout, or GC history. Reordering benches can otherwise skew results by 2× or more. Opt out with `isolate: false` or `--no-isolate`.
+- Each bench runs in its own isolated worker process, preventing benches in the same file from contaminating each other's JIT state, heap layout, or GC history. Reordering benches can otherwise skew results by 2× or more. Opt out with `isolate: false` in the config or `--no-isolate` in the CLI.
 - CPU clock speed is measured before and after the run. If it drifts, Labs flags the result so it doesn't pollute comparisons.
 - Adaptive sampling continues until the confidence interval converges, or marks the bench `noisy` if it can't. This usually means the bench contains some random element and is not deterministic.
 - Each sample starts with a garbage collection (GC) reset so previous samples don't affect it.
