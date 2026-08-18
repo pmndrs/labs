@@ -5,7 +5,7 @@ import { basename, dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { compare, printCompareReport } from '../compare.ts';
 import type { LabsConfig } from '../config.ts';
-import { printReportBox } from '../report.ts';
+import { type NoisyBench, printReportBox } from '../report.ts';
 import { blockSpread } from '../stats.ts';
 import {
   type FreqSample,
@@ -36,7 +36,7 @@ function collectEnvData(
   workerResult: WorkerResult,
   file: string,
   envData: FreqSample[],
-  noisyAliases: string[],
+  noisyBenches: NoisyBench[],
   blockSpreads: number[]
 ): void {
   const runFreq = workerResult.context.cpu.freq;
@@ -46,7 +46,12 @@ function collectEnvData(
     if (trialFreqs) blockFreqs.push(...trialFreqs.filter((f) => f > 0));
     for (const run of trial.runs) {
       const stats = run.stats;
-      if (stats && (stats as any).noisy) noisyAliases.push(run.name || trial.alias);
+      if (stats && (stats as any).noisy) {
+        noisyBenches.push({
+          name: run.name || trial.alias,
+          ...(stats.blocks ? { spread: blockSpread(stats.blocks.medians) } : {}),
+        });
+      }
       if (stats?.blocks) blockSpreads.push(blockSpread(stats.blocks.medians));
     }
   }
@@ -343,7 +348,7 @@ export async function runCLI(args: string[]) {
       runOutputs.push({ file: f, resultFile });
     }
     const runEnvData: FreqSample[] = [];
-    const runNoisyAliases: string[] = [];
+    const runNoisyBenches: NoisyBench[] = [];
     const runBlockSpreads: number[] = [];
     let runCpu: string | null = null;
     for (const { file, resultFile } of runOutputs) {
@@ -351,11 +356,11 @@ export async function runCLI(args: string[]) {
       const workerResult: WorkerResult = JSON.parse(readFileSync(resultFile, 'utf-8'));
       rmSync(resultFile);
       runCpu ??= workerResult.context.cpu.name;
-      collectEnvData(workerResult, suiteName(file), runEnvData, runNoisyAliases, runBlockSpreads);
+      collectEnvData(workerResult, suiteName(file), runEnvData, runNoisyBenches, runBlockSpreads);
     }
     printReportBox(
       runEnvData,
-      runNoisyAliases,
+      runNoisyBenches,
       config.maxCpuTime!,
       undefined,
       runCpu,
@@ -411,7 +416,7 @@ export async function runCLI(args: string[]) {
   const files: SavedResult['files'] = [];
   let hardwareSet = false;
   const saveEnvData: FreqSample[] = [];
-  const saveNoisyAliases: string[] = [];
+  const saveNoisyBenches: NoisyBench[] = [];
   const saveBlockSpreads: number[] = [];
   let savedNoop: SavedResult['context'] | undefined;
 
@@ -439,7 +444,7 @@ export async function runCLI(args: string[]) {
       hardwareSet = true;
     }
 
-    collectEnvData(workerResult, suiteName(file), saveEnvData, saveNoisyAliases, saveBlockSpreads);
+    collectEnvData(workerResult, suiteName(file), saveEnvData, saveNoisyBenches, saveBlockSpreads);
 
     files.push({
       file: suiteName(file),
@@ -491,7 +496,7 @@ export async function runCLI(args: string[]) {
 
   printReportBox(
     saveEnvData,
-    saveNoisyAliases,
+    saveNoisyBenches,
     config.maxCpuTime!,
     saveMsg,
     hardware.cpu,
