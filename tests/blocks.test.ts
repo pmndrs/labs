@@ -4,9 +4,10 @@ import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { describe, expect, it } from 'vitest';
+import { stripVTControlCharacters } from 'node:util';
+import { describe, expect, it, vi } from 'vitest';
 import { measure } from '../src/bench/index.ts';
-import { compare } from '../src/compare.ts';
+import { compare, printCompareReport } from '../src/compare.ts';
 import { defineConfig } from '../src/config.ts';
 import { blockSpread, mannWhitneyU, minDetectableEffect } from '../src/stats.ts';
 import type { SavedResult } from '../src/store.ts';
@@ -242,6 +243,32 @@ describe('comparing blocked results', () => {
       expect(bench.verdict).toBe('slower');
       expect(bench.resolution).toBeGreaterThan(CONFIG.minDelta);
     }
+  });
+
+  it('right-aligns noisy resolution beneath the confidence interval', () => {
+    const aMedians = [100, 92, 108, 95, 105, 90, 110, 99];
+    const bMedians = aMedians.map((m) => m * 1.5);
+    const result = compare(syntheticResult('a', aMedians), syntheticResult('b', bMedians), CONFIG);
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    let lines: string[] = [];
+
+    try {
+      printCompareReport(result, CONFIG);
+      lines = log.mock.calls.map(([line]) => stripVTControlCharacters(String(line)));
+    } finally {
+      log.mockRestore();
+    }
+
+    const header = lines.find((line) => line.includes('Δ 95% CI'));
+    const warningIndex = lines.findIndex((line) => line.includes('⚠ ~±'));
+    const warning = lines[warningIndex];
+
+    expect(header).toBeDefined();
+    expect(warning).toBeDefined();
+    expect(lines[warningIndex - 1]).toContain('unit');
+    expect(warning).toHaveLength(header!.length);
+    expect(warning).toMatch(/⚠ ~±\d+%$/);
+    expect(lines).toContain('⚠ Neutral means inconclusive at the shown resolution.');
   });
 
   it('points isolation-disabled runs at isolate, not at re-saving', () => {

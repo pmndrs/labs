@@ -637,7 +637,7 @@ export function printCompareReport(result: CompareResult, config: LabsConfig): v
       const pColor = neutral ? DIM : WHITE;
       const noisy = bench.resolution > config.minDelta;
       if (noisy) sawNoisy = true;
-      const noisyMark = noisy ? `  ${YELLOW}⚠ ~±${(bench.resolution * 100).toFixed(0)}%${RESET}` : '';
+      const noisyLabel = `⚠ ~±${(bench.resolution * 100).toFixed(0)}%`;
 
       console.log(
         `  ${color}${symbol}${RESET} ${WHITE}${name}${RESET}` +
@@ -646,20 +646,21 @@ export function printCompareReport(result: CompareResult, config: LabsConfig): v
           ` ${dp50Color}${formatDelta(bench.deltaP50).padStart(DELTA_COL)}${RESET}` +
           ` ${dp99Color}${formatDelta(bench.deltaP99).padStart(DELTA_COL)}${RESET}` +
           ` ${pColor}${formatP(bench.p).padStart(P_COL)}${RESET}` +
-          ` ${neutral ? DIM : WHITE}${formatCI(bench.ciLow, bench.ciHigh).padStart(CI_COL)}${RESET}` +
-          noisyMark
+          ` ${neutral ? DIM : WHITE}${formatCI(bench.ciLow, bench.ciHigh).padStart(CI_COL)}${RESET}`
       );
 
       const dist = renderDistributions(bench.baselineSamples, bench.candidateSamples, TIME_COL);
-      console.log(`${' '.repeat(4 + nameCol)} ${dist.baseline} ${dist.candidate}`);
+      const noisyMark = noisy
+        ? `${' '.repeat(1 + DELTA_COL + 1 + DELTA_COL + 1 + P_COL + 1)}` +
+          `${YELLOW}${noisyLabel.padStart(CI_COL)}${RESET}`
+        : '';
+      console.log(`${' '.repeat(4 + nameCol)} ${dist.baseline} ${dist.candidate}${noisyMark}`);
       console.log('');
     }
 
     if (sawNoisy) {
       console.log(
-        `${YELLOW}⚠${RESET} ${DIM}between-block spread limits these benches to the shown ` +
-          `resolution (above minΔ=${(config.minDelta * 100).toFixed(0)}%); a neutral there ` +
-          `means "could not tell", not "no change"${RESET}`
+        `${YELLOW}⚠${RESET} ${DIM}Neutral means inconclusive at the shown resolution.${RESET}`
       );
       console.log('');
     }
