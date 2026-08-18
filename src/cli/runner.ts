@@ -117,13 +117,7 @@ function runBench(
   label: string,
   tune: Pick<
     Partial<LabsConfig>,
-    | 'minCpuTime'
-    | 'minSamples'
-    | 'maxSamples'
-    | 'adaptive'
-    | 'maxCpuTime'
-    | 'isolate'
-    | 'blocks'
+    'minCpuTime' | 'minSamples' | 'maxSamples' | 'adaptive' | 'maxCpuTime' | 'isolate' | 'blocks'
   >,
   tagFilter?: string,
   resultFile?: string
@@ -403,7 +397,8 @@ export async function runCLI(args: string[]) {
     }
     return new Date().toISOString().replace(/[:.]/g, '-').replace('T', '_').slice(0, 19);
   };
-  const saveName = flagValue(benchArgs, '-n') ?? flagValue(benchArgs, '--name') ?? defaultName();
+  const suppliedName = flagValue(benchArgs, '-n') ?? flagValue(benchArgs, '--name');
+  const saveName = suppliedName ?? defaultName();
 
   const forceOverwrite = benchArgs.includes('--force') || benchArgs.includes('-f');
   if (!forceOverwrite && resultExists(labsDir, saveName)) {
@@ -523,9 +518,10 @@ export async function runCLI(args: string[]) {
     markedBaseline = true;
   }
 
-  const baselineNote = markedBaseline ? ` ${CYAN}(baseline)${RESET}` : '';
-  const gitNote = git ? ` ${DIM}${gitHint(git)}${RESET}` : '';
-  const saveMsg = `${GREEN}✔${RESET} Saved "${saveName}"${gitNote}${baselineNote} (${files.length} file${files.length !== 1 ? 's' : ''})`;
+  const gitNote = git && suppliedName ? ` ${DIM}${gitHint(git)}${RESET}` : '';
+  const fileNote = `${files.length} file${files.length !== 1 ? 's' : ''}`;
+  const details = markedBaseline ? `${CYAN}baseline${RESET}, ${fileNote}` : fileNote;
+  const saveMsg = `${GREEN}✔${RESET} Saved "${saveName}"${gitNote} (${details})`;
 
   printReportBox(
     saveEnvData,
