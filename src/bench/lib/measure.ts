@@ -118,6 +118,8 @@ export async function benchFn(fn: (...args: any[]) => any, opts: any = {}): Prom
     }
   }
 
+  if (opts.batch !== undefined) batch = !!opts.batch;
+
   if (opts.manual) {
     batch = false;
     opts.concurrency = 1;
@@ -348,6 +350,7 @@ export async function benchFn(fn: (...args: any[]) => any, opts: any = {}): Prom
       p999: samples[(.999 * (samples.length - 1)) | 0],
       avg: samples.reduce((a, v) => a + v, 0) / samples.length,
       ticks: samples.length ${!batch ? '' : `* ${opts.batch_samples}`},
+      plan: { batch: ${batch}, batch_samples: ${opts.batch_samples}, batch_unroll: ${opts.batch_unroll}, samples: _ },
       ${!opts.heap ? '' : 'heap: { ...heap, avg: heap.total / heap._ },'}
       ${!(opts.gc && opts.sample_gc && !opts.gc.fallback) ? '' : 'gc: { ...gc, avg: gc.total / _ },'}
       ${!opts.$counters ? '' : `...(!_hc ? {} : { counters: $counters.translate(${!batch ? 1 : opts.batch_samples}, _) }),`}
@@ -421,6 +424,8 @@ export async function benchIter(iter: (...args: any[]) => any, opts: any = {}): 
         }
       }
     }
+
+    if (opts.batch !== undefined) batch = !!opts.batch;
 
     const loop: Generator = new GeneratorFunction(
       '$gc',
@@ -499,11 +504,18 @@ export async function benchIter(iter: (...args: any[]) => any, opts: any = {}): 
     throw new TypeError(`expected at least ${opts.min_samples} samples from iterator`);
 
   samples.sort((a, b) => a - b);
+  const rawCount = samples.length;
   if (samples.length > opts.samples_threshold) samples = samples.slice(2, -2);
 
   return {
     samples,
     kind: 'iter' as const,
+    plan: {
+      batch: !!_.batch,
+      batch_samples: opts.batch_samples,
+      batch_unroll: opts.batch_unroll,
+      samples: rawCount,
+    },
     debug: _.debug,
     min: samples[0],
     max: samples[samples.length - 1],

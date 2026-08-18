@@ -120,6 +120,28 @@ export function minMeaningfulDelta(a: number[], b: number[], floor: number): num
   return Math.max(floor, NOISE_SCALE * Math.max(relA, relB));
 }
 
+/**
+ * Relative spread of per-block medians: MAD scaled to sigma equivalent, over
+ * the median. Captures how much fresh-process runs of the same bench differ,
+ * which is the variance a single process cannot observe.
+ */
+export function blockSpread(medians: number[]): number {
+  if (medians.length < 2) return 0;
+  const m = median(medians);
+  if (m <= 0) return 0;
+  return (1.4826 * mad(medians)) / m;
+}
+
+/**
+ * Smallest relative delta a comparison of two runs with this between-block
+ * spread can reliably detect (roughly alpha 0.05 at 0.8 power, comparing
+ * means of `blocks` block medians per side).
+ */
+export function minDetectableEffect(spread: number, blocks: number): number {
+  if (blocks < 2 || spread <= 0) return 0;
+  return 2.8 * spread * Math.sqrt(2 / blocks);
+}
+
 export type Verdict = 'faster' | 'slower' | 'neutral';
 
 export interface ClassifyOptions {

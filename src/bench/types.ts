@@ -1,3 +1,15 @@
+/**
+ * Measurement decisions made once by a pilot block and replayed verbatim by
+ * every later block, so all blocks of a bench do identical work.
+ */
+export interface BlockPlan {
+  batch: boolean;
+  batch_samples: number;
+  batch_unroll: number;
+  /** Untrimmed sample count the pilot collected and each block replays. */
+  samples: number;
+}
+
 export interface Stats {
   debug: string;
   ticks: number;
@@ -15,6 +27,10 @@ export interface Stats {
   gc?: { avg: number; min: number; max: number; total: number };
   heap?: { avg: number; min: number; max: number; total: number };
   noisy?: boolean;
+  /** Decisions this measurement made, usable to freeze later blocks. */
+  plan?: BlockPlan;
+  /** Per-block summaries when the bench ran as multiple isolated blocks. */
+  blocks?: { medians: number[]; freqs: number[] };
 }
 
 export interface MeasureOptions {
@@ -28,6 +44,8 @@ export interface MeasureOptions {
   max_cpu_time?: number;
   batch_unroll?: number;
   batch_samples?: number;
+  /** Forces the batching decision instead of probing for it. */
+  batch?: boolean;
   warmup_samples?: number;
   batch_threshold?: number;
   warmup_threshold?: number;
@@ -88,6 +106,12 @@ export interface RunOptions {
   format?: string | Record<string, any>;
   /** Executes one registered trial. The default runs it in-process. */
   run_trial?: (trial: any, index: number) => Trial | Promise<Trial>;
+  /**
+   * Executes all filtered trials up front, keyed by registration index.
+   * Overrides run_trial and lets the executor control scheduling order,
+   * e.g. round robin block interleaving across benches.
+   */
+  execute?: (jobs: Array<{ trial: any; index: number }>) => Promise<Map<number, Trial>>;
 }
 
 export interface Collection {

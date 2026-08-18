@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import type { GcMode, Stats } from './bench/types.ts';
+import type { BlockPlan, GcMode, Stats } from './bench/types.ts';
 
 export interface GitInfo {
   /** Full sha of HEAD when the run was saved. */
@@ -31,6 +31,8 @@ export interface SavedStats {
   noisy?: boolean;
   gc?: { avg: number; min: number; max: number };
   heap?: { avg: number; min: number; max: number };
+  plan?: BlockPlan;
+  blocks?: { medians: number[]; freqs: number[] };
 }
 
 export interface WorkerBenchmarkRun {
@@ -117,6 +119,8 @@ export interface FreqSample {
   preFreq?: number;
   runFreq: number;
   postFreq: number;
+  /** Per-block clock probes when the file ran with blocked sampling. */
+  blockFreqs?: number[];
 }
 
 export interface SavedResult {
@@ -130,6 +134,11 @@ export interface SavedResult {
    * file.
    */
   isolation?: 'bench' | 'file';
+  /**
+   * Fresh-process blocks each bench ran as. An omitted value means one block,
+   * so saved spreads exclude between-process variance.
+   */
+  blocks?: number;
   context?: {
     version?: string | null;
     noop?: {
@@ -148,7 +157,7 @@ export interface LastComparison {
 }
 
 function freqReadings(freqs: FreqSample[]): number[] {
-  return freqs.flatMap((s) => [s.runFreq, s.postFreq]);
+  return freqs.flatMap((s) => [s.runFreq, s.postFreq, ...(s.blockFreqs ?? [])]);
 }
 
 /** Returns true if the CPU clock was stable during the run (drift ≤ threshold). */
@@ -315,6 +324,8 @@ export function trimStats(stats: Stats): SavedStats {
     p75: stats.p75,
     p99: stats.p99,
     ...(stats.noisy !== undefined ? { noisy: stats.noisy } : {}),
+    ...(stats.plan ? { plan: stats.plan } : {}),
+    ...(stats.blocks ? { blocks: stats.blocks } : {}),
     ...(stats.gc
       ? {
           gc: {

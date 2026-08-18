@@ -1,16 +1,24 @@
 import type { LabsConfig } from './config.ts';
 import { renderMitata, type RenderedCollection } from './bench/render.ts';
 import type { Context, Stats, Trial } from './bench/types.ts';
+import { blockSpread, median, minDetectableEffect } from './stats.ts';
 import type { SavedBenchmarkTrial, SavedFile, SavedResult, FreqSample } from './store.ts';
 import { BLUE, BOLD, DIM, GREEN, RESET, YELLOW } from './utils/ansi.ts';
 import { visibleLength } from './utils/format.ts';
+
+export interface BlockInfo {
+  blocks: number;
+  /** Per-bench relative spread of block medians. */
+  spreads: number[];
+}
 
 export function printReportBox(
   envData: FreqSample[],
   noisyAliases: string[],
   maxCpuTime: number,
   saveMsg?: string,
-  cpu?: string | null
+  cpu?: string | null,
+  blockInfo?: BlockInfo
 ): void {
   const lines: string[] = [];
 
@@ -19,7 +27,7 @@ export function printReportBox(
     lines.push('');
   }
   if (envData.length > 0) {
-    const allFreqs = envData.flatMap((e) => [e.runFreq, e.postFreq]);
+    const allFreqs = envData.flatMap((e) => [e.runFreq, e.postFreq, ...(e.blockFreqs ?? [])]);
     const min = Math.min(...allFreqs);
     const max = Math.max(...allFreqs);
     const drift = (max - min) / ((max + min) / 2);
@@ -44,11 +52,27 @@ export function printReportBox(
 
   if (envData.length > 0) lines.push('');
 
+  if (blockInfo && blockInfo.blocks > 1 && blockInfo.spreads.length > 0) {
+    const spread = median(blockInfo.spreads);
+    const mde = minDetectableEffect(spread, blockInfo.blocks);
+    const spreadStr = `±${(spread * 100).toFixed(1)}%`;
+    const noisy = spread > 0.03;
+    lines.push(
+      `${noisy ? YELLOW + '⚠' : GREEN + '✔'} between-block spread ${spreadStr}${RESET}  ${DIM}(${blockInfo.blocks} blocks/bench)${RESET}`
+    );
+    lines.push(
+      `  ${DIM}machine floor: comparisons resolve deltas ≥ ±${(mde * 100).toFixed(1)}%${RESET}`
+    );
+    lines.push('');
+  }
+
   if (noisyAliases.length > 0) {
     lines.push(`${YELLOW}⚠ (${noisyAliases.length}) noisy benches${RESET}`);
     for (const alias of noisyAliases) lines.push(`  ${DIM}· ${alias}${RESET}`);
     lines.push(
-      `  ${DIM}Increase maxCpuTime (currently ${maxCpuTime}s) to allow convergence.${RESET}`
+      blockInfo
+        ? `  ${DIM}Between-block spread exceeds the verdict threshold. Add blocks or quiet the machine.${RESET}`
+        : `  ${DIM}Increase maxCpuTime (currently ${maxCpuTime}s) to allow convergence.${RESET}`
     );
   } else {
     lines.push(`${GREEN}✔ All measurements stable${RESET}`);
@@ -94,19 +118,23 @@ export function replayReport(result: SavedResult, config: LabsConfig): void {
   }
 
   const noisyAliases: string[] = [];
+  const spreads: number[] = [];
   for (const f of result.files) {
     for (const b of f.benchmarks) {
       for (const run of b.runs) {
         if (run.stats?.noisy) noisyAliases.push(run.name || b.alias);
+        if (run.stats?.blocks) spreads.push(blockSpread(run.stats.blocks.medians));
       }
     }
   }
+  const blocks = result.blocks ?? 1;
   printReportBox(
     result.environment?.freqs ?? [],
     noisyAliases,
     config.maxCpuTime!,
     undefined,
-    result.hardware.cpu
+    result.hardware.cpu,
+    blocks > 1 ? { blocks, spreads } : undefined
   );
 }
 

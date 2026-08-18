@@ -6,6 +6,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { compare, printCompareReport } from '../compare.ts';
 import type { LabsConfig } from '../config.ts';
 import { printReportBox } from '../report.ts';
+import { blockSpread } from '../stats.ts';
 import {
   type FreqSample,
   type GitInfo,
@@ -35,20 +36,26 @@ function collectEnvData(
   workerResult: WorkerResult,
   file: string,
   envData: FreqSample[],
-  noisyAliases: string[]
+  noisyAliases: string[],
+  blockSpreads: number[]
 ): void {
   const runFreq = workerResult.context.cpu.freq;
+  const blockFreqs: number[] = [];
+  for (const trial of workerResult.benchmarks) {
+    const trialFreqs = trial.runs[0]?.stats?.blocks?.freqs;
+    if (trialFreqs) blockFreqs.push(...trialFreqs.filter((f) => f > 0));
+    for (const run of trial.runs) {
+      const stats = run.stats;
+      if (stats && (stats as any).noisy) noisyAliases.push(run.name || trial.alias);
+      if (stats?.blocks) blockSpreads.push(blockSpread(stats.blocks.medians));
+    }
+  }
   envData.push({
     file,
     runFreq,
     postFreq: workerResult.environment?.postFreq ?? runFreq,
+    ...(blockFreqs.length > 0 ? { blockFreqs } : {}),
   });
-  for (const trial of workerResult.benchmarks) {
-    for (const run of trial.runs) {
-      const stats = run.stats;
-      if (stats && (stats as any).noisy) noisyAliases.push(run.name || trial.alias);
-    }
-  }
 }
 
 const WORKER_EXT = import.meta.url.endsWith('.ts') ? 'ts' : 'mjs';
@@ -98,7 +105,7 @@ function runBench(
   label: string,
   tune: Pick<
     Partial<LabsConfig>,
-    'minCpuTime' | 'minSamples' | 'maxSamples' | 'adaptive' | 'maxCpuTime' | 'isolate'
+    'minCpuTime' | 'minSamples' | 'maxSamples' | 'adaptive' | 'maxCpuTime' | 'isolate' | 'blocks'
   >,
   tagFilter?: string,
   resultFile?: string
@@ -117,6 +124,7 @@ function runBench(
       ...env,
       LABS_BENCH_FILE: pathToFileURL(file).href,
       LABS_ISOLATE: String(tune.isolate !== false),
+      LABS_BLOCKS: String(tune.blocks ?? 1),
       ...(tune.minCpuTime !== undefined ? { LABS_MIN_CPU_TIME: String(tune.minCpuTime * 1e9) } : {}),
       ...(tune.minSamples !== undefined ? { LABS_MIN_SAMPLES: String(tune.minSamples) } : {}),
       ...(tune.maxSamples !== undefined ? { LABS_MAX_SAMPLES: String(tune.maxSamples) } : {}),
@@ -234,7 +242,7 @@ export async function runCLI(args: string[]) {
     if (selected.length === 0) error('No previous selection found');
     console.log(`${CYAN}labs${RESET} ${DIM}(replaying last)${RESET}`);
   } else {
-    const flagTakesValue = new Set(['-n', '--name', '-m', '--message']);
+    const flagTakesValue = new Set(['-n', '--name', '-m', '--message', '--blocks']);
     let filterArg: string | undefined;
     for (let i = 0; i < benchArgs.length; i++) {
       const a = benchArgs[i];
@@ -291,6 +299,21 @@ export async function runCLI(args: string[]) {
   }
 
   const isolate = config.isolate !== false && !benchArgs.includes('--no-isolate');
+
+  // Saves default to blocked sampling so between-block variance is captured.
+  // `bench run` stays single-block for inner-loop speed unless asked.
+  const blocksFlag = flagValue(benchArgs, '--blocks');
+  const requestedBlocks =
+    blocksFlag !== undefined && blocksFlag !== ''
+      ? Number(blocksFlag)
+      : shouldSave
+        ? (config.blocks ?? 8)
+        : 1;
+  const blocks = isolate ? Math.max(1, Math.floor(requestedBlocks) || 1) : 1;
+  if (!isolate && requestedBlocks > 1) {
+    console.log(`${DIM}blocked sampling requires isolation - running single-block${RESET}`);
+  }
+
   const benchTune = {
     minCpuTime: config.minCpuTime,
     minSamples: config.minSamples,
@@ -298,6 +321,7 @@ export async function runCLI(args: string[]) {
     adaptive: config.adaptive,
     maxCpuTime: config.maxCpuTime,
     isolate,
+    blocks,
   };
 
   if (!shouldSave) {
@@ -311,15 +335,23 @@ export async function runCLI(args: string[]) {
     }
     const runEnvData: FreqSample[] = [];
     const runNoisyAliases: string[] = [];
+    const runBlockSpreads: number[] = [];
     let runCpu: string | null = null;
     for (const { file, resultFile } of runOutputs) {
       if (!existsSync(resultFile)) continue;
       const workerResult: WorkerResult = JSON.parse(readFileSync(resultFile, 'utf-8'));
       rmSync(resultFile);
       runCpu ??= workerResult.context.cpu.name;
-      collectEnvData(workerResult, suiteName(file), runEnvData, runNoisyAliases);
+      collectEnvData(workerResult, suiteName(file), runEnvData, runNoisyAliases, runBlockSpreads);
     }
-    printReportBox(runEnvData, runNoisyAliases, config.maxCpuTime!, undefined, runCpu);
+    printReportBox(
+      runEnvData,
+      runNoisyAliases,
+      config.maxCpuTime!,
+      undefined,
+      runCpu,
+      blocks > 1 ? { blocks, spreads: runBlockSpreads } : undefined
+    );
     return;
   }
 
@@ -371,6 +403,7 @@ export async function runCLI(args: string[]) {
   let hardwareSet = false;
   const saveEnvData: FreqSample[] = [];
   const saveNoisyAliases: string[] = [];
+  const saveBlockSpreads: number[] = [];
   let savedNoop: SavedResult['context'] | undefined;
 
   for (const { file, resultFile } of workerOutputs) {
@@ -397,7 +430,7 @@ export async function runCLI(args: string[]) {
       hardwareSet = true;
     }
 
-    collectEnvData(workerResult, suiteName(file), saveEnvData, saveNoisyAliases);
+    collectEnvData(workerResult, suiteName(file), saveEnvData, saveNoisyAliases, saveBlockSpreads);
 
     files.push({
       file: suiteName(file),
@@ -428,6 +461,7 @@ export async function runCLI(args: string[]) {
     ...(git ? { git } : {}),
     hardware,
     isolation: isolate ? 'bench' : 'file',
+    blocks,
     context: savedNoop,
     files,
     environment: { freqs: saveEnvData },
@@ -446,7 +480,14 @@ export async function runCLI(args: string[]) {
   const gitNote = git ? ` ${DIM}${gitHint(git)}${RESET}` : '';
   const saveMsg = `${GREEN}✔${RESET} Saved "${saveName}"${gitNote}${baselineNote} (${files.length} file${files.length !== 1 ? 's' : ''})`;
 
-  printReportBox(saveEnvData, saveNoisyAliases, config.maxCpuTime!, saveMsg, hardware.cpu);
+  printReportBox(
+    saveEnvData,
+    saveNoisyAliases,
+    config.maxCpuTime!,
+    saveMsg,
+    hardware.cpu,
+    blocks > 1 ? { blocks, spreads: saveBlockSpreads } : undefined
+  );
 
   if (shouldCompare) {
     const baselineName = getBaseline(labsDir);

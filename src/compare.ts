@@ -26,7 +26,7 @@ const CLOCK_COMPARE_THRESHOLD = 0.05;
 
 function medianFreq(freqs: FreqSample[]): number {
   if (freqs.length === 0) return 0;
-  const all = freqs.flatMap((s) => [s.runFreq, s.postFreq]);
+  const all = freqs.flatMap((s) => [s.runFreq, s.postFreq, ...(s.blockFreqs ?? [])]);
   return median(all);
 }
 
@@ -43,7 +43,7 @@ export const checkHardwareMatch: EnvironmentCheck = (baseline, candidate) => {
 
 function freqDrift(freqs: FreqSample[]): number {
   if (freqs.length === 0) return 0;
-  const all = freqs.flatMap((s) => [s.runFreq, s.postFreq]);
+  const all = freqs.flatMap((s) => [s.runFreq, s.postFreq, ...(s.blockFreqs ?? [])]);
   const min = Math.min(...all);
   const max = Math.max(...all);
   return (max - min) / ((max + min) / 2);
@@ -99,7 +99,21 @@ export const warnIsolationMismatch: EnvironmentWarning = (baseline, candidate) =
   ];
 };
 
-export const ENVIRONMENT_WARNINGS: EnvironmentWarning[] = [warnClockDrift, warnIsolationMismatch];
+export const warnBlocksMismatch: EnvironmentWarning = (baseline, candidate) => {
+  const b = baseline.blocks ?? 1;
+  const c = candidate.blocks ?? 1;
+  if (b === c) return [];
+  return [
+    `runs used different block counts (baseline: ${b}, candidate: ${c}) — ` +
+      `single-block spreads exclude between-process variance, so significance may be overstated`,
+  ];
+};
+
+export const ENVIRONMENT_WARNINGS: EnvironmentWarning[] = [
+  warnClockDrift,
+  warnIsolationMismatch,
+  warnBlocksMismatch,
+];
 
 /** All environment checks in order. Any failure blocks the entire comparison. */
 export const ENVIRONMENT_CHECKS: EnvironmentCheck[] = [checkHardwareMatch];

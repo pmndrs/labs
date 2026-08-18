@@ -32,6 +32,13 @@ export interface LabsConfig {
    * require shared process state or have expensive module setup. @default true
    */
   isolate?: boolean;
+  /**
+   * Fresh-process blocks per bench for saved runs. Each block is a new V8, so
+   * between-block spread captures JIT nondeterminism and environment drift
+   * that a single process hides. Requires isolate. `bench run` always uses a
+   * single block. @default 8
+   */
+  blocks?: number;
 }
 
 export function defineConfig(config: Partial<LabsConfig> & Pick<LabsConfig, 'benchDir'>): LabsConfig {
@@ -47,6 +54,7 @@ export function defineConfig(config: Partial<LabsConfig> & Pick<LabsConfig, 'ben
     minDelta: 0.05,
     minEffect: 0.474,
     isolate: true,
+    blocks: 8,
     ...config,
   };
 }
