@@ -10,6 +10,8 @@ export interface BlockInfo {
   blocks: number;
   /** Per-bench relative spread of block medians. */
   spreads: number[];
+  /** Configured verdict threshold, so the warning agrees with the noisy flag. */
+  minDelta: number;
 }
 
 export function printReportBox(
@@ -56,12 +58,13 @@ export function printReportBox(
     const spread = median(blockInfo.spreads);
     const mde = minDetectableEffect(spread, blockInfo.blocks);
     const spreadStr = `±${(spread * 100).toFixed(1)}%`;
-    const noisy = spread > 0.03;
+    // Same rule the worker uses to mark benches noisy, so the two agree
+    const noisy = mde > blockInfo.minDelta;
     lines.push(
       `${noisy ? YELLOW + '⚠' : GREEN + '✔'} between-block spread ${spreadStr}${RESET}  ${DIM}(${blockInfo.blocks} blocks/bench)${RESET}`
     );
     lines.push(
-      `  ${DIM}machine floor: comparisons resolve deltas ≥ ±${(mde * 100).toFixed(1)}%${RESET}`
+      `  ${DIM}est. between-run resolution ~±${(mde * 100).toFixed(1)}% (rough guide)${RESET}`
     );
     lines.push('');
   }
@@ -134,7 +137,7 @@ export function replayReport(result: SavedResult, config: LabsConfig): void {
     config.maxCpuTime!,
     undefined,
     result.hardware.cpu,
-    blocks > 1 ? { blocks, spreads } : undefined
+    blocks > 1 ? { blocks, spreads, minDelta: config.minDelta } : undefined
   );
 }
 

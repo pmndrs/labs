@@ -6,9 +6,67 @@ import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { measure } from '../src/bench/index.ts';
-import { blockSpread, classify, minDetectableEffect } from '../src/stats.ts';
+import { compare } from '../src/compare.ts';
+import { defineConfig } from '../src/config.ts';
+import { blockSpread, mannWhitneyU, minDetectableEffect } from '../src/stats.ts';
+import type { SavedResult } from '../src/store.ts';
 
 const fast = { min_cpu_time: 1, min_samples: 12, adaptive: false } as const;
+const CONFIG = defineConfig({ benchDir: '.' });
+
+function syntheticStats(blockMedians: number[], perBlock = 40) {
+  const samples: number[] = [];
+  for (const m of blockMedians) {
+    for (let i = 0; i < perBlock; i++) samples.push(m + ((i % 5) - 2) * 0.01);
+  }
+  samples.sort((a, b) => a - b);
+  const q = (p: number) => samples[(p * (samples.length - 1)) | 0];
+  return {
+    kind: 'fn' as const,
+    samples,
+    min: samples[0],
+    max: samples[samples.length - 1],
+    avg: samples.reduce((a, v) => a + v, 0) / samples.length,
+    p25: q(0.25),
+    p75: q(0.75),
+    p99: q(0.99),
+    noisy: false,
+    blocks: { medians: blockMedians, freqs: blockMedians.map(() => 4) },
+  };
+}
+
+function syntheticResult(
+  name: string,
+  blockMedians: number[],
+  opts: { legacy?: boolean } = {}
+): SavedResult {
+  const stats = syntheticStats(blockMedians);
+  if (opts.legacy) delete (stats as any).blocks;
+  return {
+    name,
+    timestamp: '2026-01-01T00:00:00.000Z',
+    hardware: { cpu: 'test-cpu', arch: 'test', runtime: 'node', freq: 4 },
+    isolation: 'bench',
+    ...(opts.legacy ? {} : { blocks: blockMedians.length }),
+    files: [
+      {
+        file: 'synthetic.bench.ts',
+        benchmarks: [
+          {
+            alias: 'unit',
+            group: 0,
+            baseline: false,
+            gcMode: true,
+            kind: 'static',
+            style: { compact: false, highlight: false },
+            runs: [{ name: 'unit', args: {}, stats }],
+          },
+        ],
+      },
+    ],
+    environment: { freqs: [] },
+  } as SavedResult;
+}
 
 describe('measurement plans', () => {
   it('reports the plan a measurement decided on', async () => {
@@ -65,6 +123,53 @@ describe('between-block statistics', () => {
   });
 });
 
+describe('comparing blocked results', () => {
+  it('tests block medians, not pooled samples', () => {
+    // Overlapping block medians with a 6% shift: no independent replication
+    // supports a verdict, but the pooled inner samples look wildly separated
+    const aMedians = [100, 92, 108, 95, 105, 90, 110, 99];
+    const bMedians = aMedians.map((m) => m * 1.06);
+    const a = syntheticResult('a', aMedians);
+    const b = syntheticResult('b', bMedians);
+
+    const pooledP = mannWhitneyU(
+      a.files[0].benchmarks[0].runs[0].stats!.samples,
+      b.files[0].benchmarks[0].runs[0].stats!.samples
+    ).p;
+    expect(pooledP).toBeLessThan(1e-6);
+
+    const bench = compare(a, b, CONFIG).benches[0];
+    expect(bench.kind).toBe('eligible');
+    if (bench.kind === 'eligible') {
+      expect(bench.p).toBeGreaterThan(0.05);
+      expect(bench.verdict).toBe('neutral');
+    }
+  });
+
+  it('flags real shifts that block replication does support', () => {
+    const aMedians = [100, 100.4, 99.7, 100.2, 99.9, 100.1, 99.8, 100.3];
+    const bMedians = aMedians.map((m) => m * 1.2);
+
+    const bench = compare(syntheticResult('a', aMedians), syntheticResult('b', bMedians), CONFIG)
+      .benches[0];
+    expect(bench.kind).toBe('eligible');
+    if (bench.kind === 'eligible') expect(bench.verdict).toBe('slower');
+  });
+
+  it('skips benches without block replication instead of judging them', () => {
+    const medians = [100, 101, 99, 100, 100, 101, 99, 100];
+    const legacy = syntheticResult('old', medians, { legacy: true });
+    const fresh = syntheticResult('new', medians);
+
+    const result = compare(legacy, fresh, CONFIG);
+    expect(result.benches[0].kind).toBe('skipped');
+    if (result.benches[0].kind === 'skipped') {
+      expect(result.benches[0].reason).toContain('block replication');
+    }
+    expect(result.environmentWarnings.some((w) => w.includes('block counts'))).toBe(true);
+  });
+});
+
 describe('worker blocked sampling', () => {
   const WORKER = fileURLToPath(new URL('../src/worker.ts', import.meta.url));
   const FIXTURE = fileURLToPath(new URL('./fixtures/blocks.bench.ts', import.meta.url));
@@ -117,15 +222,31 @@ describe('worker blocked sampling', () => {
     }
   });
 
+  function toSavedResult(name: string, workerResult: any): SavedResult {
+    return {
+      name,
+      timestamp: '2026-01-01T00:00:00.000Z',
+      hardware: { cpu: 'test-cpu', arch: 'test', runtime: 'node', freq: 4 },
+      isolation: 'bench',
+      blocks: 5,
+      files: [{ file: 'blocks.bench.ts', benchmarks: workerResult.benchmarks }],
+      environment: { freqs: [] },
+    } as SavedResult;
+  }
+
   it('judges two blocked runs of the same code as neutral', { timeout: 120_000, retry: 2 }, () => {
-    const a = runWorker({ LABS_BLOCKS: '3' });
-    const b = runWorker({ LABS_BLOCKS: '3' });
+    // A wide noisy threshold keeps the machine-floor flag out of the way so
+    // the A/A assertion exercises the verdict path itself
+    const env = { LABS_BLOCKS: '5', LABS_MIN_DELTA: '0.5' };
+    const a = runWorker(env);
+    const b = runWorker(env);
 
-    const { verdict } = classify(
-      a.benchmarks[0].runs[0].stats.samples,
-      b.benchmarks[0].runs[0].stats.samples
-    );
+    const result = compare(toSavedResult('a', a), toSavedResult('b', b), CONFIG);
+    const eligible = result.benches.filter((bench) => bench.kind === 'eligible');
 
-    expect(verdict).toBe('neutral');
+    expect(eligible).toHaveLength(2);
+    for (const bench of eligible) {
+      if (bench.kind === 'eligible') expect(bench.verdict).toBe('neutral');
+    }
   });
 });

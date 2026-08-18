@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { classify } from '../src/stats.ts';
+import { classify, mannWhitneyU } from '../src/stats.ts';
 
 const samples = (value: number) => Array.from({ length: 30 }, () => value);
 
@@ -17,5 +17,16 @@ describe('comparing benchmark results', () => {
 
   it('ignores differences below the meaningful-change threshold', () => {
     expect(classify(samples(100), samples(104)).verdict).toBe('neutral');
+  });
+});
+
+describe('mann-whitney on small samples', () => {
+  it('computes exact p-values for tie-free small samples', () => {
+    // Fully separated 5v5 has the smallest possible two-sided p of 2/252
+    expect(mannWhitneyU([1, 2, 3, 4, 5], [6, 7, 8, 9, 10]).p).toBeCloseTo(2 / 252, 6);
+  });
+
+  it('stays insignificant for interleaved small samples', () => {
+    expect(mannWhitneyU([1, 3, 5, 7, 9], [2, 4, 6, 8, 10]).p).toBeGreaterThan(0.5);
   });
 });

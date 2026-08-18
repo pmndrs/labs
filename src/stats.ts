@@ -18,10 +18,57 @@ export function mad(a: number[]): number {
   return median(a.map((v) => Math.abs(v - m)));
 }
 
+/** Largest per-side size where the exact Mann-Whitney null distribution is used. */
+const MW_U_EXACT_MAX = 25;
+
+/**
+ * Exact two-sided Mann-Whitney p-value from the rank-sum null distribution,
+ * built with the standard recurrence in probability form so counts never
+ * overflow. Valid only without ties.
+ */
+function exactMannWhitneyP(n1: number, n2: number, u: number): number {
+  const width = n1 * n2 + 1;
+  // table[m][k] = P(U = k) for m group-one values among m + n combined, n = 0 so far
+  let table: Float64Array[] = Array.from({ length: n1 + 1 }, () => {
+    const row = new Float64Array(width);
+    row[0] = 1;
+    return row;
+  });
+
+  for (let n = 1; n <= n2; n++) {
+    const next: Float64Array[] = [];
+    for (let m = 0; m <= n1; m++) {
+      const row = new Float64Array(width);
+      if (m === 0) {
+        row[0] = 1;
+      } else {
+        // Largest remaining value is from group one with probability m/(m+n),
+        // contributing n to U, otherwise from group two contributing nothing
+        const pm = m / (m + n);
+        const fromOne = next[m - 1];
+        const fromTwo = table[m];
+        for (let k = 0; k < width; k++) {
+          row[k] = pm * (k >= n ? fromOne[k - n] : 0) + (1 - pm) * fromTwo[k];
+        }
+      }
+      next.push(row);
+    }
+    table = next;
+  }
+
+  let cdf = 0;
+  const target = Math.min(u, n1 * n2 - u);
+  for (let k = 0; k <= target; k++) cdf += table[n1][k];
+  // The null distribution is symmetric, so doubling the smaller tail is exact
+  return Math.min(1, 2 * cdf);
+}
+
 /**
  * Mann-Whitney U test (two-tailed).
- * Ranks all combined samples, sums ranks for group A, derives U and p-value
- * via normal approximation. Accurate for n > ~20 (the engine yields 50+ samples).
+ * Ranks all combined samples and sums ranks for group A. Small tie-free
+ * samples (each side ≤ 25, e.g. block medians) get the exact null
+ * distribution. Larger or tied samples use the normal approximation,
+ * accurate for n > ~20.
  *
  * Returns { U, z, p } where p is the two-tailed p-value.
  */
@@ -35,11 +82,13 @@ export function mannWhitneyU(a: number[], b: number[]): { U: number; z: number; 
     (x, y) => x.v - y.v
   );
 
+  let ties = false;
   const ranks = new Float64Array(combined.length);
   let i = 0;
   while (i < combined.length) {
     let j = i;
     while (j < combined.length - 1 && combined[j + 1].v === combined[i].v) j++;
+    if (j > i) ties = true;
     const avgRank = (i + j) / 2 + 1; // 1-indexed
     for (let k = i; k <= j; k++) ranks[k] = avgRank;
     i = j + 1;
@@ -56,6 +105,10 @@ export function mannWhitneyU(a: number[], b: number[]): { U: number; z: number; 
   const mean = (n1 * n2) / 2;
   const sd = Math.sqrt((n1 * n2 * (n1 + n2 + 1)) / 12);
   const z = sd === 0 ? 0 : (U - mean) / sd;
+
+  if (!ties && n1 <= MW_U_EXACT_MAX && n2 <= MW_U_EXACT_MAX) {
+    return { U: U1, z, p: exactMannWhitneyP(n1, n2, Math.round(U)) };
+  }
 
   // Two-tailed p-value via erfc: p = erfc(|z| / sqrt(2))
   const p = erfc(Math.abs(z) / Math.SQRT2);
@@ -133,9 +186,11 @@ export function blockSpread(medians: number[]): number {
 }
 
 /**
- * Smallest relative delta a comparison of two runs with this between-block
- * spread can reliably detect (roughly alpha 0.05 at 0.8 power, comparing
- * means of `blocks` block medians per side).
+ * Rough planning estimate of the smallest relative delta a comparison of two
+ * runs with this between-block spread could detect. The 2.8 constant is the
+ * normal-theory factor for alpha 0.05 at 0.8 power comparing equal-size
+ * means, while actual verdicts use a rank test on block medians, so treat
+ * this as an order-of-magnitude guide, not a guarantee.
  */
 export function minDetectableEffect(spread: number, blocks: number): number {
   if (blocks < 2 || spread <= 0) return 0;

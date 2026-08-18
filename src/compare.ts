@@ -15,6 +15,8 @@ type EnvironmentCheck = (baseline: SavedResult, candidate: SavedResult) => Check
 interface BenchData {
   samples: number[];
   noisy: boolean;
+  /** Per-block medians, the independent experimental units. */
+  blocks?: number[];
 }
 
 type BenchCheck = (baseline: BenchData, candidate: BenchData) => CheckResult;
@@ -105,7 +107,7 @@ export const warnBlocksMismatch: EnvironmentWarning = (baseline, candidate) => {
   if (b === c) return [];
   return [
     `runs used different block counts (baseline: ${b}, candidate: ${c}) — ` +
-      `single-block spreads exclude between-process variance, so significance may be overstated`,
+      `benches without ≥${MIN_BLOCKS} blocks on both sides are skipped`,
   ];
 };
 
@@ -122,40 +124,36 @@ export const ENVIRONMENT_CHECKS: EnvironmentCheck[] = [checkHardwareMatch];
 
 export const checkNotNoisy: BenchCheck = (baseline, candidate) => {
   if (baseline.noisy && candidate.noisy)
-    return { ok: false, reason: 'noisy — insufficient or unconverged samples in both runs' };
+    return { ok: false, reason: 'noisy — measurement variance too high for a verdict in both runs' };
   if (baseline.noisy)
-    return { ok: false, reason: 'noisy — baseline did not collect enough stable samples' };
+    return { ok: false, reason: 'noisy — baseline variance too high for a verdict' };
   if (candidate.noisy)
-    return { ok: false, reason: 'noisy — candidate did not collect enough stable samples' };
+    return { ok: false, reason: 'noisy — candidate variance too high for a verdict' };
   return { ok: true };
 };
 
-/** MW-U normal approximation is unreliable below this threshold. */
-const MW_U_MIN_SAMPLES = 14;
+/**
+ * Samples within one process are correlated, so fresh-process blocks are the
+ * independent experimental units and verdicts require block replication on
+ * both sides. Five per side is the smallest count where the exact
+ * Mann-Whitney test can reach significance at alpha 0.05 (min p = 2/252).
+ */
+const MIN_BLOCKS = 5;
 
-export const checkMinSamples: BenchCheck = (baseline, candidate) => {
-  const bN = baseline.samples.length;
-  const cN = candidate.samples.length;
-  if (bN < MW_U_MIN_SAMPLES && cN < MW_U_MIN_SAMPLES)
-    return {
-      ok: false,
-      reason: `too few samples for MW-U (baseline: ${bN}, candidate: ${cN}; need ≥${MW_U_MIN_SAMPLES})`,
-    };
-  if (bN < MW_U_MIN_SAMPLES)
-    return {
-      ok: false,
-      reason: `baseline has too few samples for MW-U (${bN}; need ≥${MW_U_MIN_SAMPLES})`,
-    };
-  if (cN < MW_U_MIN_SAMPLES)
-    return {
-      ok: false,
-      reason: `candidate has too few samples for MW-U (${cN}; need ≥${MW_U_MIN_SAMPLES})`,
-    };
-  return { ok: true };
+export const checkBlockReplication: BenchCheck = (baseline, candidate) => {
+  const bN = baseline.blocks?.length ?? 1;
+  const cN = candidate.blocks?.length ?? 1;
+  if (bN >= MIN_BLOCKS && cN >= MIN_BLOCKS) return { ok: true };
+  return {
+    ok: false,
+    reason:
+      `insufficient block replication (baseline: ${bN}, candidate: ${cN}; need ≥${MIN_BLOCKS}) — ` +
+      `re-save with blocked sampling`,
+  };
 };
 
 /** All per-bench checks in order. Any failure skips that bench with a reason. */
-export const BENCH_CHECKS: BenchCheck[] = [checkNotNoisy, checkMinSamples];
+export const BENCH_CHECKS: BenchCheck[] = [checkNotNoisy, checkBlockReplication];
 
 // ─── Data types ──────────────────────────────────────────────────────────────
 
@@ -221,30 +219,23 @@ function trialRuns(trial: ComparableTrial): Array<{
   samples: number[];
   p99: number;
   noisy: boolean;
+  blocks?: number[];
 }> {
   const alias = (trial as any).alias ?? 'anonymous';
   const runs = (trial as any).runs as Array<any> | undefined;
+  const fromStats = (name: string, stats: any) => ({
+    name,
+    samples: Array.isArray(stats?.samples) ? stats.samples : [],
+    p99: typeof stats?.p99 === 'number' ? stats.p99 : 0,
+    noisy: !!stats?.noisy,
+    ...(Array.isArray(stats?.blocks?.medians) ? { blocks: stats.blocks.medians } : {}),
+  });
+
   if (Array.isArray(runs) && runs.length > 0) {
-    return runs.map((run) => {
-      const stats = run?.stats;
-      return {
-        name: run?.name ?? alias,
-        samples: Array.isArray(stats?.samples) ? stats.samples : [],
-        p99: typeof stats?.p99 === 'number' ? stats.p99 : 0,
-        noisy: !!stats?.noisy,
-      };
-    });
+    return runs.map((run) => fromStats(run?.name ?? alias, run?.stats));
   }
 
-  const stats = (trial as any).stats;
-  return [
-    {
-      name: alias,
-      samples: Array.isArray(stats?.samples) ? stats.samples : [],
-      p99: typeof stats?.p99 === 'number' ? stats.p99 : 0,
-      noisy: !!stats?.noisy,
-    },
-  ];
+  return [fromStats(alias, (trial as any).stats)];
 }
 
 // ─── Index helpers ───────────────────────────────────────────────────────────
@@ -254,6 +245,7 @@ interface IndexEntry {
   p99: number;
   samples: number[];
   noisy: boolean;
+  blocks?: number[];
 }
 
 function buildIndex(result: SavedResult): Map<string, IndexEntry> {
@@ -267,6 +259,7 @@ function buildIndex(result: SavedResult): Map<string, IndexEntry> {
           p99: run.p99,
           samples: run.samples,
           noisy: run.noisy,
+          ...(run.blocks ? { blocks: run.blocks } : {}),
         });
       }
     }
@@ -356,8 +349,8 @@ export function compare(
         }
 
         const benchData = {
-          baseline: { samples: base.samples, noisy: base.noisy },
-          candidate: { samples: run.samples, noisy: run.noisy },
+          baseline: { samples: base.samples, noisy: base.noisy, blocks: base.blocks },
+          candidate: { samples: run.samples, noisy: run.noisy, blocks: run.blocks },
         };
 
         let skipReason: string | undefined;
@@ -377,7 +370,10 @@ export function compare(
         const candidateMedian = median(run.samples);
         const deltaP50 = base.median > 0 ? (candidateMedian - base.median) / base.median : 0;
         const deltaP99 = base.p99 > 0 ? (run.p99 - base.p99) / base.p99 : 0;
-        const { verdict, p, d, effectiveMinDelta } = classify(base.samples, run.samples, opts);
+        // Verdicts test block medians: samples within a process are correlated,
+        // so pooled samples would shrink p arbitrarily without independent
+        // replication. Pooled data remains for the display columns only.
+        const { verdict, p, d, effectiveMinDelta } = classify(base.blocks!, run.blocks!, opts);
 
         benches.push({
           kind: 'eligible',
@@ -431,7 +427,7 @@ export function printCompareReport(result: CompareResult, config: LabsConfig): v
   );
   console.log(`${DIM}${result.hardware.cpu ?? 'unknown CPU'}${RESET}`);
   console.log(
-    `${DIM}Mann-Whitney U  α=${config.alpha}  minΔ=${(config.minDelta * 100).toFixed(0)}%  cliff's d≥${config.minEffect}${RESET}\n`
+    `${DIM}Mann-Whitney U on block medians  α=${config.alpha}  minΔ=${(config.minDelta * 100).toFixed(0)}%  cliff's d≥${config.minEffect}${RESET}\n`
   );
 
   if (result.environmentWarnings.length > 0) {

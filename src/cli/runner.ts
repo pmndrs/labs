@@ -105,7 +105,14 @@ function runBench(
   label: string,
   tune: Pick<
     Partial<LabsConfig>,
-    'minCpuTime' | 'minSamples' | 'maxSamples' | 'adaptive' | 'maxCpuTime' | 'isolate' | 'blocks'
+    | 'minCpuTime'
+    | 'minSamples'
+    | 'maxSamples'
+    | 'adaptive'
+    | 'maxCpuTime'
+    | 'isolate'
+    | 'blocks'
+    | 'minDelta'
   >,
   tagFilter?: string,
   resultFile?: string
@@ -125,6 +132,7 @@ function runBench(
       LABS_BENCH_FILE: pathToFileURL(file).href,
       LABS_ISOLATE: String(tune.isolate !== false),
       LABS_BLOCKS: String(tune.blocks ?? 1),
+      ...(tune.minDelta !== undefined ? { LABS_MIN_DELTA: String(tune.minDelta) } : {}),
       ...(tune.minCpuTime !== undefined ? { LABS_MIN_CPU_TIME: String(tune.minCpuTime * 1e9) } : {}),
       ...(tune.minSamples !== undefined ? { LABS_MIN_SAMPLES: String(tune.minSamples) } : {}),
       ...(tune.maxSamples !== undefined ? { LABS_MAX_SAMPLES: String(tune.maxSamples) } : {}),
@@ -322,6 +330,7 @@ export async function runCLI(args: string[]) {
     maxCpuTime: config.maxCpuTime,
     isolate,
     blocks,
+    minDelta: config.minDelta,
   };
 
   if (!shouldSave) {
@@ -350,7 +359,7 @@ export async function runCLI(args: string[]) {
       config.maxCpuTime!,
       undefined,
       runCpu,
-      blocks > 1 ? { blocks, spreads: runBlockSpreads } : undefined
+      blocks > 1 ? { blocks, spreads: runBlockSpreads, minDelta: config.minDelta } : undefined
     );
     return;
   }
@@ -486,7 +495,7 @@ export async function runCLI(args: string[]) {
     config.maxCpuTime!,
     saveMsg,
     hardware.cpu,
-    blocks > 1 ? { blocks, spreads: saveBlockSpreads } : undefined
+    blocks > 1 ? { blocks, spreads: saveBlockSpreads, minDelta: config.minDelta } : undefined
   );
 
   if (shouldCompare) {

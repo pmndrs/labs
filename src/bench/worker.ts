@@ -53,6 +53,12 @@ function blockCount(): number {
   return Number.isFinite(n) && n > 1 ? Math.floor(n) : 1;
 }
 
+/** Verdict threshold used for the blocked-mode noisy flag, from config via the runner. */
+function minDelta(): number {
+  const n = Number(process.env.LABS_MIN_DELTA);
+  return Number.isFinite(n) && n > 0 ? n : 0.05;
+}
+
 async function calibrateFreq(): Promise<number> {
   const r = await measure(() => {}, { batch_unroll: 1 });
   return 1 / (r as any).avg;
@@ -155,8 +161,8 @@ function mergeRange(
  * block's median and clock probe so between-block variance stays observable.
  * Counters and debug come from the pilot. The pilot's convergence flag is
  * discarded: in blocked mode quality is judged by between-block spread, and
- * `noisy` means the machine floor is too high to resolve the default 5%
- * verdict threshold.
+ * `noisy` means the estimated resolvable delta exceeds the configured
+ * verdict threshold (minDelta).
  */
 function mergeStats(list: Stats[], freqs: number[]): Stats {
   const samples = list.flatMap((s) => s.samples).sort((a, b) => a - b);
@@ -177,7 +183,7 @@ function mergeStats(list: Stats[], freqs: number[]): Stats {
     p999: percentile(samples, 0.999),
     avg: samples.reduce((a, v) => a + v, 0) / samples.length,
     ticks: list.reduce((a, s) => a + s.ticks, 0),
-    noisy: minDetectableEffect(blockSpread(medians), list.length) > 0.05,
+    noisy: minDetectableEffect(blockSpread(medians), list.length) > minDelta(),
     ...(heaps.length === list.length ? { heap: mergeRange(heaps, weights) } : {}),
     ...(gcs.length === list.length ? { gc: mergeRange(gcs, weights) } : {}),
     blocks: { medians, freqs },
