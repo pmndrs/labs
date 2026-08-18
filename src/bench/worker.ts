@@ -3,7 +3,6 @@ import { readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { getBenchRegistry } from '../index.ts';
-import { blockSpread, minDetectableEffect } from '../stats.ts';
 import { measure, run } from './index.ts';
 import { runTrialAt } from './main.ts';
 import type { BlockPlan, Stats, Trial } from './types.ts';
@@ -51,12 +50,6 @@ if (!file) {
 function blockCount(): number {
   const n = Number(process.env.LABS_BLOCKS);
   return Number.isFinite(n) && n > 1 ? Math.floor(n) : 1;
-}
-
-/** Verdict threshold used for the blocked-mode noisy flag, from config via the runner. */
-function minDelta(): number {
-  const n = Number(process.env.LABS_MIN_DELTA);
-  return Number.isFinite(n) && n > 0 ? n : 0.05;
 }
 
 async function calibrateFreq(): Promise<number> {
@@ -159,10 +152,10 @@ function mergeRange(
 /**
  * Pools samples across blocks and recomputes headline stats, keeping each
  * block's median and clock probe so between-block variance stays observable.
- * Counters and debug come from the pilot. The pilot's convergence flag is
- * discarded: in blocked mode quality is judged by between-block spread, and
- * `noisy` means the estimated resolvable delta exceeds the configured
- * verdict threshold (minDelta).
+ * Counters and debug come from the pilot. No `noisy` flag is stored for
+ * blocked stats: the pilot's convergence flag reflects a fraction of the
+ * budget, and spread-based noisiness is policy (it depends on minDelta), so
+ * readers derive it from `blocks.medians` against the current config.
  */
 function mergeStats(list: Stats[], freqs: number[]): Stats {
   const samples = list.flatMap((s) => s.samples).sort((a, b) => a - b);
@@ -183,7 +176,7 @@ function mergeStats(list: Stats[], freqs: number[]): Stats {
     p999: percentile(samples, 0.999),
     avg: samples.reduce((a, v) => a + v, 0) / samples.length,
     ticks: list.reduce((a, s) => a + s.ticks, 0),
-    noisy: minDetectableEffect(blockSpread(medians), list.length) > minDelta(),
+    noisy: undefined,
     ...(heaps.length === list.length ? { heap: mergeRange(heaps, weights) } : {}),
     ...(gcs.length === list.length ? { gc: mergeRange(gcs, weights) } : {}),
     blocks: { medians, freqs },
@@ -193,13 +186,28 @@ function mergeStats(list: Stats[], freqs: number[]): Stats {
 function mergeBlocks(parts: Array<{ trial: Trial; freq?: number }>): Trial {
   if (parts.length === 1) return parts[0].trial;
   const pilot = parts[0].trial;
-  const freqs = parts.map((p) => p.freq ?? 0);
   return {
     ...pilot,
     runs: pilot.runs.map((run, j) => {
-      const statsList = parts.map((p) => p.trial.runs[j]?.stats);
-      if (run.error !== undefined || !run.stats || statsList.some((s) => !s)) return run;
-      return { ...run, stats: mergeStats(statsList as Stats[], freqs) };
+      if (run.error !== undefined || !run.stats) return run;
+      // A block whose run produced no stats is dropped rather than voiding
+      // the whole bench; the surviving blocks still replicate independently.
+      const survivors = parts.filter((p) => p.trial.runs[j]?.stats);
+      if (survivors.length < parts.length) {
+        console.error(
+          `labs: bench "${run.name || pilot.alias}" lost ` +
+            `${parts.length - survivors.length} of ${parts.length} blocks ` +
+            `(no stats produced); merging the ${survivors.length} that completed`
+        );
+      }
+      if (survivors.length < 2) return run;
+      return {
+        ...run,
+        stats: mergeStats(
+          survivors.map((p) => p.trial.runs[j]!.stats!) as Stats[],
+          survivors.map((p) => p.freq ?? 0)
+        ),
+      };
     }),
   };
 }

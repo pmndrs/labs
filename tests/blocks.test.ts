@@ -38,7 +38,7 @@ function syntheticStats(blockMedians: number[], freq = 4, perBlock = 40) {
 function syntheticResult(
   name: string,
   blockMedians: number[],
-  opts: { legacy?: boolean; freq?: number } = {}
+  opts: { legacy?: boolean; freq?: number; isolation?: 'bench' | 'file' } = {}
 ): SavedResult {
   const stats = syntheticStats(blockMedians, opts.freq ?? 4);
   if (opts.legacy) delete (stats as any).blocks;
@@ -46,7 +46,7 @@ function syntheticResult(
     name,
     timestamp: '2026-01-01T00:00:00.000Z',
     hardware: { cpu: 'test-cpu', arch: 'test', runtime: 'node', freq: 4 },
-    isolation: 'bench',
+    isolation: opts.isolation ?? 'bench',
     ...(opts.legacy ? {} : { blocks: blockMedians.length }),
     files: [
       {
@@ -196,6 +196,21 @@ describe('comparing blocked results', () => {
     if (bench.kind === 'skipped') expect(bench.reason).toContain('clock-confounded');
   });
 
+  it('keeps verdicts when clocks are effectively equal despite probe jitter', () => {
+    // A real 6% regression with a candidate clock only ~1% lower: judged in
+    // cycles the shift shrinks below minDelta, but a 1% clock difference is
+    // within probe jitter, so the cross-check must stay inert instead of
+    // eating the verdict
+    const aMedians = [100, 100.4, 99.7, 100.2, 99.9, 100.1, 99.8, 100.3];
+    const bMedians = aMedians.map((m) => m * 1.06);
+    const a = syntheticResult('a', aMedians);
+    const b = syntheticResult('b', bMedians, { freq: 3.96 });
+
+    const bench = compare(a, b, CONFIG).benches[0];
+    expect(bench.kind).toBe('eligible');
+    if (bench.kind === 'eligible') expect(bench.verdict).toBe('slower');
+  });
+
   it('allows four blocks at alpha 0.05 but respects stricter alpha', () => {
     const aMedians = [99.8, 100, 100.2, 100.4];
     const bMedians = aMedians.map((m) => m * 1.2);
@@ -210,6 +225,35 @@ describe('comparing blocked results', () => {
     expect(strictBench.kind).toBe('skipped');
     if (strictBench.kind === 'skipped') {
       expect(strictBench.reason).toContain('cannot reach α=0.01');
+    }
+  });
+
+  it('judges large effects on noisy benches and reports their resolution', () => {
+    // ~6% between-block spread cannot resolve minDelta=5%, but a 50% shift
+    // with fully separated blocks is unambiguous: the bench keeps its verdict
+    // and carries its resolution for the report's noisy annotation
+    const aMedians = [100, 92, 108, 95, 105, 90, 110, 99];
+    const bMedians = aMedians.map((m) => m * 1.5);
+
+    const bench = compare(syntheticResult('a', aMedians), syntheticResult('b', bMedians), CONFIG)
+      .benches[0];
+    expect(bench.kind).toBe('eligible');
+    if (bench.kind === 'eligible') {
+      expect(bench.verdict).toBe('slower');
+      expect(bench.resolution).toBeGreaterThan(CONFIG.minDelta);
+    }
+  });
+
+  it('points isolation-disabled runs at isolate, not at re-saving', () => {
+    const medians = [100, 101, 99, 100, 100, 101, 99, 100];
+    const shared = syntheticResult('shared', medians, { legacy: true, isolation: 'file' });
+    const fresh = syntheticResult('fresh', medians);
+
+    const bench = compare(shared, fresh, CONFIG).benches[0];
+    expect(bench.kind).toBe('skipped');
+    if (bench.kind === 'skipped') {
+      expect(bench.reason).toContain('requires isolation');
+      expect(bench.reason).not.toContain('re-save with blocked sampling');
     }
   });
 
@@ -292,9 +336,7 @@ describe('worker blocked sampling', () => {
   }
 
   it('judges two blocked runs of the same code as neutral', { timeout: 120_000, retry: 2 }, () => {
-    // A wide noisy threshold keeps the machine-floor flag out of the way so
-    // the A/A assertion exercises the verdict path itself
-    const env = { LABS_BLOCKS: '5', LABS_MIN_DELTA: '0.5' };
+    const env = { LABS_BLOCKS: '5' };
     const a = runWorker(env);
     const b = runWorker(env);
 

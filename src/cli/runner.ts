@@ -6,7 +6,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { compare, printCompareReport } from '../compare.ts';
 import type { LabsConfig } from '../config.ts';
 import { type NoisyBench, printReportBox } from '../report.ts';
-import { blockSpread, clockExplainedFraction } from '../stats.ts';
+import { benchResolution, blockSpread, clockExplainedFraction } from '../stats.ts';
 import {
   type FreqSample,
   type GitInfo,
@@ -24,7 +24,7 @@ import {
   trimStats,
   uniqueResultName,
 } from '../store.ts';
-import { BLUE, CYAN, DIM, GREEN, RED, RESET } from '../utils/ansi.ts';
+import { BLUE, CYAN, DIM, GREEN, RED, RESET, YELLOW } from '../utils/ansi.ts';
 import { runBaselineCommand } from './commands/baseline.ts';
 import { runCompareCommand } from './commands/compare.ts';
 import { runDeleteCommand } from './commands/delete.ts';
@@ -35,25 +35,29 @@ import { error, gitHint } from './utils.ts';
 function collectEnvData(
   workerResult: WorkerResult,
   file: string,
+  minDelta: number,
   envData: FreqSample[],
   noisyBenches: NoisyBench[],
   blockSpreads: number[],
   clockExplained: number[]
 ): void {
   const runFreq = workerResult.context.cpu.freq;
-  const blockFreqs: number[] = [];
   for (const trial of workerResult.benchmarks) {
-    const trialFreqs = trial.runs[0]?.stats?.blocks?.freqs;
-    if (trialFreqs) blockFreqs.push(...trialFreqs.filter((f) => f > 0));
     for (const run of trial.runs) {
       const stats = run.stats;
-      if (stats && (stats as any).noisy) {
+      if (!stats) continue;
+      // Blocked stats derive noisiness from spread against the current
+      // config; single-block stats carry the engine's convergence flag.
+      const noisy = stats.blocks
+        ? benchResolution(stats.blocks.medians) > minDelta
+        : !!(stats as any).noisy;
+      if (noisy) {
         noisyBenches.push({
           name: run.name || trial.alias,
           ...(stats.blocks ? { spread: blockSpread(stats.blocks.medians) } : {}),
         });
       }
-      if (stats?.blocks) {
+      if (stats.blocks) {
         blockSpreads.push(blockSpread(stats.blocks.medians));
         clockExplained.push(clockExplainedFraction(stats.blocks.medians, stats.blocks.freqs));
       }
@@ -63,7 +67,6 @@ function collectEnvData(
     file,
     runFreq,
     postFreq: workerResult.environment?.postFreq ?? runFreq,
-    ...(blockFreqs.length > 0 ? { blockFreqs } : {}),
   });
 }
 
@@ -121,7 +124,6 @@ function runBench(
     | 'maxCpuTime'
     | 'isolate'
     | 'blocks'
-    | 'minDelta'
   >,
   tagFilter?: string,
   resultFile?: string
@@ -141,7 +143,6 @@ function runBench(
       LABS_BENCH_FILE: pathToFileURL(file).href,
       LABS_ISOLATE: String(tune.isolate !== false),
       LABS_BLOCKS: String(tune.blocks ?? 1),
-      ...(tune.minDelta !== undefined ? { LABS_MIN_DELTA: String(tune.minDelta) } : {}),
       ...(tune.minCpuTime !== undefined ? { LABS_MIN_CPU_TIME: String(tune.minCpuTime * 1e9) } : {}),
       ...(tune.minSamples !== undefined ? { LABS_MIN_SAMPLES: String(tune.minSamples) } : {}),
       ...(tune.maxSamples !== undefined ? { LABS_MAX_SAMPLES: String(tune.maxSamples) } : {}),
@@ -177,6 +178,8 @@ function captureGitInfo(dir: string): GitInfo | undefined {
 
 /** Parse a named flag value: --flag value -> value, or undefined if flag absent. */
 function flagValue(args: string[], flag: string): string | undefined {
+  const joined = args.find((a) => a.startsWith(`${flag}=`));
+  if (joined !== undefined) return joined.slice(flag.length + 1);
   const i = args.indexOf(flag);
   if (i === -1) return undefined;
   const next = args[i + 1];
@@ -320,15 +323,17 @@ export async function runCLI(args: string[]) {
   // Saves default to blocked sampling so between-block variance is captured.
   // `bench run` stays single-block for inner-loop speed unless asked.
   const blocksFlag = flagValue(benchArgs, '--blocks');
+  if (blocksFlag !== undefined && (!Number.isInteger(Number(blocksFlag)) || Number(blocksFlag) < 1)) {
+    error(`Invalid --blocks value "${blocksFlag}" — expected an integer ≥ 1`);
+  }
   const requestedBlocks =
-    blocksFlag !== undefined && blocksFlag !== ''
-      ? Number(blocksFlag)
-      : shouldSave
-        ? (config.blocks ?? 8)
-        : 1;
-  const blocks = isolate ? Math.max(1, Math.floor(requestedBlocks) || 1) : 1;
+    blocksFlag !== undefined ? Number(blocksFlag) : shouldSave ? (config.blocks ?? 8) : 1;
+  const blocks = isolate ? requestedBlocks : 1;
   if (!isolate && requestedBlocks > 1) {
-    console.log(`${DIM}blocked sampling requires isolation - running single-block${RESET}`);
+    console.log(
+      `${YELLOW}⚠ blocked sampling requires isolation — running single-block; ` +
+        `compare verdicts need block replication, so this ${shouldSave ? 'save' : 'run'} cannot receive them${RESET}`
+    );
   }
 
   const benchTune = {
@@ -339,7 +344,6 @@ export async function runCLI(args: string[]) {
     maxCpuTime: config.maxCpuTime,
     isolate,
     blocks,
-    minDelta: config.minDelta,
   };
 
   if (!shouldSave) {
@@ -364,6 +368,7 @@ export async function runCLI(args: string[]) {
       collectEnvData(
         workerResult,
         suiteName(file),
+        config.minDelta,
         runEnvData,
         runNoisyBenches,
         runBlockSpreads,
@@ -467,6 +472,7 @@ export async function runCLI(args: string[]) {
     collectEnvData(
       workerResult,
       suiteName(file),
+      config.minDelta,
       saveEnvData,
       saveNoisyBenches,
       saveBlockSpreads,

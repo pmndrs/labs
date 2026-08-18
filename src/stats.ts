@@ -272,6 +272,16 @@ export function minDetectableEffect(spread: number, blocks: number): number {
   return 2.8 * spread * Math.sqrt(2 / blocks);
 }
 
+/**
+ * A bench's between-run resolution: the smallest relative delta its
+ * between-block spread could plausibly detect. Derived from saved block
+ * medians on demand — never persisted — so it always reflects the data and
+ * whatever threshold the current config compares it against.
+ */
+export function benchResolution(medians: number[]): number {
+  return minDetectableEffect(blockSpread(medians), medians.length);
+}
+
 /** Smallest attainable two-sided exact Mann-Whitney p-value for two sample sizes. */
 export function minMannWhitneyP(n1: number, n2: number): number {
   if (n1 < 1 || n2 < 1) return 1;

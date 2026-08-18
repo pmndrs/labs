@@ -23,13 +23,8 @@ export interface LabsConfig {
   maxCpuTime?: number;
   /** Mann-Whitney U significance level. @default 0.05 */
   alpha: number;
-  /** Minimum absolute Δp50 required to flag a verdict. Filters environmental noise on identical code. @default 0.05 */
+  /** Minimum |Hodges-Lehmann delta| required to flag a verdict. Filters environmental noise on identical code. @default 0.05 */
   minDelta: number;
-  /**
-   * @deprecated Unused. On block medians Cliff's d is a linear transform of
-   * the U statistic already behind the p-value, so the alpha gate subsumes it.
-   */
-  minEffect: number;
   /**
    * Whether each bench runs in a fresh worker process. Disable for suites that
    * require shared process state or have expensive module setup. @default true
@@ -55,7 +50,6 @@ export function defineConfig(config: Partial<LabsConfig> & Pick<LabsConfig, 'ben
     maxCpuTime: 5,
     alpha: 0.05,
     minDelta: 0.05,
-    minEffect: 0.474,
     isolate: true,
     blocks: 8,
     ...config,

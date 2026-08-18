@@ -119,8 +119,6 @@ export interface FreqSample {
   preFreq?: number;
   runFreq: number;
   postFreq: number;
-  /** Per-block clock probes when the file ran with blocked sampling. */
-  blockFreqs?: number[];
 }
 
 export interface SavedResult {
@@ -157,7 +155,9 @@ export interface LastComparison {
 }
 
 function freqReadings(freqs: FreqSample[]): number[] {
-  return freqs.flatMap((s) => [s.runFreq, s.postFreq, ...(s.blockFreqs ?? [])]);
+  // Only the two long calibrated readings: the cheap per-block probes use a
+  // different warmup/budget and would read their calibration offset as drift.
+  return freqs.flatMap((s) => [s.runFreq, s.postFreq]);
 }
 
 /** Returns true if the CPU clock was stable during the run (drift ≤ threshold). */

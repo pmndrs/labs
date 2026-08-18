@@ -1,6 +1,13 @@
 import type { LabsConfig } from './config.ts';
 import { renderDistributions } from './histogram.ts';
-import { type ClassifyOptions, type Verdict, classify, median, minMannWhitneyP } from './stats.ts';
+import {
+  type ClassifyOptions,
+  type Verdict,
+  benchResolution,
+  classify,
+  median,
+  minMannWhitneyP,
+} from './stats.ts';
 import { type FreqSample, type GitInfo, type SavedResult, isEnvironmentStable } from './store.ts';
 import { gitHint } from './cli/utils.ts';
 import { BOLD, CYAN, DARK_GRAY, DIM, GRAY, GREEN, RED, RESET, WHITE, YELLOW } from './utils/ansi.ts';
@@ -14,9 +21,10 @@ type EnvironmentCheck = (baseline: SavedResult, candidate: SavedResult) => Check
 
 interface BenchData {
   samples: number[];
-  noisy: boolean;
   /** Per-block medians, the independent experimental units. */
   blocks?: number[];
+  /** Isolation mode of the run this bench came from, for actionable skip reasons. */
+  isolation?: 'bench' | 'file';
 }
 
 type BenchCheck = (baseline: BenchData, candidate: BenchData, config: LabsConfig) => CheckResult;
@@ -26,9 +34,14 @@ type BenchCheck = (baseline: BenchData, candidate: BenchData, config: LabsConfig
 /** Max relative difference between the two runs' median clock speeds to consider them comparable. */
 const CLOCK_COMPARE_THRESHOLD = 0.05;
 
+// Run-level clock signals use only the two long calibrated readings
+// (runFreq/postFreq). The cheap 50ms per-block probes estimate the clock with
+// a different warmup and budget, so they are only ever compared against each
+// other (block-level: clock attribution and the clock-confounded gate) —
+// pooling them here would read the calibration offset as drift.
 function medianFreq(freqs: FreqSample[]): number {
   if (freqs.length === 0) return 0;
-  const all = freqs.flatMap((s) => [s.runFreq, s.postFreq, ...(s.blockFreqs ?? [])]);
+  const all = freqs.flatMap((s) => [s.runFreq, s.postFreq]);
   return median(all);
 }
 
@@ -45,7 +58,7 @@ export const checkHardwareMatch: EnvironmentCheck = (baseline, candidate) => {
 
 function freqDrift(freqs: FreqSample[]): number {
   if (freqs.length === 0) return 0;
-  const all = freqs.flatMap((s) => [s.runFreq, s.postFreq, ...(s.blockFreqs ?? [])]);
+  const all = freqs.flatMap((s) => [s.runFreq, s.postFreq]);
   const min = Math.min(...all);
   const max = Math.max(...all);
   return (max - min) / ((max + min) / 2);
@@ -122,21 +135,16 @@ export const ENVIRONMENT_CHECKS: EnvironmentCheck[] = [checkHardwareMatch];
 
 // ─── Per-bench checks ────────────────────────────────────────────────────────
 
-export const checkNotNoisy: BenchCheck = (baseline, candidate) => {
-  if (baseline.noisy && candidate.noisy)
-    return { ok: false, reason: 'noisy — measurement variance too high for a verdict in both runs' };
-  if (baseline.noisy)
-    return { ok: false, reason: 'noisy — baseline variance too high for a verdict' };
-  if (candidate.noisy)
-    return { ok: false, reason: 'noisy — candidate variance too high for a verdict' };
-  return { ok: true };
-};
-
 /**
  * Samples within one process are correlated, so fresh-process blocks are the
  * independent experimental units and verdicts require block replication on
  * both sides. Eligibility also requires enough combined allocations for the
  * exact test to reach the configured alpha.
+ *
+ * There is deliberately no noisiness gate: the exact test on block medians is
+ * already spread-aware (high spread widens the CI and lifts p), so noisy
+ * benches keep their verdicts and are annotated with their resolution in the
+ * report instead of being hidden.
  */
 const MIN_REPLICATED_BLOCKS = 2;
 
@@ -144,11 +152,17 @@ export const checkBlockReplication: BenchCheck = (baseline, candidate, config) =
   const bN = baseline.blocks?.length ?? 1;
   const cN = candidate.blocks?.length ?? 1;
   if (bN < MIN_REPLICATED_BLOCKS || cN < MIN_REPLICATED_BLOCKS) {
+    // With isolation off the runner forces single-block runs, so "re-save"
+    // would be a dead end — say what actually has to change.
+    const fix =
+      baseline.isolation === 'file' || candidate.isolation === 'file'
+        ? 'blocked sampling requires isolation; enable isolate and re-save'
+        : 're-save with blocked sampling';
     return {
       ok: false,
       reason:
         `insufficient block replication (baseline: ${bN}, candidate: ${cN}; ` +
-        `need ≥${MIN_REPLICATED_BLOCKS} per side) — re-save with blocked sampling`,
+        `need ≥${MIN_REPLICATED_BLOCKS} per side) — ${fix}`,
     };
   }
 
@@ -165,7 +179,7 @@ export const checkBlockReplication: BenchCheck = (baseline, candidate, config) =
 };
 
 /** All per-bench checks in order. Any failure skips that bench with a reason. */
-export const BENCH_CHECKS: BenchCheck[] = [checkNotNoisy, checkBlockReplication];
+export const BENCH_CHECKS: BenchCheck[] = [checkBlockReplication];
 
 // ─── Data types ──────────────────────────────────────────────────────────────
 
@@ -191,6 +205,13 @@ export interface EligibleBench {
   hl: number;
   ciLow: number;
   ciHigh: number;
+  /**
+   * Worse of the two sides' between-run resolutions (minimum detectable
+   * effect from between-block spread). Above minDelta the row is annotated
+   * noisy: verdicts still stand, but a neutral means "could not tell", not
+   * "no change".
+   */
+  resolution: number;
 }
 
 export interface SkippedBench {
@@ -233,7 +254,6 @@ function trialRuns(trial: ComparableTrial): Array<{
   name: string;
   samples: number[];
   p99: number;
-  noisy: boolean;
   blocks?: number[];
   freqs?: number[];
 }> {
@@ -243,7 +263,6 @@ function trialRuns(trial: ComparableTrial): Array<{
     name,
     samples: Array.isArray(stats?.samples) ? stats.samples : [],
     p99: typeof stats?.p99 === 'number' ? stats.p99 : 0,
-    noisy: !!stats?.noisy,
     ...(Array.isArray(stats?.blocks?.medians) ? { blocks: stats.blocks.medians } : {}),
     ...(Array.isArray(stats?.blocks?.freqs) ? { freqs: stats.blocks.freqs } : {}),
   });
@@ -260,7 +279,6 @@ function trialRuns(trial: ComparableTrial): Array<{
 interface IndexEntry {
   p99: number;
   samples: number[];
-  noisy: boolean;
   blocks?: number[];
   freqs?: number[];
 }
@@ -274,7 +292,6 @@ function buildIndex(result: SavedResult): Map<string, IndexEntry> {
         map.set(key, {
           p99: run.p99,
           samples: run.samples,
-          noisy: run.noisy,
           ...(run.blocks ? { blocks: run.blocks } : {}),
           ...(run.freqs ? { freqs: run.freqs } : {}),
         });
@@ -303,10 +320,19 @@ function benchKey(
 // ─── Clock gate ──────────────────────────────────────────────────────────────
 
 /**
+ * Median block clocks must differ by more than this before the cycles
+ * cross-check can veto a verdict. The per-block probes carry a percent or two
+ * of jitter; below this threshold a time/cycles disagreement says more about
+ * probe noise than about the clock, and skipping would eat real verdicts.
+ */
+const CLOCK_GATE_MIN_DIFF = 0.02;
+
+/**
  * Re-judges a bench in cycles instead of time and returns a skip reason when
  * the two verdicts disagree. Only applies when both sides carry a valid clock
- * probe for every block; equal clocks make the cycles verdict identical to
- * the time verdict, so the gate is inert unless the runs' clocks differed.
+ * probe for every block and the runs' median block clocks actually differ
+ * (beyond CLOCK_GATE_MIN_DIFF); with equal clocks the cycles data is just
+ * time scaled by probe jitter, so the gate stays inert.
  */
 function clockConfounded(
   base: IndexEntry,
@@ -320,6 +346,11 @@ function clockConfounded(
     blocks && freqs && freqs.length === blocks.length && freqs.every((f) => f > 0);
   if (!usable(base.blocks, bFreqs) || !usable(candidate.blocks, cFreqs)) return undefined;
 
+  const bClock = median(bFreqs!);
+  const cClock = median(cFreqs!);
+  const clockDiff = Math.abs(bClock - cClock) / ((bClock + cClock) / 2);
+  if (clockDiff <= CLOCK_GATE_MIN_DIFF) return undefined;
+
   const cycles = (blocks: number[], freqs: number[]) => blocks.map((m, i) => m * freqs[i]);
   const cyclesVerdict = classify(
     cycles(base.blocks!, bFreqs!),
@@ -330,7 +361,7 @@ function clockConfounded(
 
   return (
     `clock-confounded — time-based verdict "${timeVerdict}" but cycles-based "${cyclesVerdict}" ` +
-    `(median clocks ${median(bFreqs!).toFixed(2)} vs ${median(cFreqs!).toFixed(2)} GHz)`
+    `(median clocks ${bClock.toFixed(2)} vs ${cClock.toFixed(2)} GHz)`
   );
 }
 
@@ -399,8 +430,8 @@ export function compare(
         }
 
         const benchData = {
-          baseline: { samples: base.samples, noisy: base.noisy, blocks: base.blocks },
-          candidate: { samples: run.samples, noisy: run.noisy, blocks: run.blocks },
+          baseline: { samples: base.samples, blocks: base.blocks, isolation: baseline.isolation },
+          candidate: { samples: run.samples, blocks: run.blocks, isolation: candidate.isolation },
         };
 
         let skipReason: string | undefined;
@@ -451,6 +482,7 @@ export function compare(
           hl: time.hl,
           ciLow: time.ciLow,
           ciHigh: time.ciHigh,
+          resolution: Math.max(benchResolution(base.blocks!), benchResolution(run.blocks!)),
         });
       }
     }
@@ -576,6 +608,7 @@ export function printCompareReport(result: CompareResult, config: LabsConfig): v
 
     let lastFile = '';
     let lastGroup = '';
+    let sawNoisy = false;
 
     for (const bench of eligible) {
       if (bench.key.file !== lastFile) {
@@ -602,6 +635,9 @@ export function printCompareReport(result: CompareResult, config: LabsConfig): v
       const dp50Color = neutral ? DIM : bench.verdict === 'faster' ? GREEN : RED;
       const dp99Color = neutral ? DIM : deltaColor(bench.deltaP99, sig);
       const pColor = neutral ? DIM : WHITE;
+      const noisy = bench.resolution > config.minDelta;
+      if (noisy) sawNoisy = true;
+      const noisyMark = noisy ? `  ${YELLOW}⚠ ~±${(bench.resolution * 100).toFixed(0)}%${RESET}` : '';
 
       console.log(
         `  ${color}${symbol}${RESET} ${WHITE}${name}${RESET}` +
@@ -610,11 +646,21 @@ export function printCompareReport(result: CompareResult, config: LabsConfig): v
           ` ${dp50Color}${formatDelta(bench.deltaP50).padStart(DELTA_COL)}${RESET}` +
           ` ${dp99Color}${formatDelta(bench.deltaP99).padStart(DELTA_COL)}${RESET}` +
           ` ${pColor}${formatP(bench.p).padStart(P_COL)}${RESET}` +
-          ` ${neutral ? DIM : WHITE}${formatCI(bench.ciLow, bench.ciHigh).padStart(CI_COL)}${RESET}`
+          ` ${neutral ? DIM : WHITE}${formatCI(bench.ciLow, bench.ciHigh).padStart(CI_COL)}${RESET}` +
+          noisyMark
       );
 
       const dist = renderDistributions(bench.baselineSamples, bench.candidateSamples, TIME_COL);
       console.log(`${' '.repeat(4 + nameCol)} ${dist.baseline} ${dist.candidate}`);
+      console.log('');
+    }
+
+    if (sawNoisy) {
+      console.log(
+        `${YELLOW}⚠${RESET} ${DIM}between-block spread limits these benches to the shown ` +
+          `resolution (above minΔ=${(config.minDelta * 100).toFixed(0)}%); a neutral there ` +
+          `means "could not tell", not "no change"${RESET}`
+      );
       console.log('');
     }
   }

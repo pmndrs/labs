@@ -1,7 +1,13 @@
 import type { LabsConfig } from './config.ts';
 import { renderMitata, type RenderedCollection } from './bench/render.ts';
 import type { Context, Stats, Trial } from './bench/types.ts';
-import { blockSpread, clockExplainedFraction, median, minDetectableEffect } from './stats.ts';
+import {
+  benchResolution,
+  blockSpread,
+  clockExplainedFraction,
+  median,
+  minDetectableEffect,
+} from './stats.ts';
 import type { SavedBenchmarkTrial, SavedFile, SavedResult, FreqSample } from './store.ts';
 import { BLUE, BOLD, DIM, GREEN, RESET, YELLOW } from './utils/ansi.ts';
 import { visibleLength } from './utils/format.ts';
@@ -37,7 +43,7 @@ export function printReportBox(
     lines.push('');
   }
   if (envData.length > 0) {
-    const allFreqs = envData.flatMap((e) => [e.runFreq, e.postFreq, ...(e.blockFreqs ?? [])]);
+    const allFreqs = envData.flatMap((e) => [e.runFreq, e.postFreq]);
     const min = Math.min(...allFreqs);
     const max = Math.max(...allFreqs);
     const drift = (max - min) / ((max + min) / 2);
@@ -66,7 +72,7 @@ export function printReportBox(
     const spread = median(blockInfo.spreads);
     const mde = minDetectableEffect(spread, blockInfo.blocks);
     const spreadStr = `±${(spread * 100).toFixed(1)}%`;
-    // Same rule the worker uses to mark benches noisy, so the two agree
+    // Same rule the readers use to derive per-bench noisiness, so the two agree
     const noisy = mde > blockInfo.minDelta;
     lines.push(
       `${noisy ? YELLOW + '⚠' : GREEN + '✔'} between-block spread ${spreadStr}${RESET}  ${DIM}(${blockInfo.blocks} blocks/bench)${RESET}`
@@ -140,10 +146,15 @@ export function replayReport(result: SavedResult, config: LabsConfig): void {
   for (const f of result.files) {
     for (const b of f.benchmarks) {
       for (const run of b.runs) {
-        if (run.stats?.noisy) {
+        // Blocked stats derive noisiness from spread against the current
+        // config; single-block stats carry the engine's convergence flag.
+        const noisy = run.stats?.blocks
+          ? benchResolution(run.stats.blocks.medians) > config.minDelta
+          : !!run.stats?.noisy;
+        if (noisy) {
           noisyBenches.push({
             name: run.name || b.alias,
-            ...(run.stats.blocks ? { spread: blockSpread(run.stats.blocks.medians) } : {}),
+            ...(run.stats?.blocks ? { spread: blockSpread(run.stats.blocks.medians) } : {}),
           });
         }
         if (run.stats?.blocks) {
