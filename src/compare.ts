@@ -1,6 +1,6 @@
 import type { LabsConfig } from './config.ts';
 import { renderDistributions } from './histogram.ts';
-import { type ClassifyOptions, type Verdict, classify, median } from './stats.ts';
+import { type ClassifyOptions, type Verdict, classify, median, minMannWhitneyP } from './stats.ts';
 import { type FreqSample, type GitInfo, type SavedResult, isEnvironmentStable } from './store.ts';
 import { gitHint } from './cli/utils.ts';
 import { BOLD, CYAN, DARK_GRAY, DIM, GRAY, GREEN, RED, RESET, WHITE, YELLOW } from './utils/ansi.ts';
@@ -19,7 +19,7 @@ interface BenchData {
   blocks?: number[];
 }
 
-type BenchCheck = (baseline: BenchData, candidate: BenchData) => CheckResult;
+type BenchCheck = (baseline: BenchData, candidate: BenchData, config: LabsConfig) => CheckResult;
 
 // ─── Environment checks ──────────────────────────────────────────────────────
 
@@ -107,7 +107,7 @@ export const warnBlocksMismatch: EnvironmentWarning = (baseline, candidate) => {
   if (b === c) return [];
   return [
     `runs used different block counts (baseline: ${b}, candidate: ${c}) — ` +
-      `benches without ≥${MIN_BLOCKS} blocks on both sides are skipped`,
+      `eligibility uses the actual counts and configured significance level`,
   ];
 };
 
@@ -135,20 +135,32 @@ export const checkNotNoisy: BenchCheck = (baseline, candidate) => {
 /**
  * Samples within one process are correlated, so fresh-process blocks are the
  * independent experimental units and verdicts require block replication on
- * both sides. Five per side is the smallest count where the exact
- * Mann-Whitney test can reach significance at alpha 0.05 (min p = 2/252).
+ * both sides. Eligibility also requires enough combined allocations for the
+ * exact test to reach the configured alpha.
  */
-const MIN_BLOCKS = 5;
+const MIN_REPLICATED_BLOCKS = 2;
 
-export const checkBlockReplication: BenchCheck = (baseline, candidate) => {
+export const checkBlockReplication: BenchCheck = (baseline, candidate, config) => {
   const bN = baseline.blocks?.length ?? 1;
   const cN = candidate.blocks?.length ?? 1;
-  if (bN >= MIN_BLOCKS && cN >= MIN_BLOCKS) return { ok: true };
+  if (bN < MIN_REPLICATED_BLOCKS || cN < MIN_REPLICATED_BLOCKS) {
+    return {
+      ok: false,
+      reason:
+        `insufficient block replication (baseline: ${bN}, candidate: ${cN}; ` +
+        `need ≥${MIN_REPLICATED_BLOCKS} per side) — re-save with blocked sampling`,
+    };
+  }
+
+  const alpha = config.alpha ?? 0.05;
+  const minP = minMannWhitneyP(bN, cN);
+  if (minP <= alpha) return { ok: true };
   return {
     ok: false,
     reason:
-      `insufficient block replication (baseline: ${bN}, candidate: ${cN}; need ≥${MIN_BLOCKS}) — ` +
-      `re-save with blocked sampling`,
+      `block counts cannot reach α=${alpha} ` +
+      `(baseline: ${bN}, candidate: ${cN}; smallest attainable p=${minP.toPrecision(2)}) — ` +
+      `add blocks`,
   };
 };
 
@@ -241,7 +253,6 @@ function trialRuns(trial: ComparableTrial): Array<{
 // ─── Index helpers ───────────────────────────────────────────────────────────
 
 interface IndexEntry {
-  median: number;
   p99: number;
   samples: number[];
   noisy: boolean;
@@ -255,7 +266,6 @@ function buildIndex(result: SavedResult): Map<string, IndexEntry> {
       for (const run of trialRuns(trial)) {
         const key = `${f.file}\0${trial.groupName ?? ''}\0${run.name}`;
         map.set(key, {
-          median: run.samples.length > 0 ? median(run.samples) : 0,
           p99: run.p99,
           samples: run.samples,
           noisy: run.noisy,
@@ -355,7 +365,7 @@ export function compare(
 
         let skipReason: string | undefined;
         for (const check of BENCH_CHECKS) {
-          const result = check(benchData.baseline, benchData.candidate);
+          const result = check(benchData.baseline, benchData.candidate, config);
           if (!result.ok) {
             skipReason = result.reason;
             break;
@@ -367,8 +377,9 @@ export function compare(
           continue;
         }
 
-        const candidateMedian = median(run.samples);
-        const deltaP50 = base.median > 0 ? (candidateMedian - base.median) / base.median : 0;
+        const baselineMedian = median(base.blocks!);
+        const candidateMedian = median(run.blocks!);
+        const deltaP50 = baselineMedian > 0 ? (candidateMedian - baselineMedian) / baselineMedian : 0;
         const deltaP99 = base.p99 > 0 ? (run.p99 - base.p99) / base.p99 : 0;
         // Verdicts test block medians: samples within a process are correlated,
         // so pooled samples would shrink p arbitrarily without independent
@@ -378,7 +389,7 @@ export function compare(
         benches.push({
           kind: 'eligible',
           key: key_,
-          baselineP50: base.median,
+          baselineP50: baselineMedian,
           candidateP50: candidateMedian,
           baselineSamples: base.samples,
           candidateSamples: run.samples,

@@ -156,6 +156,50 @@ describe('comparing blocked results', () => {
     if (bench.kind === 'eligible') expect(bench.verdict).toBe('slower');
   });
 
+  it('reports p50 and delta from the block medians used for the verdict', () => {
+    const aMedians = [90, 91, 92, 93, 94, 95, 96, 97];
+    const bMedians = [96.1, 97.1, 98.1, 99.1, 100.1, 101.1, 102.1, 103.1];
+    const a = syntheticResult('a', aMedians);
+    const b = syntheticResult('b', bMedians);
+    const aStats = a.files[0].benchmarks[0].runs[0].stats!;
+    const bStats = b.files[0].benchmarks[0].runs[0].stats!;
+
+    // These skewed inner samples make the pooled p50 move slightly faster,
+    // opposite to the independently replicated block-median effect.
+    aStats.samples = aMedians
+      .flatMap((m) => [...Array(11).fill(m), ...Array(9).fill(1_000)])
+      .sort((x, y) => x - y);
+    bStats.samples = bMedians
+      .flatMap((m) => [...Array(9).fill(50), ...Array(11).fill(m)])
+      .sort((x, y) => x - y);
+
+    const bench = compare(a, b, CONFIG).benches[0];
+    expect(bench.kind).toBe('eligible');
+    if (bench.kind === 'eligible') {
+      expect(bench.verdict).toBe('slower');
+      expect(bench.baselineP50).toBe(93.5);
+      expect(bench.candidateP50).toBeCloseTo(99.6, 10);
+      expect(bench.deltaP50).toBeGreaterThan(0.05);
+    }
+  });
+
+  it('allows four blocks at alpha 0.05 but respects stricter alpha', () => {
+    const aMedians = [99.8, 100, 100.2, 100.4];
+    const bMedians = aMedians.map((m) => m * 1.2);
+    const a = syntheticResult('a', aMedians);
+    const b = syntheticResult('b', bMedians);
+
+    const defaultBench = compare(a, b, CONFIG).benches[0];
+    expect(defaultBench.kind).toBe('eligible');
+    if (defaultBench.kind === 'eligible') expect(defaultBench.verdict).toBe('slower');
+
+    const strictBench = compare(a, b, defineConfig({ benchDir: '.', alpha: 0.01 })).benches[0];
+    expect(strictBench.kind).toBe('skipped');
+    if (strictBench.kind === 'skipped') {
+      expect(strictBench.reason).toContain('cannot reach α=0.01');
+    }
+  });
+
   it('skips benches without block replication instead of judging them', () => {
     const medians = [100, 101, 99, 100, 100, 101, 99, 100];
     const legacy = syntheticResult('old', medians, { legacy: true });

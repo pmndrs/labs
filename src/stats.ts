@@ -18,57 +18,56 @@ export function mad(a: number[]): number {
   return median(a.map((v) => Math.abs(v - m)));
 }
 
-/** Largest per-side size where the exact Mann-Whitney null distribution is used. */
-const MW_U_EXACT_MAX = 25;
+/** Largest combined sample size where the exact Mann-Whitney distribution is used. */
+const MW_U_EXACT_MAX_TOTAL = 50;
 
 /**
- * Exact two-sided Mann-Whitney p-value from the rank-sum null distribution,
- * built with the standard recurrence in probability form so counts never
- * overflow. Valid only without ties.
+ * Exact two-sided Mann-Whitney p-value from the conditional permutation
+ * distribution of the observed ranks. Doubled integer ranks keep tied
+ * midranks exact, while treating equal-valued observations as distinct
+ * assignments gives every allocation of group labels its proper weight.
  */
-function exactMannWhitneyP(n1: number, n2: number, u: number): number {
-  const width = n1 * n2 + 1;
-  // table[m][k] = P(U = k) for m group-one values among m + n combined, n = 0 so far
-  let table: Float64Array[] = Array.from({ length: n1 + 1 }, () => {
-    const row = new Float64Array(width);
-    row[0] = 1;
-    return row;
-  });
+function exactMannWhitneyP(ranks: Float64Array, n1: number, observedRankSum: number): number {
+  const doubledRanks = Array.from(ranks, (rank) => Math.round(rank * 2));
+  const maxRankSum = doubledRanks
+    .slice()
+    .sort((a, b) => b - a)
+    .slice(0, n1)
+    .reduce((sum, rank) => sum + rank, 0);
+  const counts = Array.from({ length: n1 + 1 }, () => new Float64Array(maxRankSum + 1));
+  counts[0][0] = 1;
 
-  for (let n = 1; n <= n2; n++) {
-    const next: Float64Array[] = [];
-    for (let m = 0; m <= n1; m++) {
-      const row = new Float64Array(width);
-      if (m === 0) {
-        row[0] = 1;
-      } else {
-        // Largest remaining value is from group one with probability m/(m+n),
-        // contributing n to U, otherwise from group two contributing nothing
-        const pm = m / (m + n);
-        const fromOne = next[m - 1];
-        const fromTwo = table[m];
-        for (let k = 0; k < width; k++) {
-          row[k] = pm * (k >= n ? fromOne[k - n] : 0) + (1 - pm) * fromTwo[k];
-        }
+  let seen = 0;
+  for (const rank of doubledRanks) {
+    seen++;
+    for (let selected = Math.min(n1, seen); selected >= 1; selected--) {
+      const row = counts[selected];
+      const previous = counts[selected - 1];
+      for (let sum = maxRankSum; sum >= rank; sum--) {
+        row[sum] += previous[sum - rank];
       }
-      next.push(row);
     }
-    table = next;
   }
 
-  let cdf = 0;
-  const target = Math.min(u, n1 * n2 - u);
-  for (let k = 0; k <= target; k++) cdf += table[n1][k];
-  // The null distribution is symmetric, so doubling the smaller tail is exact
-  return Math.min(1, 2 * cdf);
+  const observed = Math.round(observedRankSum * 2);
+  let lower = 0;
+  let upper = 0;
+  let total = 0;
+  for (let sum = 0; sum <= maxRankSum; sum++) {
+    const count = counts[n1][sum];
+    total += count;
+    if (sum <= observed) lower += count;
+    if (sum >= observed) upper += count;
+  }
+
+  return total === 0 ? 1 : Math.min(1, (2 * Math.min(lower, upper)) / total);
 }
 
 /**
  * Mann-Whitney U test (two-tailed).
- * Ranks all combined samples and sums ranks for group A. Small tie-free
- * samples (each side ≤ 25, e.g. block medians) get the exact null
- * distribution. Larger or tied samples use the normal approximation,
- * accurate for n > ~20.
+ * Ranks all combined samples and sums ranks for group A. Samples with at most
+ * 50 values combined get the exact conditional permutation distribution,
+ * including ties. Larger samples use the tie-corrected normal approximation.
  *
  * Returns { U, z, p } where p is the two-tailed p-value.
  */
@@ -82,13 +81,14 @@ export function mannWhitneyU(a: number[], b: number[]): { U: number; z: number; 
     (x, y) => x.v - y.v
   );
 
-  let ties = false;
+  let tieTerm = 0;
   const ranks = new Float64Array(combined.length);
   let i = 0;
   while (i < combined.length) {
     let j = i;
     while (j < combined.length - 1 && combined[j + 1].v === combined[i].v) j++;
-    if (j > i) ties = true;
+    const tieSize = j - i + 1;
+    tieTerm += tieSize ** 3 - tieSize;
     const avgRank = (i + j) / 2 + 1; // 1-indexed
     for (let k = i; k <= j; k++) ranks[k] = avgRank;
     i = j + 1;
@@ -100,14 +100,16 @@ export function mannWhitneyU(a: number[], b: number[]): { U: number; z: number; 
   }
 
   const U1 = R1 - (n1 * (n1 + 1)) / 2;
-  const U = Math.min(U1, n1 * n2 - U1); // use smaller U for the approximation
-
   const mean = (n1 * n2) / 2;
-  const sd = Math.sqrt((n1 * n2 * (n1 + n2 + 1)) / 12);
-  const z = sd === 0 ? 0 : (U - mean) / sd;
+  const total = n1 + n2;
+  const variance = (n1 * n2 * (total + 1 - (total > 1 ? tieTerm / (total * (total - 1)) : 0))) / 12;
+  const sd = Math.sqrt(Math.max(0, variance));
+  const centered = U1 - mean;
+  const continuityCorrected = Math.sign(centered) * Math.max(0, Math.abs(centered) - 0.5);
+  const z = sd === 0 ? 0 : continuityCorrected / sd;
 
-  if (!ties && n1 <= MW_U_EXACT_MAX && n2 <= MW_U_EXACT_MAX) {
-    return { U: U1, z, p: exactMannWhitneyP(n1, n2, Math.round(U)) };
+  if (total <= MW_U_EXACT_MAX_TOTAL) {
+    return { U: U1, z, p: exactMannWhitneyP(ranks, n1, R1) };
   }
 
   // Two-tailed p-value via erfc: p = erfc(|z| / sqrt(2))
@@ -195,6 +197,18 @@ export function blockSpread(medians: number[]): number {
 export function minDetectableEffect(spread: number, blocks: number): number {
   if (blocks < 2 || spread <= 0) return 0;
   return 2.8 * spread * Math.sqrt(2 / blocks);
+}
+
+/** Smallest attainable two-sided exact Mann-Whitney p-value for two sample sizes. */
+export function minMannWhitneyP(n1: number, n2: number): number {
+  if (n1 < 1 || n2 < 1) return 1;
+  const total = n1 + n2;
+  const selected = Math.min(n1, n2);
+  let logCombinations = 0;
+  for (let i = 1; i <= selected; i++) {
+    logCombinations += Math.log(total - selected + i) - Math.log(i);
+  }
+  return Math.min(1, 2 * Math.exp(-logCombinations));
 }
 
 export type Verdict = 'faster' | 'slower' | 'neutral';
