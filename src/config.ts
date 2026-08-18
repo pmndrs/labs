@@ -25,7 +25,10 @@ export interface LabsConfig {
   alpha: number;
   /** Minimum absolute Δp50 required to flag a verdict. Filters environmental noise on identical code. @default 0.05 */
   minDelta: number;
-  /** Minimum |Cliff's d| required to flag a verdict. Filters noise on high-variance benches where distributions overlap despite a median shift. @default 0.474 */
+  /**
+   * @deprecated Unused. On block medians Cliff's d is a linear transform of
+   * the U statistic already behind the p-value, so the alpha gate subsumes it.
+   */
   minEffect: number;
   /**
    * Whether each bench runs in a fresh worker process. Disable for suites that

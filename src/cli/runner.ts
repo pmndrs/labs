@@ -6,7 +6,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { compare, printCompareReport } from '../compare.ts';
 import type { LabsConfig } from '../config.ts';
 import { type NoisyBench, printReportBox } from '../report.ts';
-import { blockSpread } from '../stats.ts';
+import { blockSpread, clockExplainedFraction } from '../stats.ts';
 import {
   type FreqSample,
   type GitInfo,
@@ -37,7 +37,8 @@ function collectEnvData(
   file: string,
   envData: FreqSample[],
   noisyBenches: NoisyBench[],
-  blockSpreads: number[]
+  blockSpreads: number[],
+  clockExplained: number[]
 ): void {
   const runFreq = workerResult.context.cpu.freq;
   const blockFreqs: number[] = [];
@@ -52,7 +53,10 @@ function collectEnvData(
           ...(stats.blocks ? { spread: blockSpread(stats.blocks.medians) } : {}),
         });
       }
-      if (stats?.blocks) blockSpreads.push(blockSpread(stats.blocks.medians));
+      if (stats?.blocks) {
+        blockSpreads.push(blockSpread(stats.blocks.medians));
+        clockExplained.push(clockExplainedFraction(stats.blocks.medians, stats.blocks.freqs));
+      }
     }
   }
   envData.push({
@@ -350,13 +354,21 @@ export async function runCLI(args: string[]) {
     const runEnvData: FreqSample[] = [];
     const runNoisyBenches: NoisyBench[] = [];
     const runBlockSpreads: number[] = [];
+    const runClockExplained: number[] = [];
     let runCpu: string | null = null;
     for (const { file, resultFile } of runOutputs) {
       if (!existsSync(resultFile)) continue;
       const workerResult: WorkerResult = JSON.parse(readFileSync(resultFile, 'utf-8'));
       rmSync(resultFile);
       runCpu ??= workerResult.context.cpu.name;
-      collectEnvData(workerResult, suiteName(file), runEnvData, runNoisyBenches, runBlockSpreads);
+      collectEnvData(
+        workerResult,
+        suiteName(file),
+        runEnvData,
+        runNoisyBenches,
+        runBlockSpreads,
+        runClockExplained
+      );
     }
     printReportBox(
       runEnvData,
@@ -364,7 +376,14 @@ export async function runCLI(args: string[]) {
       config.maxCpuTime!,
       undefined,
       runCpu,
-      blocks > 1 ? { blocks, spreads: runBlockSpreads, minDelta: config.minDelta } : undefined
+      blocks > 1
+        ? {
+            blocks,
+            spreads: runBlockSpreads,
+            minDelta: config.minDelta,
+            clockExplained: runClockExplained,
+          }
+        : undefined
     );
     return;
   }
@@ -418,6 +437,7 @@ export async function runCLI(args: string[]) {
   const saveEnvData: FreqSample[] = [];
   const saveNoisyBenches: NoisyBench[] = [];
   const saveBlockSpreads: number[] = [];
+  const saveClockExplained: number[] = [];
   let savedNoop: SavedResult['context'] | undefined;
 
   for (const { file, resultFile } of workerOutputs) {
@@ -444,7 +464,14 @@ export async function runCLI(args: string[]) {
       hardwareSet = true;
     }
 
-    collectEnvData(workerResult, suiteName(file), saveEnvData, saveNoisyBenches, saveBlockSpreads);
+    collectEnvData(
+      workerResult,
+      suiteName(file),
+      saveEnvData,
+      saveNoisyBenches,
+      saveBlockSpreads,
+      saveClockExplained
+    );
 
     files.push({
       file: suiteName(file),
@@ -500,7 +527,14 @@ export async function runCLI(args: string[]) {
     config.maxCpuTime!,
     saveMsg,
     hardware.cpu,
-    blocks > 1 ? { blocks, spreads: saveBlockSpreads, minDelta: config.minDelta } : undefined
+    blocks > 1
+      ? {
+          blocks,
+          spreads: saveBlockSpreads,
+          minDelta: config.minDelta,
+          clockExplained: saveClockExplained,
+        }
+      : undefined
   );
 
   if (shouldCompare) {

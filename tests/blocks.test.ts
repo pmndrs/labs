@@ -14,7 +14,7 @@ import type { SavedResult } from '../src/store.ts';
 const fast = { min_cpu_time: 1, min_samples: 12, adaptive: false } as const;
 const CONFIG = defineConfig({ benchDir: '.' });
 
-function syntheticStats(blockMedians: number[], perBlock = 40) {
+function syntheticStats(blockMedians: number[], freq = 4, perBlock = 40) {
   const samples: number[] = [];
   for (const m of blockMedians) {
     for (let i = 0; i < perBlock; i++) samples.push(m + ((i % 5) - 2) * 0.01);
@@ -31,16 +31,16 @@ function syntheticStats(blockMedians: number[], perBlock = 40) {
     p75: q(0.75),
     p99: q(0.99),
     noisy: false,
-    blocks: { medians: blockMedians, freqs: blockMedians.map(() => 4) },
+    blocks: { medians: blockMedians, freqs: blockMedians.map(() => freq) },
   };
 }
 
 function syntheticResult(
   name: string,
   blockMedians: number[],
-  opts: { legacy?: boolean } = {}
+  opts: { legacy?: boolean; freq?: number } = {}
 ): SavedResult {
-  const stats = syntheticStats(blockMedians);
+  const stats = syntheticStats(blockMedians, opts.freq ?? 4);
   if (opts.legacy) delete (stats as any).blocks;
   return {
     name,
@@ -181,6 +181,19 @@ describe('comparing blocked results', () => {
       expect(bench.candidateP50).toBeCloseTo(99.6, 10);
       expect(bench.deltaP50).toBeGreaterThan(0.05);
     }
+  });
+
+  it('skips clock-confounded verdicts where time and cycles disagree', () => {
+    // The candidate is slower in wall time purely because its blocks ran at a
+    // lower clock: in cycles the two sides are identical
+    const aMedians = [100, 100.4, 99.7, 100.2, 99.9, 100.1, 99.8, 100.3];
+    const bMedians = aMedians.map((m) => m * (4.0 / 3.5));
+    const a = syntheticResult('a', aMedians);
+    const b = syntheticResult('b', bMedians, { freq: 3.5 });
+
+    const bench = compare(a, b, CONFIG).benches[0];
+    expect(bench.kind).toBe('skipped');
+    if (bench.kind === 'skipped') expect(bench.reason).toContain('clock-confounded');
   });
 
   it('allows four blocks at alpha 0.05 but respects stricter alpha', () => {

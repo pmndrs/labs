@@ -1,7 +1,7 @@
 import type { LabsConfig } from './config.ts';
 import { renderMitata, type RenderedCollection } from './bench/render.ts';
 import type { Context, Stats, Trial } from './bench/types.ts';
-import { blockSpread, median, minDetectableEffect } from './stats.ts';
+import { blockSpread, clockExplainedFraction, median, minDetectableEffect } from './stats.ts';
 import type { SavedBenchmarkTrial, SavedFile, SavedResult, FreqSample } from './store.ts';
 import { BLUE, BOLD, DIM, GREEN, RESET, YELLOW } from './utils/ansi.ts';
 import { visibleLength } from './utils/format.ts';
@@ -18,6 +18,8 @@ export interface BlockInfo {
   spreads: number[];
   /** Configured verdict threshold, so the warning agrees with the noisy flag. */
   minDelta: number;
+  /** Per-bench fraction of block spread explained by clock differences. */
+  clockExplained?: number[];
 }
 
 export function printReportBox(
@@ -70,6 +72,10 @@ export function printReportBox(
       `${noisy ? YELLOW + '⚠' : GREEN + '✔'} between-block spread ${spreadStr}${RESET}  ${DIM}(${blockInfo.blocks} blocks/bench)${RESET}`
     );
     lines.push(`  ${DIM}between-run resolution ~±${(mde * 100).toFixed(1)}%${RESET}`);
+    if (blockInfo.clockExplained && blockInfo.clockExplained.length > 0) {
+      const explained = median(blockInfo.clockExplained);
+      lines.push(`  ${DIM}clock explains ~${(explained * 100).toFixed(0)}% of block spread${RESET}`);
+    }
     lines.push('');
   }
 
@@ -130,6 +136,7 @@ export function replayReport(result: SavedResult, config: LabsConfig): void {
 
   const noisyBenches: NoisyBench[] = [];
   const spreads: number[] = [];
+  const clockExplained: number[] = [];
   for (const f of result.files) {
     for (const b of f.benchmarks) {
       for (const run of b.runs) {
@@ -139,7 +146,12 @@ export function replayReport(result: SavedResult, config: LabsConfig): void {
             ...(run.stats.blocks ? { spread: blockSpread(run.stats.blocks.medians) } : {}),
           });
         }
-        if (run.stats?.blocks) spreads.push(blockSpread(run.stats.blocks.medians));
+        if (run.stats?.blocks) {
+          spreads.push(blockSpread(run.stats.blocks.medians));
+          clockExplained.push(
+            clockExplainedFraction(run.stats.blocks.medians, run.stats.blocks.freqs)
+          );
+        }
       }
     }
   }
@@ -150,7 +162,7 @@ export function replayReport(result: SavedResult, config: LabsConfig): void {
     config.maxCpuTime!,
     undefined,
     result.hardware.cpu,
-    blocks > 1 ? { blocks, spreads, minDelta: config.minDelta } : undefined
+    blocks > 1 ? { blocks, spreads, minDelta: config.minDelta, clockExplained } : undefined
   );
 }
 

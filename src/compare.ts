@@ -187,7 +187,10 @@ export interface EligibleBench {
   p: number;
   d: number;
   verdict: Verdict;
-  effectiveMinDelta: number;
+  /** Hodges-Lehmann relative delta on block medians; positive means slower. */
+  hl: number;
+  ciLow: number;
+  ciHigh: number;
 }
 
 export interface SkippedBench {
@@ -232,6 +235,7 @@ function trialRuns(trial: ComparableTrial): Array<{
   p99: number;
   noisy: boolean;
   blocks?: number[];
+  freqs?: number[];
 }> {
   const alias = (trial as any).alias ?? 'anonymous';
   const runs = (trial as any).runs as Array<any> | undefined;
@@ -241,6 +245,7 @@ function trialRuns(trial: ComparableTrial): Array<{
     p99: typeof stats?.p99 === 'number' ? stats.p99 : 0,
     noisy: !!stats?.noisy,
     ...(Array.isArray(stats?.blocks?.medians) ? { blocks: stats.blocks.medians } : {}),
+    ...(Array.isArray(stats?.blocks?.freqs) ? { freqs: stats.blocks.freqs } : {}),
   });
 
   if (Array.isArray(runs) && runs.length > 0) {
@@ -257,6 +262,7 @@ interface IndexEntry {
   samples: number[];
   noisy: boolean;
   blocks?: number[];
+  freqs?: number[];
 }
 
 function buildIndex(result: SavedResult): Map<string, IndexEntry> {
@@ -270,6 +276,7 @@ function buildIndex(result: SavedResult): Map<string, IndexEntry> {
           samples: run.samples,
           noisy: run.noisy,
           ...(run.blocks ? { blocks: run.blocks } : {}),
+          ...(run.freqs ? { freqs: run.freqs } : {}),
         });
       }
     }
@@ -293,6 +300,40 @@ function benchKey(
   return { file, group: trial.groupName ?? trial.alias, name: runName };
 }
 
+// ─── Clock gate ──────────────────────────────────────────────────────────────
+
+/**
+ * Re-judges a bench in cycles instead of time and returns a skip reason when
+ * the two verdicts disagree. Only applies when both sides carry a valid clock
+ * probe for every block; equal clocks make the cycles verdict identical to
+ * the time verdict, so the gate is inert unless the runs' clocks differed.
+ */
+function clockConfounded(
+  base: IndexEntry,
+  candidate: IndexEntry,
+  timeVerdict: Verdict,
+  opts: ClassifyOptions
+): string | undefined {
+  const bFreqs = base.freqs;
+  const cFreqs = candidate.freqs;
+  const usable = (blocks?: number[], freqs?: number[]) =>
+    blocks && freqs && freqs.length === blocks.length && freqs.every((f) => f > 0);
+  if (!usable(base.blocks, bFreqs) || !usable(candidate.blocks, cFreqs)) return undefined;
+
+  const cycles = (blocks: number[], freqs: number[]) => blocks.map((m, i) => m * freqs[i]);
+  const cyclesVerdict = classify(
+    cycles(base.blocks!, bFreqs!),
+    cycles(candidate.blocks!, cFreqs!),
+    opts
+  ).verdict;
+  if (cyclesVerdict === timeVerdict) return undefined;
+
+  return (
+    `clock-confounded — time-based verdict "${timeVerdict}" but cycles-based "${cyclesVerdict}" ` +
+    `(median clocks ${median(bFreqs!).toFixed(2)} vs ${median(cFreqs!).toFixed(2)} GHz)`
+  );
+}
+
 // ─── Core comparison ─────────────────────────────────────────────────────────
 
 export function compare(
@@ -303,7 +344,6 @@ export function compare(
   const opts: ClassifyOptions = {
     alpha: config.alpha,
     minDelta: config.minDelta,
-    minEffect: config.minEffect,
   };
 
   const environmentFailures: string[] = [];
@@ -384,7 +424,17 @@ export function compare(
         // Verdicts test block medians: samples within a process are correlated,
         // so pooled samples would shrink p arbitrarily without independent
         // replication. Pooled data remains for the display columns only.
-        const { verdict, p, d, effectiveMinDelta } = classify(base.blocks!, run.blocks!, opts);
+        const time = classify(base.blocks!, run.blocks!, opts);
+
+        // A common-mode clock difference between runs shifts every block
+        // together, which the block test cannot see. Judging the same data in
+        // cycles (median × its block's clock) covers the opposite assumption:
+        // the verdict must hold whether the bench is clock-bound or not.
+        const clockGate = clockConfounded(base, run, time.verdict, opts);
+        if (clockGate !== undefined) {
+          benches.push({ kind: 'skipped', key: key_, reason: clockGate });
+          continue;
+        }
 
         benches.push({
           kind: 'eligible',
@@ -395,10 +445,12 @@ export function compare(
           candidateSamples: run.samples,
           deltaP50,
           deltaP99,
-          p,
-          d,
-          verdict,
-          effectiveMinDelta,
+          p: time.p,
+          d: time.d,
+          verdict: time.verdict,
+          hl: time.hl,
+          ciLow: time.ciLow,
+          ciHigh: time.ciHigh,
         });
       }
     }
@@ -438,7 +490,7 @@ export function printCompareReport(result: CompareResult, config: LabsConfig): v
   );
   console.log(`${DIM}${result.hardware.cpu ?? 'unknown CPU'}${RESET}`);
   console.log(
-    `${DIM}Mann-Whitney U on block medians  α=${config.alpha}  minΔ=${(config.minDelta * 100).toFixed(0)}%  cliff's d≥${config.minEffect}${RESET}\n`
+    `${DIM}Mann-Whitney U on block medians  α=${config.alpha}  minΔ=${(config.minDelta * 100).toFixed(0)}%${RESET}\n`
   );
 
   if (result.environmentWarnings.length > 0) {
@@ -485,12 +537,13 @@ export function printCompareReport(result: CompareResult, config: LabsConfig): v
   const TIME_COL = 10;
   const DELTA_COL = 7;
   const P_COL = 5;
-  const THRESH_COL = 5;
+  const CI_COL = 14;
 
   const truncate = (s: string) =>
     s.length > nameCol ? s.slice(0, nameCol - 1) + '…' : s.padEnd(nameCol);
 
-  const formatThreshold = (v: number) => `±${(v * 100).toFixed(0)}%`;
+  const pct = (v: number) => `${v > 0 ? '+' : ''}${(v * 100).toFixed(1)}`;
+  const formatCI = (low: number, high: number) => `${pct(low)}..${pct(high)}%`;
 
   // ── Eligible bench table ─────────────────────────────────────────────────
 
@@ -509,7 +562,7 @@ export function printCompareReport(result: CompareResult, config: LabsConfig): v
       1 +
       P_COL +
       1 +
-      THRESH_COL;
+      CI_COL;
     const header =
       `${GRAY}${'  ' + 'bench'.padEnd(nameCol + 2)}` +
       ` ${'baseline'.padStart(TIME_COL)}` +
@@ -517,7 +570,7 @@ export function printCompareReport(result: CompareResult, config: LabsConfig): v
       ` ${'Δp50'.padStart(DELTA_COL)}` +
       ` ${'Δp99'.padStart(DELTA_COL)}` +
       ` ${'p'.padStart(P_COL)}` +
-      ` ${'±Δ'.padStart(THRESH_COL)}` +
+      ` ${`Δ ${(100 * (1 - config.alpha)).toFixed(0)}% CI`.padStart(CI_COL)}` +
       `${RESET}`;
     const divider = `${GRAY}${'-'.repeat(totalWidth)}${RESET}`;
 
@@ -557,7 +610,7 @@ export function printCompareReport(result: CompareResult, config: LabsConfig): v
           ` ${dp50Color}${formatDelta(bench.deltaP50).padStart(DELTA_COL)}${RESET}` +
           ` ${dp99Color}${formatDelta(bench.deltaP99).padStart(DELTA_COL)}${RESET}` +
           ` ${pColor}${formatP(bench.p).padStart(P_COL)}${RESET}` +
-          ` ${DIM}${formatThreshold(bench.effectiveMinDelta).padStart(THRESH_COL)}${RESET}`
+          ` ${neutral ? DIM : WHITE}${formatCI(bench.ciLow, bench.ciHigh).padStart(CI_COL)}${RESET}`
       );
 
       const dist = renderDistributions(bench.baselineSamples, bench.candidateSamples, TIME_COL);
