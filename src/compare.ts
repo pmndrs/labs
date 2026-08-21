@@ -326,6 +326,7 @@ function benchKey(
  * probe noise than about the clock, and skipping would eat real verdicts.
  */
 const CLOCK_GATE_MIN_DIFF = 0.02;
+const CLOCK_CONFOUNDED_PREFIX = 'clock-confounded — ';
 
 /**
  * Re-judges a bench in cycles instead of time and returns a skip reason when
@@ -360,8 +361,8 @@ function clockConfounded(
   if (cyclesVerdict === timeVerdict) return undefined;
 
   return (
-    `clock-confounded — time-based verdict "${timeVerdict}" but cycles-based "${cyclesVerdict}" ` +
-    `(median clocks ${bClock.toFixed(2)} vs ${cClock.toFixed(2)} GHz)`
+    `${CLOCK_CONFOUNDED_PREFIX}${timeVerdict}→${cyclesVerdict} · ` +
+    `${bClock.toFixed(2)}→${cClock.toFixed(2)}`
   );
 }
 
@@ -670,7 +671,19 @@ export function printCompareReport(result: CompareResult, config: LabsConfig): v
 
   if (skipped.length > 0) {
     console.log(`\n${YELLOW}skipped (${skipped.length})${RESET}`);
-    for (const b of skipped) {
+    const clockConfounded = skipped.filter((b) => b.reason.startsWith(CLOCK_CONFOUNDED_PREFIX));
+    const otherSkipped = skipped.filter((b) => !b.reason.startsWith(CLOCK_CONFOUNDED_PREFIX));
+
+    if (clockConfounded.length > 0) {
+      console.log(`  ${YELLOW}clock-confounded${RESET}`);
+      for (const b of clockConfounded) {
+        const label = truncate(b.key.name || b.key.group || 'anonymous');
+        const detail = b.reason.slice(CLOCK_CONFOUNDED_PREFIX.length);
+        console.log(`  ${DIM}· ${label}${RESET}  ${YELLOW}${detail}${RESET}`);
+      }
+    }
+
+    for (const b of otherSkipped) {
       const label = truncate(b.key.name || b.key.group || 'anonymous');
       console.log(`  ${DIM}· ${label}${RESET}  ${YELLOW}${b.reason}${RESET}`);
     }

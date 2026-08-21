@@ -197,6 +197,28 @@ describe('comparing blocked results', () => {
     if (bench.kind === 'skipped') expect(bench.reason).toContain('clock-confounded');
   });
 
+  it('renders clock-confounded skips as a compact table', () => {
+    const aMedians = [100, 100.4, 99.7, 100.2, 99.9, 100.1, 99.8, 100.3];
+    const bMedians = aMedians.map((m) => m * (4.0 / 3.5));
+    const result = compare(
+      syntheticResult('a', aMedians),
+      syntheticResult('b', bMedians, { freq: 3.5 }),
+      CONFIG
+    );
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    let lines: string[] = [];
+
+    try {
+      printCompareReport(result, CONFIG);
+      lines = log.mock.calls.map(([line]) => stripVTControlCharacters(String(line)));
+    } finally {
+      log.mockRestore();
+    }
+
+    expect(lines).toContain('  clock-confounded');
+    expect(lines).toContain('  · unit              slower→neutral · 4.00→3.50');
+  });
+
   it('keeps verdicts when clocks are effectively equal despite probe jitter', () => {
     // A real 6% regression with a candidate clock only ~1% lower: judged in
     // cycles the shift shrinks below minDelta, but a 1% clock difference is
