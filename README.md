@@ -76,19 +76,10 @@ benchmark                   avg (min … max) p75 / p99    (min … top 1%)
 
 - `avg/iter p75`: Average time per iteration and p75, this is the most useful top metric.
 - `(min … max) p99`: Fastest, slowest, and tail time that 99% of samples finish within. This shows the distribution visualized by the histogram.
-- `gc(min … max) avg`: Time spent collecting after each sample. Higher times usually mean the bench keeps more objects alive.
+- `gc(min … max) avg`: Time spent in per-sample garbage collection. Higher times usually mean the bench keeps more objects alive.
 - `heap(min … max) avg/iter`: Bytes allocated per iteration before collection. Higher values mean more garbage for the runtime to clean up.
 
 </details>
-
-#### Guarantees
-
-Labs promises to give results you can trust. To do this we make a number of guarantees when running benches.
-
-- Each bench runs in its own isolated worker process, preventing benches in the same file from contaminating each other's JIT state, heap layout, or GC history. Reordering benches can otherwise skew results by 2× or more. Opt out with `isolate: false` in the config or `--no-isolate` in the CLI.
-- CPU clock speed is measured before and after the run. If it drifts, Labs flags the result so it doesn't pollute comparisons.
-- Adaptive sampling continues until the confidence interval converges, or marks the bench `noisy` if it can't. This usually means the bench contains some random element and is not deterministic.
-- Each sample starts with a garbage collection (GC) reset so previous samples don't affect it.
 
 ### Compare
 
@@ -103,20 +94,32 @@ And see the results!
 ```bash
 ━━ compare 2026-03-20_16-25-36 -> 2026-03-20_16-36-12
 Apple M4 Pro
-Mann-Whitney U  α=0.05  minΔ=5%  cliff's d≥0.474
+Mann-Whitney U on block medians  α=0.05  minΔ=5%
 
 relation-churn.bench.ts
-  bench                                    baseline  candidate    Δp50    Δp99     p
-------------------------------------------------------------------------------------
+  bench                                    baseline  candidate    Δp50    Δp99     p       Δ 95% CI
+---------------------------------------------------------------------------------------------------
   • relation churn
-  ----------------------------------------------------------------------------------
-  ■ big test                                17.96ms    17.74ms   -1.2%   +0.1%  .003
+  -------------------------------------------------------------------------------------------------
+  ▲ big test                                17.96ms    16.15ms  -10.1%   -9.8% <.001    -11.4..-8.8%
                                          ▁▂▄▅▅█▇▅▅▃ ▃▅▅██▅█▄▂▂
 ```
 
+## Guarantees
+
+Labs promises to give results you can trust. To do this a number of guarantees are made when running benches.
+
+- Each bench block runs in its own isolated worker process, preventing benches in the same file from contaminating each other's JIT state, heap layout, or GC history. Reordering benches can otherwise skew results by 2x or more. Opt out with `isolate: false` in the config or `--no-isolate` in the CLI.
+- GC influence is mitigated. By default, each sample starts with a garbage collection (GC) reset so previous samples don't affect it.
+- Saved benches are run in blocks that are interleaved: `A₁ B₁ C₁ → A₂ B₂ C₂ → … → A₈ B₈ C₈`. This reduces bias from gradual changes such as CPU throttling or even boosting.
+- Timing overhead is controlled. If a sample's measurement time is so fast that the overhead of the timing itself would bias the results, then it is run in a batch.
+- Detect dead code elimination (DCE). If the samples measure the same as an empty function call, then we detect DCE and report it. This can be mitigated by returning a result from the yielded function.
+- Detect if a bench has unstable samples. Samples are taken until the configured uncertainty target is reached. If this fails, a warning is given. This likely means the bench is non-deterministic or affected by runtime interference like background processes.
+- Machine stability is measured. When median timings vary too much across blocks of samples, a warning is given. This can indicate an unstable machine ranging from thermal throttling to background processes.
+
 ## How to control my CPU
 
-One the largest sources of noise when running benchmarks is an unstable environment and the usual culprit is the CPU. The CPU turbos or thermal throttles, or a process gest put on a P-core (performance) instead of an E-core (efficiency). Koota checks the CPU clocks before and after each bench and tracks if it is varying across the runs. If it detects too muc variance you will get warned and the run flagged. But what can you do about it?
+One of the largest sources of noise when running benchmarks is an unstable environment, and the usual culprit is the CPU. The CPU boosts or thermal throttles, or a process gets put on a P-core (performance) instead of an E-core (efficiency). Labs checks the CPU clocks before and after each benchmark file and before each block, and tracks whether they vary across the runs. If it detects too much variance, you will get warned and the run will be flagged. But what can you do about it?
 
 ### Windows
 
@@ -134,7 +137,12 @@ While Apple Silicon is relatively stable, there isn't much that can be done to c
 
 Linux gives the most controls getting the best possible environment for testing. [See this LLVM guide for specifics.](https://llvm.org/docs/Benchmarking.html#linux)
 
-## API report (to be edited)
+---
+
+> [!CAUTION]
+> Below are AI generated docs that will get edited eventually. For now it lives here as notes.
+
+## API
 
 Every run saves results by default, named after the current commit (`abc1234`, with `-dirty` when the tree has uncommitted changes, and a counter for repeat runs: `abc1234-2`). Outside a git repo, names fall back to a timestamp. Each result also records the commit, branch, and dirty state it was produced from. Use `bench run` to execute without saving.
 
@@ -153,6 +161,7 @@ pnpm bench -b                           # shorthand for --baseline
 pnpm bench -n "v1.2.0" -b              # save with name and set as baseline
 pnpm bench --compare                    # save, then compare vs baseline
 pnpm bench --no-isolate                 # share one process per file (skip per-bench isolation)
+pnpm bench --blocks 12                  # save with 12 fresh-process blocks per benchmark
 pnpm bench -c                           # shorthand for --compare
 pnpm bench --last                       # rerun previous selection, save
 ```
@@ -165,6 +174,7 @@ Results are saved to `<benchDir>/.labs/results/<name>.json` and include hardware
 pnpm bench run                          # run all, no save
 pnpm bench run "relation"              # filtered, no save
 pnpm bench run "@relation"             # filtered by tag, no save
+pnpm bench run --blocks 8              # no save, but use interleaved block sampling
 pnpm bench run --last                  # replay last selection, no save
 ```
 
@@ -199,15 +209,16 @@ pnpm bench compare -l                 # shorthand for --last
 
 Outputs a colored table for each eligible benchmark:
 
-| Column    | Description                                                                                 |
-| --------- | ------------------------------------------------------------------------------------------- |
-| baseline  | Baseline p50 (median) time                                                                  |
-| candidate | Candidate p50 (median) time                                                                 |
-| Δp50      | Signed percent change in p50 — color-coded green (faster), red (slower), or dim (neutral)   |
-| Δp99      | Signed percent change in p99 — when this diverges from Δp50, the distribution shape changed |
-| p         | Mann-Whitney U p-value — below `alpha` = statistically significant                          |
+| Column    | Description                                                                                                            |
+| --------- | ---------------------------------------------------------------------------------------------------------------------- |
+| baseline  | Median of the baseline's fresh-process block medians                                                                   |
+| candidate | Median of the candidate's fresh-process block medians                                                                  |
+| Δp50      | Signed percent change between those two medians; descriptive and not used by the verdict gate                          |
+| Δp99      | Descriptive percent change in p99 from the pooled inner samples                                                        |
+| p         | Two-sided Mann-Whitney U p-value on block medians; at or below `alpha` passes the statistical-significance gate        |
+| Δ CI      | Nominal `1 − alpha` interval for the Hodges-Lehmann relative effect used by the verdict; not an interval around `Δp50` |
 
-Each row is prefixed with a verdict icon: green `▲` (faster), red `▼` (slower), or gray `■` (neutral). Below each row, two distribution sparklines sit under their respective columns — baseline (cyan) and candidate (magenta) — on a shared axis. This makes distribution shifts, bimodal behavior, and tail changes visible at a glance.
+Each row is prefixed with a verdict icon: green `▲` (faster), red `▼` (slower), or gray `■` (neutral). The verdict uses the Mann-Whitney p-value and the Hodges-Lehmann relative effect, not `Δp50`. Below each row, two distribution sparklines sit under their respective columns — baseline (cyan) and candidate (magenta) — on a shared axis. The sparklines use pooled inner samples and are descriptive only.
 
 Comparison is gated. Two runs must pass environment checks before results are shown.
 
@@ -219,12 +230,14 @@ Comparison is gated. Two runs must pass environment checks before results are sh
 
 - **Clock drift** — if either run's CPU frequency drifted > 5% during the run, a warning is shown. On Apple Silicon this is expected (no governor or turbo control); on other platforms it usually means turbo boost or thermal throttling is active.
 - **Clock speed mismatch** — if the two runs' median clock speeds differ by > 5%, a warning is shown. Absolute timings may not be directly comparable.
+- **Isolation mismatch** — if the runs used different per-bench isolation modes, a warning is shown because shared-process JIT and heap state may make their absolute timings incomparable.
+- **Block count mismatch** — unequal counts are supported, but the actual counts determine whether the test can reach the configured significance level.
 
-**Per-bench checks** (fail = that bench is skipped with a reason):
+**Per-benchmark eligibility and annotations:**
 
 - **Not missing** — the bench must exist in both runs. Benches present only in baseline or only in candidate are reported separately.
-- **Not noisy** — neither run's samples can be flagged `noisy` (adaptive sampling hit `maxCpuTime` before converging). Noisy data is not reliable enough to compare.
-- **Minimum samples** — both runs must have ≥ 14 samples after outlier trimming. The MW-U normal approximation is unreliable below this threshold.
+- **Limited-resolution benches are annotated, not skipped** — a bench whose approximate between-block resolution is coarser than `minDelta` still gets judged because the rank test already responds to spread. Its row carries a `⚠ ~±N%` marker; a neutral result there is inconclusive at the shown resolution, not evidence of no change.
+- **Block replication** — both sides need at least two fresh-process blocks, and their combined counts must permit an exact p-value at or below `alpha`. Legacy single-process results are descriptive only.
 
 ## Writing a bench
 
@@ -269,15 +282,28 @@ pnpm bench "@slow"        # runs only wildcard
 
 ## Statistical comparison strategy
 
-Labs is single-run only. Each benchmark comparison uses mitata's collected sample arrays for the baseline and candidate.
+Saved runs measure each benchmark in fresh-process blocks, eight by default. The first block of each benchmark chooses a measurement plan within its share of the configured budget; later blocks replay its batching and sample-count decisions exactly. Blocks are interleaved across benchmarks so every benchmark spans the run. Inner timing samples remain useful for distributions and p99, but each block's median is treated as one independent experimental unit for comparison verdicts.
 
-A change is flagged only when all three conditions are met:
+A change is flagged only when both conditions are met:
 
-1. **p ≤ alpha** (Mann-Whitney U, default 0.05) — statistical significance. The Mann-Whitney U test is a non-parametric, rank-based test that determines whether values from one group consistently rank higher than the other. It is robust to non-normal distributions and GC-induced outliers.
-2. **|Δp50| ≥ ±Δ** (noise-adjusted, floor `minDelta`) — practical magnitude. The threshold adapts per benchmark based on observed noise: `±Δ = max(minDelta, 3 × relative MAD)`, where relative MAD is `MAD/median` of the noisier distribution. On stable systems (pinned CPU, low variance) this resolves small changes (1–2%). On noisier systems (Apple Silicon, untuned environments) the threshold rises automatically (4–8%), preventing false positives from environmental variance. The `±Δ` column in the compare table shows each bench's effective threshold.
-3. **|cliff's d| ≥ minEffect** (default 0.474) — effect size. [Cliff's delta](https://en.wikipedia.org/wiki/Effect_size#Cliff's_delta) measures how separated two distributions are (range [-1, +1]). High-variance benchmarks can show large median shifts while the actual sample distributions overlap heavily — a sign of JIT/scheduling noise rather than a real code change. The default threshold of 0.474 corresponds to the "medium" effect size boundary (Romano et al. 2006), meaning at least ~74% of pairwise sample comparisons must favor one direction.
+1. **p ≤ alpha** (two-sided Mann-Whitney U, default 0.05) — statistical significance across block medians. Comparisons with at most 50 blocks combined use the exact conditional permutation distribution of the observed ranks, including tied medians. Larger samples use a continuity- and tie-corrected normal approximation.
+2. **|Hodges-Lehmann Δ| ≥ minDelta** (default 0.05) — practical magnitude. The relative estimator is the median of all pairwise `candidate / baseline` block-median ratios, minus one. Positive values mean slower and negative values mean faster.
 
-The p99 ratio provides a variance/stability signal. When it diverges from the p50 ratio, the distribution shape changed between runs (e.g., tails got worse even if the median improved).
+Both gates must pass to report faster or slower; otherwise the result is neutral. The displayed `Δp50` is the percent change between the two median block medians, so it can differ slightly from the Hodges-Lehmann effect used by the verdict. The `Δ CI` column is a rank-based interval around the Hodges-Lehmann relative effect. Its endpoints use exact tie-free Mann-Whitney critical ranks at the nominal `1 − alpha` level; ties make the interval slightly conservative. The interval is uncertainty context, not a third verdict gate and not a confidence interval for `Δp50`.
+
+Effect-size gating (Cliff's d) was removed: on block medians it is a monotone transform of the same U statistic behind the p-value, so a separate threshold added confusion without adding information.
+
+A verdict must also survive the clock cross-check: when the two runs' median block clocks differ by more than 2%, the same block medians are re-judged in estimated CPU cycles (median × its block's clock probe), and a disagreement between the time and cycles verdicts skips the bench as clock-confounded rather than reporting a shift that may just be a frequency difference. When clocks are effectively equal the cross-check is inert — cycles would only re-scale time by probe jitter.
+
+The pooled inner-sample sparklines and p99 ratio are descriptive. They help expose distribution and tail changes but are not independently significance-tested.
+
+### Between-block spread and resolution
+
+Labs summarizes each run's block medians with a robust relative spread: `1.4826 × MAD / median`. It turns that spread into an approximate minimum detectable effect using `2.8 × spread × √(2 / blocks)`. The estimate is a normal-theory planning heuristic for 5% significance and 80% power with equal-sized groups, while actual verdicts use the rank test above. Treat it as an order-of-magnitude resolution diagnostic, not a guaranteed or hard detection limit.
+
+During comparison, Labs calculates the resolution separately for baseline and candidate and displays the worse of the two. When it exceeds `minDelta`, the row is annotated as limited-resolution, but the verdict is still evaluated. Large, well-separated effects can therefore receive a verdict despite inconsistent fresh runs; a neutral result at limited resolution means that the data could not establish a change at that scale.
+
+Each p-value applies to one benchmark. Labs does not currently adjust `alpha` across a suite, and separately saved baseline and candidate sessions can still differ in unmeasured machine state. Treat suite-wide or causal conclusions accordingly.
 
 ## Config
 
@@ -293,37 +319,38 @@ export default defineConfig({
 })
 ```
 
-| Option | Default | Description |
-| ------------ | ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ | --------- | ------------------------------------------------------------------------------------- |
-| `benchDir` | (required) | Directory to search, relative to config file |
-| `benchMatch` | `**/*.bench.ts` | Glob pattern for discovery |
-| `nodeFlags` | `['--allow-natives-syntax', '--expose-gc']` | Node flags per worker process |
-| `resultsDir` | `.labs` | Directory for saved results, relative to config |
-| `adaptive` | `true` | Adaptive sampling mode: `true` uses default CI threshold, `false` disables, number sets CI threshold (e.g. `0.01`) |
-| `maxCpuTime` | `5` | Max CPU budget in seconds for adaptive sampling; benches that don't converge or reach `minSamples` are `noisy` |
-| `minCpuTime` | `0.642` | Minimum CPU time budget per benchmark in seconds; set to raise/lower runtime budget |
-| `minSamples` | `20` | Minimum sample count per benchmark; set to increase/decrease sample floor |
-| `maxSamples` | `1e9` | Maximum sample cap per benchmark to prevent pathological long runs |
-| `alpha` | `0.05` | Mann-Whitney U significance level |
-| `minDelta` | `0.05` | Floor for the noise-adjusted ±Δ threshold; the effective threshold per bench is `max(minDelta, 3 × relative MAD)` |
-| `minEffect` | `0.474` | Minimum | Cliff's d | to flag a verdict; filters noise on high-variance benches where distributions overlap |
-| `isolate` | `true` | Run each bench in its own fresh worker process so benches can't contaminate each other's JIT/heap state (order-dependent results); `false` shares one process per file |
+| Option       | Default                                     | Description                                                                                                                                                                                                                                             |
+| ------------ | ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `benchDir`   | (required)                                  | Directory to search, relative to config file                                                                                                                                                                                                            |
+| `benchMatch` | `**/*.bench.ts`                             | Glob pattern for discovery                                                                                                                                                                                                                              |
+| `nodeFlags`  | `['--allow-natives-syntax', '--expose-gc']` | Node flags per worker process                                                                                                                                                                                                                           |
+| `resultsDir` | `.labs`                                     | Directory for saved results, relative to config                                                                                                                                                                                                         |
+| `adaptive`   | `true`                                      | Adaptive sampling mode: `true` uses the default 2.5% relative uncertainty target, `false` uses fixed stopping, and a number sets a custom target                                                                                                        |
+| `maxCpuTime` | `5`                                         | Maximum sampling-time budget in seconds; a multi-block pilot receives a per-block share, while later blocks replay its fixed sample count                                                                                                               |
+| `minCpuTime` | `0.642`                                     | Minimum CPU time budget per benchmark in seconds; set to raise/lower runtime budget                                                                                                                                                                     |
+| `minSamples` | `20`                                        | Minimum sample count per benchmark; set to increase/decrease sample floor                                                                                                                                                                               |
+| `maxSamples` | `1e9`                                       | Maximum sample cap per benchmark to prevent pathological long runs                                                                                                                                                                                      |
+| `alpha`      | `0.05`                                      | Mann-Whitney U significance level                                                                                                                                                                                                                       |
+| `minDelta`   | `0.05`                                      | Minimum absolute Hodges-Lehmann relative effect for a verdict; rows whose approximate resolution exceeds it are annotated as limited-resolution                                                                                                         |
+| `isolate`    | `true`                                      | Run each bench in its own fresh worker process so benches can't contaminate each other's JIT/heap state (order-dependent results); `false` shares one process per file and disables multi-block sampling, so such saves cannot receive compare verdicts |
+| `blocks`     | `8`                                         | Fresh-process blocks per benchmark for saved runs; `bench run` uses one unless overridden with `--blocks`                                                                                                                                               |
 
 Sampling behavior:
 
-- `adaptive: false`: fixed stopping (`samples >= minSamples` and `cpu_time >= minCpuTime`) with `maxSamples` as cap.
-- `adaptive: true`: adaptive CI stopping with default threshold (`2.5%`), but never before `minSamples` and `minCpuTime`.
-- `adaptive: <number>`: same adaptive behavior with a custom CI threshold (`0.01` is stricter than `0.025`).
-- In adaptive mode, `maxCpuTime` is a hard budget. Benchmarks that don't converge or don't reach `minSamples` are marked `noisy`.
+- `adaptive: false`: fixed stopping (`samples >= minSamples` and measured time `>= minCpuTime`) with `maxSamples` as a cap.
+- `adaptive: true`: adaptive stopping at the default 2.5% relative uncertainty target, but never before `minSamples` and `minCpuTime`.
+- `adaptive: <number>`: the same adaptive behavior with a custom target (`0.01` is stricter than `0.025`).
+- In a single-block adaptive run, `maxCpuTime` is the bailout budget. Hitting it before the uncertainty target or `minSamples` reports the samples as unstable.
+- In multi-block mode, the pilot receives `maxCpuTime / blocks` and later blocks replay its plan without adaptive stopping. The saved result does not retain the pilot's convergence flag. Its limited-resolution annotation is instead derived from between-block spread against the current `minDelta`, so changing `minDelta` re-evaluates existing results.
 
 > [!NOTE]
 > **More info: adaptive statistics**
 >
-> Labs uses online variance in log-space (Welford update) to handle long-tailed VM timing samples. This means convergence is based on multiplicative error (relative confidence), which is usually more stable for benchmark timing data than linear-space variance.
+> Labs uses a Welford update in log-space to track the standard error of the mean log timing. This makes the stopping target relative and multiplicative, which is usually more appropriate for timing data than an absolute linear-space target.
 >
 > Stopping in adaptive mode is:
 >
 > - Floor: wait until both `minSamples` and `minCpuTime` are reached
-> - Converged: stop once the relative CI target is met (`adaptive: true` => `2.5%`, `adaptive: 0.01` => `1%`)
-> - Bailout: if convergence or `minSamples` is not reached before `maxCpuTime`, mark as `noisy`
+> - Converged: stop once the log-space standard error reaches the relative target (`adaptive: true` => `2.5%`, `adaptive: 0.01` => `1%`)
+> - Bailout: if the target or `minSamples` is not reached before `maxCpuTime`, report the samples as unstable
 > - Safety cap: `maxSamples` still limits pathological runs

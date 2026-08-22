@@ -3,9 +3,11 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync
 import { createRequire } from 'node:module';
 import { basename, dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { hasUnstableSamples } from '../bench/types.ts';
 import { compare, printCompareReport } from '../compare.ts';
 import type { LabsConfig } from '../config.ts';
-import { printReportBox } from '../report.ts';
+import { type StabilityAffectedBenchmark, printReportBox } from '../report.ts';
+import { calibrationExplainedFraction, comparisonResolution, runMedianSpread } from '../stats.ts';
 import {
   type FreqSample,
   type GitInfo,
@@ -23,7 +25,7 @@ import {
   trimStats,
   uniqueResultName,
 } from '../store.ts';
-import { BLUE, CYAN, DIM, GREEN, RED, RESET } from '../utils/ansi.ts';
+import { BLUE, CYAN, DIM, GREEN, RED, RESET, YELLOW } from '../utils/ansi.ts';
 import { runBaselineCommand } from './commands/baseline.ts';
 import { runCompareCommand } from './commands/compare.ts';
 import { runDeleteCommand } from './commands/delete.ts';
@@ -31,24 +33,45 @@ import { runListCommand } from './commands/list.ts';
 import { runPruneCommand } from './commands/prune.ts';
 import { error, gitHint } from './utils.ts';
 
-function collectEnvData(
+function collectReportData(
   workerResult: WorkerResult,
   file: string,
+  minDelta: number,
   envData: FreqSample[],
-  noisyAliases: string[]
+  affectedBenchmarks: StabilityAffectedBenchmark[],
+  runMedianSpreads: number[],
+  calibrationExplainedFractions: number[]
 ): void {
   const runFreq = workerResult.context.cpu.freq;
+  for (const trial of workerResult.benchmarks) {
+    for (const run of trial.runs) {
+      const stats = run.stats;
+      if (!stats) continue;
+      // Fresh runs use comparison resolution; single runs use adaptive
+      // sample stability. These are separate signals with separate causes.
+      const runsInconsistent = stats.blocks
+        ? comparisonResolution(stats.blocks.medians) > minDelta
+        : false;
+      const samplesUnstable = !stats.blocks && hasUnstableSamples(stats);
+      if (runsInconsistent || samplesUnstable) {
+        affectedBenchmarks.push({
+          name: run.name || trial.alias,
+          ...(stats.blocks ? { runMedianSpread: runMedianSpread(stats.blocks.medians) } : {}),
+        });
+      }
+      if (stats.blocks) {
+        runMedianSpreads.push(runMedianSpread(stats.blocks.medians));
+        calibrationExplainedFractions.push(
+          calibrationExplainedFraction(stats.blocks.medians, stats.blocks.freqs)
+        );
+      }
+    }
+  }
   envData.push({
     file,
     runFreq,
     postFreq: workerResult.environment?.postFreq ?? runFreq,
   });
-  for (const trial of workerResult.benchmarks) {
-    for (const run of trial.runs) {
-      const stats = run.stats;
-      if (stats && (stats as any).noisy) noisyAliases.push(run.name || trial.alias);
-    }
-  }
 }
 
 const WORKER_EXT = import.meta.url.endsWith('.ts') ? 'ts' : 'mjs';
@@ -98,7 +121,7 @@ function runBench(
   label: string,
   tune: Pick<
     Partial<LabsConfig>,
-    'minCpuTime' | 'minSamples' | 'maxSamples' | 'adaptive' | 'maxCpuTime' | 'isolate'
+    'minCpuTime' | 'minSamples' | 'maxSamples' | 'adaptive' | 'maxCpuTime' | 'isolate' | 'blocks'
   >,
   tagFilter?: string,
   resultFile?: string
@@ -117,6 +140,7 @@ function runBench(
       ...env,
       LABS_BENCH_FILE: pathToFileURL(file).href,
       LABS_ISOLATE: String(tune.isolate !== false),
+      LABS_BLOCKS: String(tune.blocks ?? 1),
       ...(tune.minCpuTime !== undefined ? { LABS_MIN_CPU_TIME: String(tune.minCpuTime * 1e9) } : {}),
       ...(tune.minSamples !== undefined ? { LABS_MIN_SAMPLES: String(tune.minSamples) } : {}),
       ...(tune.maxSamples !== undefined ? { LABS_MAX_SAMPLES: String(tune.maxSamples) } : {}),
@@ -152,6 +176,8 @@ function captureGitInfo(dir: string): GitInfo | undefined {
 
 /** Parse a named flag value: --flag value -> value, or undefined if flag absent. */
 function flagValue(args: string[], flag: string): string | undefined {
+  const joined = args.find((a) => a.startsWith(`${flag}=`));
+  if (joined !== undefined) return joined.slice(flag.length + 1);
   const i = args.indexOf(flag);
   if (i === -1) return undefined;
   const next = args[i + 1];
@@ -234,7 +260,7 @@ export async function runCLI(args: string[]) {
     if (selected.length === 0) error('No previous selection found');
     console.log(`${CYAN}labs${RESET} ${DIM}(replaying last)${RESET}`);
   } else {
-    const flagTakesValue = new Set(['-n', '--name', '-m', '--message']);
+    const flagTakesValue = new Set(['-n', '--name', '-m', '--message', '--blocks']);
     let filterArg: string | undefined;
     for (let i = 0; i < benchArgs.length; i++) {
       const a = benchArgs[i];
@@ -291,6 +317,23 @@ export async function runCLI(args: string[]) {
   }
 
   const isolate = config.isolate !== false && !benchArgs.includes('--no-isolate');
+
+  // Saves default to blocked sampling so between-block variance is captured.
+  // `bench run` stays single-block for inner-loop speed unless asked.
+  const blocksFlag = flagValue(benchArgs, '--blocks');
+  if (blocksFlag !== undefined && (!Number.isInteger(Number(blocksFlag)) || Number(blocksFlag) < 1)) {
+    error(`Invalid --blocks value "${blocksFlag}" — expected an integer ≥ 1`);
+  }
+  const requestedBlocks =
+    blocksFlag !== undefined ? Number(blocksFlag) : shouldSave ? (config.blocks ?? 8) : 1;
+  const blocks = isolate ? requestedBlocks : 1;
+  if (!isolate && requestedBlocks > 1) {
+    console.log(
+      `${YELLOW}⚠ blocked sampling requires isolation — running single-block; ` +
+        `compare verdicts need block replication, so this ${shouldSave ? 'save' : 'run'} cannot receive them${RESET}`
+    );
+  }
+
   const benchTune = {
     minCpuTime: config.minCpuTime,
     minSamples: config.minSamples,
@@ -298,6 +341,7 @@ export async function runCLI(args: string[]) {
     adaptive: config.adaptive,
     maxCpuTime: config.maxCpuTime,
     isolate,
+    blocks,
   };
 
   if (!shouldSave) {
@@ -310,16 +354,40 @@ export async function runCLI(args: string[]) {
       runOutputs.push({ file: f, resultFile });
     }
     const runEnvData: FreqSample[] = [];
-    const runNoisyAliases: string[] = [];
+    const runAffectedBenchmarks: StabilityAffectedBenchmark[] = [];
+    const runMedianSpreads: number[] = [];
+    const runCalibrationExplainedFractions: number[] = [];
     let runCpu: string | null = null;
     for (const { file, resultFile } of runOutputs) {
       if (!existsSync(resultFile)) continue;
       const workerResult: WorkerResult = JSON.parse(readFileSync(resultFile, 'utf-8'));
       rmSync(resultFile);
       runCpu ??= workerResult.context.cpu.name;
-      collectEnvData(workerResult, suiteName(file), runEnvData, runNoisyAliases);
+      collectReportData(
+        workerResult,
+        suiteName(file),
+        config.minDelta,
+        runEnvData,
+        runAffectedBenchmarks,
+        runMedianSpreads,
+        runCalibrationExplainedFractions
+      );
     }
-    printReportBox(runEnvData, runNoisyAliases, config.maxCpuTime!, undefined, runCpu);
+    printReportBox(
+      runEnvData,
+      runAffectedBenchmarks,
+      config.maxCpuTime!,
+      undefined,
+      runCpu,
+      blocks > 1
+        ? {
+            freshRuns: blocks,
+            medianSpreads: runMedianSpreads,
+            minDelta: config.minDelta,
+            calibrationExplainedFractions: runCalibrationExplainedFractions,
+          }
+        : undefined
+    );
     return;
   }
 
@@ -333,7 +401,8 @@ export async function runCLI(args: string[]) {
     }
     return new Date().toISOString().replace(/[:.]/g, '-').replace('T', '_').slice(0, 19);
   };
-  const saveName = flagValue(benchArgs, '-n') ?? flagValue(benchArgs, '--name') ?? defaultName();
+  const suppliedName = flagValue(benchArgs, '-n') ?? flagValue(benchArgs, '--name');
+  const saveName = suppliedName ?? defaultName();
 
   const forceOverwrite = benchArgs.includes('--force') || benchArgs.includes('-f');
   if (!forceOverwrite && resultExists(labsDir, saveName)) {
@@ -370,7 +439,9 @@ export async function runCLI(args: string[]) {
   const files: SavedResult['files'] = [];
   let hardwareSet = false;
   const saveEnvData: FreqSample[] = [];
-  const saveNoisyAliases: string[] = [];
+  const saveAffectedBenchmarks: StabilityAffectedBenchmark[] = [];
+  const saveRunMedianSpreads: number[] = [];
+  const saveCalibrationExplainedFractions: number[] = [];
   let savedNoop: SavedResult['context'] | undefined;
 
   for (const { file, resultFile } of workerOutputs) {
@@ -397,7 +468,15 @@ export async function runCLI(args: string[]) {
       hardwareSet = true;
     }
 
-    collectEnvData(workerResult, suiteName(file), saveEnvData, saveNoisyAliases);
+    collectReportData(
+      workerResult,
+      suiteName(file),
+      config.minDelta,
+      saveEnvData,
+      saveAffectedBenchmarks,
+      saveRunMedianSpreads,
+      saveCalibrationExplainedFractions
+    );
 
     files.push({
       file: suiteName(file),
@@ -428,6 +507,7 @@ export async function runCLI(args: string[]) {
     ...(git ? { git } : {}),
     hardware,
     isolation: isolate ? 'bench' : 'file',
+    blocks,
     context: savedNoop,
     files,
     environment: { freqs: saveEnvData },
@@ -442,11 +522,26 @@ export async function runCLI(args: string[]) {
     markedBaseline = true;
   }
 
-  const baselineNote = markedBaseline ? ` ${CYAN}(baseline)${RESET}` : '';
-  const gitNote = git ? ` ${DIM}${gitHint(git)}${RESET}` : '';
-  const saveMsg = `${GREEN}✔${RESET} Saved "${saveName}"${gitNote}${baselineNote} (${files.length} file${files.length !== 1 ? 's' : ''})`;
+  const gitNote = git && suppliedName ? ` ${DIM}${gitHint(git)}${RESET}` : '';
+  const fileNote = `${files.length} file${files.length !== 1 ? 's' : ''}`;
+  const details = markedBaseline ? `${CYAN}baseline${RESET}, ${fileNote}` : fileNote;
+  const saveMsg = `${GREEN}✔${RESET} Saved "${saveName}"${gitNote} (${details})`;
 
-  printReportBox(saveEnvData, saveNoisyAliases, config.maxCpuTime!, saveMsg, hardware.cpu);
+  printReportBox(
+    saveEnvData,
+    saveAffectedBenchmarks,
+    config.maxCpuTime!,
+    saveMsg,
+    hardware.cpu,
+    blocks > 1
+      ? {
+          freshRuns: blocks,
+          medianSpreads: saveRunMedianSpreads,
+          minDelta: config.minDelta,
+          calibrationExplainedFractions: saveCalibrationExplainedFractions,
+        }
+      : undefined
+  );
 
   if (shouldCompare) {
     const baselineName = getBaseline(labsDir);

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { measure, B, bench, group, run } from '../src/bench/index.ts';
+import { hasUnstableSamples } from '../src/bench/types.ts';
 
 const fast = { min_cpu_time: 1, min_samples: 12, adaptive: false } as const;
 
@@ -54,7 +55,7 @@ describe('measuring work', () => {
     expectUsefulStats(stats);
   });
 
-  it('marks a run noisy when it cannot converge within its time budget', async () => {
+  it('marks samples unstable when they cannot converge within the time budget', async () => {
     const stats = await measure(() => {}, {
       min_cpu_time: 1,
       min_samples: 12,
@@ -62,7 +63,13 @@ describe('measuring work', () => {
       adaptive: 0.0001,
     });
 
+    expect(stats.samplesUnstable).toBe(true);
     expect(stats.noisy).toBe(true);
+  });
+
+  it('recognizes the deprecated stability field in older results', () => {
+    expect(hasUnstableSamples({ noisy: true })).toBe(true);
+    expect(hasUnstableSamples({ noisy: false })).toBe(false);
   });
 
   it('protects returned benchmark results from dead-code elimination', async () => {

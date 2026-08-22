@@ -19,19 +19,24 @@ export interface LabsConfig {
    * minCpuTime + minSamples stopping. @default true
    */
   adaptive?: boolean | number;
-  /** Maximum CPU time budget in seconds for adaptive sampling. If hit before convergence, the benchmark is flagged `noisy`. @default 5 */
+  /** Maximum CPU time budget in seconds for adaptive sampling. If hit before convergence, samples are reported as unstable. @default 5 */
   maxCpuTime?: number;
   /** Mann-Whitney U significance level. @default 0.05 */
   alpha: number;
-  /** Minimum absolute Δp50 required to flag a verdict. Filters environmental noise on identical code. @default 0.05 */
+  /** Minimum |Hodges-Lehmann delta| required to flag a verdict. Filters environmental noise on identical code. @default 0.05 */
   minDelta: number;
-  /** Minimum |Cliff's d| required to flag a verdict. Filters noise on high-variance benches where distributions overlap despite a median shift. @default 0.474 */
-  minEffect: number;
   /**
    * Whether each bench runs in a fresh worker process. Disable for suites that
    * require shared process state or have expensive module setup. @default true
    */
   isolate?: boolean;
+  /**
+   * Fresh-process blocks per bench for saved runs. Each block is a new V8, so
+   * between-block spread captures JIT nondeterminism and environment drift
+   * that a single process hides. Requires isolate. `bench run` always uses a
+   * single block. @default 8
+   */
+  blocks?: number;
 }
 
 export function defineConfig(config: Partial<LabsConfig> & Pick<LabsConfig, 'benchDir'>): LabsConfig {
@@ -45,8 +50,8 @@ export function defineConfig(config: Partial<LabsConfig> & Pick<LabsConfig, 'ben
     maxCpuTime: 5,
     alpha: 0.05,
     minDelta: 0.05,
-    minEffect: 0.474,
     isolate: true,
+    blocks: 8,
     ...config,
   };
 }

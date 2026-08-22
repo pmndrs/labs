@@ -18,10 +18,56 @@ export function mad(a: number[]): number {
   return median(a.map((v) => Math.abs(v - m)));
 }
 
+/** Largest combined sample size where the exact Mann-Whitney distribution is used. */
+const MW_U_EXACT_MAX_TOTAL = 50;
+
+/**
+ * Exact two-sided Mann-Whitney p-value from the conditional permutation
+ * distribution of the observed ranks. Doubled integer ranks keep tied
+ * midranks exact, while treating equal-valued observations as distinct
+ * assignments gives every allocation of group labels its proper weight.
+ */
+function exactMannWhitneyP(ranks: Float64Array, n1: number, observedRankSum: number): number {
+  const doubledRanks = Array.from(ranks, (rank) => Math.round(rank * 2));
+  const maxRankSum = doubledRanks
+    .slice()
+    .sort((a, b) => b - a)
+    .slice(0, n1)
+    .reduce((sum, rank) => sum + rank, 0);
+  const counts = Array.from({ length: n1 + 1 }, () => new Float64Array(maxRankSum + 1));
+  counts[0][0] = 1;
+
+  let seen = 0;
+  for (const rank of doubledRanks) {
+    seen++;
+    for (let selected = Math.min(n1, seen); selected >= 1; selected--) {
+      const row = counts[selected];
+      const previous = counts[selected - 1];
+      for (let sum = maxRankSum; sum >= rank; sum--) {
+        row[sum] += previous[sum - rank];
+      }
+    }
+  }
+
+  const observed = Math.round(observedRankSum * 2);
+  let lower = 0;
+  let upper = 0;
+  let total = 0;
+  for (let sum = 0; sum <= maxRankSum; sum++) {
+    const count = counts[n1][sum];
+    total += count;
+    if (sum <= observed) lower += count;
+    if (sum >= observed) upper += count;
+  }
+
+  return total === 0 ? 1 : Math.min(1, (2 * Math.min(lower, upper)) / total);
+}
+
 /**
  * Mann-Whitney U test (two-tailed).
- * Ranks all combined samples, sums ranks for group A, derives U and p-value
- * via normal approximation. Accurate for n > ~20 (the engine yields 50+ samples).
+ * Ranks all combined samples and sums ranks for group A. Samples with at most
+ * 50 values combined get the exact conditional permutation distribution,
+ * including ties. Larger samples use the tie-corrected normal approximation.
  *
  * Returns { U, z, p } where p is the two-tailed p-value.
  */
@@ -35,11 +81,14 @@ export function mannWhitneyU(a: number[], b: number[]): { U: number; z: number; 
     (x, y) => x.v - y.v
   );
 
+  let tieTerm = 0;
   const ranks = new Float64Array(combined.length);
   let i = 0;
   while (i < combined.length) {
     let j = i;
     while (j < combined.length - 1 && combined[j + 1].v === combined[i].v) j++;
+    const tieSize = j - i + 1;
+    tieTerm += tieSize ** 3 - tieSize;
     const avgRank = (i + j) / 2 + 1; // 1-indexed
     for (let k = i; k <= j; k++) ranks[k] = avgRank;
     i = j + 1;
@@ -51,11 +100,17 @@ export function mannWhitneyU(a: number[], b: number[]): { U: number; z: number; 
   }
 
   const U1 = R1 - (n1 * (n1 + 1)) / 2;
-  const U = Math.min(U1, n1 * n2 - U1); // use smaller U for the approximation
-
   const mean = (n1 * n2) / 2;
-  const sd = Math.sqrt((n1 * n2 * (n1 + n2 + 1)) / 12);
-  const z = sd === 0 ? 0 : (U - mean) / sd;
+  const total = n1 + n2;
+  const variance = (n1 * n2 * (total + 1 - (total > 1 ? tieTerm / (total * (total - 1)) : 0))) / 12;
+  const sd = Math.sqrt(Math.max(0, variance));
+  const centered = U1 - mean;
+  const continuityCorrected = Math.sign(centered) * Math.max(0, Math.abs(centered) - 0.5);
+  const z = sd === 0 ? 0 : continuityCorrected / sd;
+
+  if (total <= MW_U_EXACT_MAX_TOTAL) {
+    return { U: U1, z, p: exactMannWhitneyP(ranks, n1, R1) };
+  }
 
   // Two-tailed p-value via erfc: p = erfc(|z| / sqrt(2))
   const p = erfc(Math.abs(z) / Math.SQRT2);
@@ -98,26 +153,144 @@ export function cliffsD(a: number[], b: number[]): number {
   return (more - less) / (n1 * n2);
 }
 
-/**
- * Smallest relative Δp50 worth believing, given how noisy the samples are.
- *
- * Guards against between-run environmental drift (clock speed, thermal state,
- * background load): offsets that shift every sample equally, so they don't
- * shrink with sample count and the MW-U test can't detect them. Per-sample
- * jitter (MAD/median of the noisier run) is used as a proxy for that drift,
- * scaled by a heuristic 3×. Never returns less than `floor`.
- *
- * Stable system (pinned freq): MAD/median ≈ 0.5% → max(floor, 1.5%)
- * Noisy system (Apple Silicon): MAD/median ≈ 2%   → 6%
- */
-const NOISE_SCALE = 3;
+/** Exact tie-free null distribution of the Mann-Whitney U statistic, P(U = u). */
+function mannWhitneyNullDistribution(n1: number, n2: number): Float64Array {
+  const width = n1 * n2 + 1;
+  // table[m][u] = P(U = u) for m group-one values among m + n combined
+  let table: Float64Array[] = Array.from({ length: n1 + 1 }, () => {
+    const row = new Float64Array(width);
+    row[0] = 1;
+    return row;
+  });
 
-export function minMeaningfulDelta(a: number[], b: number[], floor: number): number {
-  const medA = median(a);
-  const medB = median(b);
-  const relA = medA > 0 ? mad(a) / medA : 0;
-  const relB = medB > 0 ? mad(b) / medB : 0;
-  return Math.max(floor, NOISE_SCALE * Math.max(relA, relB));
+  for (let n = 1; n <= n2; n++) {
+    const next: Float64Array[] = [];
+    for (let m = 0; m <= n1; m++) {
+      const row = new Float64Array(width);
+      if (m === 0) {
+        row[0] = 1;
+      } else {
+        // Largest remaining value is from group one with probability m/(m+n),
+        // contributing n to U, otherwise from group two contributing nothing
+        const pm = m / (m + n);
+        const fromOne = next[m - 1];
+        const fromTwo = table[m];
+        for (let u = 0; u < width; u++) {
+          row[u] = pm * (u >= n ? fromOne[u - n] : 0) + (1 - pm) * fromTwo[u];
+        }
+      }
+      next.push(row);
+    }
+    table = next;
+  }
+
+  return table[n1];
+}
+
+/** Largest u with P(U ≤ u) ≤ alpha/2 under the exact null, or -1 if none. */
+function mannWhitneyCriticalU(n1: number, n2: number, alpha: number): number {
+  const dist = mannWhitneyNullDistribution(n1, n2);
+  let cumulative = 0;
+  let critical = -1;
+  for (let u = 0; u < dist.length; u++) {
+    cumulative += dist[u];
+    if (cumulative <= alpha / 2 + 1e-12) critical = u;
+    else break;
+  }
+  return critical;
+}
+
+/**
+ * Hodges-Lehmann relative shift between two positive samples, with a
+ * confidence interval from inverting the exact Mann-Whitney test: the
+ * estimate is the median of all pairwise candidate/baseline ratios and the
+ * interval endpoints are the ratios at the exact critical ranks. Critical
+ * values assume no ties, so ties make the interval slightly conservative.
+ *
+ * Returns relative deltas (ratio − 1); positive means candidate is larger.
+ */
+export function hodgesLehmannDelta(
+  baseline: number[],
+  candidate: number[],
+  alpha = 0.05
+): { delta: number; low: number; high: number } {
+  const ratios: number[] = [];
+  for (const c of candidate) {
+    for (const b of baseline) {
+      if (b > 0) ratios.push(c / b);
+    }
+  }
+  if (ratios.length === 0) return { delta: 0, low: 0, high: 0 };
+  ratios.sort((a, b) => a - b);
+
+  const critical = mannWhitneyCriticalU(baseline.length, candidate.length, alpha);
+  const lowIndex = Math.max(0, critical);
+  const highIndex = Math.min(ratios.length - 1, ratios.length - 1 - Math.max(0, critical));
+  return {
+    delta: median(ratios) - 1,
+    low: ratios[Math.min(lowIndex, highIndex)] - 1,
+    high: ratios[Math.max(lowIndex, highIndex)] - 1,
+  };
+}
+
+/**
+ * Fraction of fresh-run median spread explained by calibration-rate
+ * differences. Compares raw run medians with calibration-normalized medians.
+ * A value of 1 means normalization removes all spread; 0 means it does not
+ * help or makes the spread worse.
+ */
+export function calibrationExplainedFraction(medians: number[], calibrationRates: number[]): number {
+  if (medians.length < 2 || medians.length !== calibrationRates.length) return 0;
+  if (calibrationRates.some((rate) => !(rate > 0))) return 0;
+  const time = runMedianSpread(medians);
+  if (time <= 0) return 0;
+  const normalized = runMedianSpread(medians.map((median, i) => median * calibrationRates[i]));
+  return Math.max(0, Math.min(1, 1 - (normalized / time) ** 2));
+}
+
+/**
+ * Relative spread of fresh-run medians: MAD scaled to sigma equivalent, over
+ * the median. Captures process-to-process variation that one run cannot see.
+ */
+export function runMedianSpread(medians: number[]): number {
+  if (medians.length < 2) return 0;
+  const m = median(medians);
+  if (m <= 0) return 0;
+  return (1.4826 * mad(medians)) / m;
+}
+
+/**
+ * Rough planning estimate of the smallest relative delta a comparison of two
+ * runs with this fresh-run median spread could detect. The 2.8 constant is the
+ * normal-theory factor for alpha 0.05 at 0.8 power comparing equal-size
+ * means, while actual verdicts use a rank test on run medians, so treat
+ * this as an order-of-magnitude guide, not a guarantee.
+ */
+export function minDetectableEffect(spread: number, freshRuns: number): number {
+  if (freshRuns < 2 || spread <= 0) return 0;
+  return 2.8 * spread * Math.sqrt(2 / freshRuns);
+}
+
+/**
+ * A benchmark's comparison resolution: the smallest relative delta its
+ * fresh-run median spread could plausibly detect. Derived from saved medians
+ * on demand, so it always reflects the data and
+ * whatever threshold the current config compares it against.
+ */
+export function comparisonResolution(medians: number[]): number {
+  return minDetectableEffect(runMedianSpread(medians), medians.length);
+}
+
+/** Smallest attainable two-sided exact Mann-Whitney p-value for two sample sizes. */
+export function minMannWhitneyP(n1: number, n2: number): number {
+  if (n1 < 1 || n2 < 1) return 1;
+  const total = n1 + n2;
+  const selected = Math.min(n1, n2);
+  let logCombinations = 0;
+  for (let i = 1; i <= selected; i++) {
+    logCombinations += Math.log(total - selected + i) - Math.log(i);
+  }
+  return Math.min(1, 2 * Math.exp(-logCombinations));
 }
 
 export type Verdict = 'faster' | 'slower' | 'neutral';
@@ -125,18 +298,18 @@ export type Verdict = 'faster' | 'slower' | 'neutral';
 export interface ClassifyOptions {
   /** Mann-Whitney U two-tailed significance level. @default 0.05 */
   alpha?: number;
-  /** Minimum absolute Δp50 ratio to flag a verdict (floor for noise-adjusted threshold). @default 0.05 */
+  /** Minimum |Hodges-Lehmann delta| to flag a verdict (practical significance). @default 0.05 */
   minDelta?: number;
-  /** Minimum |Cliff's d| to flag a verdict. Filters noise on high-variance benches. @default 0.474 */
-  minEffect?: number;
 }
 
 /**
- * Three-gate classification:
- *   1. p ≤ alpha: statistical significance (Mann-Whitney U)
- *   2. |Δp50| ≥ effectiveMinDelta: practical magnitude, noise-adjusted
- *   3. |cliff's d| ≥ minEffect: effect size ("are the distributions actually separated?")
- * All three must hold to declare faster or slower.
+ * Two-gate classification on independent units (block medians):
+ *   1. p ≤ alpha: statistical significance (exact Mann-Whitney U)
+ *   2. |Hodges-Lehmann delta| ≥ minDelta: practical magnitude
+ * Both must hold to declare faster or slower. Cliff's d is reported for
+ * context but not gated: on the same units it is a linear transform of the
+ * U statistic already behind the p-value. The confidence interval comes from
+ * inverting the exact test.
  */
 export function classify(
   baselineSamples: number[],
@@ -146,24 +319,26 @@ export function classify(
   verdict: Verdict;
   p: number;
   d: number;
-  effectiveMinDelta: number;
+  /** Hodges-Lehmann relative delta; positive means candidate is slower. */
+  hl: number;
+  ciLow: number;
+  ciHigh: number;
+  minDelta: number;
 } {
   const alpha = opts?.alpha ?? 0.05;
   const minDelta = opts?.minDelta ?? 0.05;
-  const minEffect = opts?.minEffect ?? 0.474;
-  const effectiveMinDelta = minMeaningfulDelta(baselineSamples, candidateSamples, minDelta);
   const { p } = mannWhitneyU(baselineSamples, candidateSamples);
   const d = cliffsD(baselineSamples, candidateSamples);
+  const {
+    delta: hl,
+    low: ciLow,
+    high: ciHigh,
+  } = hodgesLehmannDelta(baselineSamples, candidateSamples, alpha);
 
   let verdict: Verdict = 'neutral';
-  if (p <= alpha && Math.abs(d) >= minEffect) {
-    const bMed = median(baselineSamples);
-    const cMed = median(candidateSamples);
-    const ratio = bMed > 0 ? Math.abs(cMed - bMed) / bMed : 0;
-    if (ratio >= effectiveMinDelta) {
-      verdict = cMed > bMed ? 'slower' : 'faster';
-    }
+  if (p <= alpha && Math.abs(hl) >= minDelta) {
+    verdict = hl > 0 ? 'slower' : 'faster';
   }
 
-  return { verdict, p, d, effectiveMinDelta };
+  return { verdict, p, d, hl, ciLow, ciHigh, minDelta };
 }
