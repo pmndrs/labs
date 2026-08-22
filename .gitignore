@@ -7,3 +7,5 @@ dist
 !.env.example
 .pnpm-store
 # managed:end
+
+.claude/worktrees/
