@@ -5,7 +5,7 @@ import * as histogramFmt from './format/histogram.ts';
 import * as boxplotFmt from './format/boxplot.ts';
 import * as barplotFmt from './format/barplot.ts';
 import * as lineplotFmt from './format/lineplot.ts';
-import type { Context, GcMode, Trial } from './types.ts';
+import { hasUnstableSamples, type Context, type GcMode, type Trial } from './types.ts';
 
 export interface RenderedTrial {
   highlight: false | string | null;
@@ -68,7 +68,6 @@ export function renderMitata(
 
   let first = true;
   let optimized_out_warning = false;
-  let noisy_warning = false;
 
   for (const collection of collections) {
     let prev_run_gap = false;
@@ -121,17 +120,16 @@ export function renderMitata(
         const optimized_out = r.stats!.avg < 1.42 * noop.avg;
         optimized_out_warning = optimized_out_warning || optimized_out;
 
-        const noisy = !!r.stats!.noisy;
-        noisy_warning = noisy_warning || noisy;
+        const samplesUnstable = hasUnstableSamples(r.stats);
 
         if (compact) {
           let l = '';
           prev_run_gap = false;
           const avg = formatNs(r.stats!.avg).padStart(9);
-          const nw = noisy ? k_legend - 2 : k_legend;
+          const nw = samplesUnstable ? k_legend - 2 : k_legend;
           const name = truncate(r.name, nw).padEnd(nw);
 
-          if (noisy) l += !opts.colors ? '~ ' : ansi.yellow + '~' + ansi.reset + ' ';
+          if (samplesUnstable) l += !opts.colors ? '⚠ ' : ansi.yellow + '⚠' + ansi.reset + ' ';
           l += _h(name) + ' ';
           if (!opts.colors) l += avg + '/iter';
           else l += ansi.bold + ansi.yellow + avg + ansi.reset + ansi.bold + '/iter' + ansi.reset;
@@ -150,10 +148,10 @@ export function renderMitata(
         } else {
           let l = '';
           const avg = formatNs(r.stats!.avg).padStart(9);
-          const nw = noisy ? k_legend - 2 : k_legend;
+          const nw = samplesUnstable ? k_legend - 2 : k_legend;
           const name = truncate(r.name, nw).padEnd(nw);
 
-          if (noisy) l += !opts.colors ? '~ ' : ansi.yellow + '~' + ansi.reset + ' ';
+          if (samplesUnstable) l += !opts.colors ? '⚠ ' : ansi.yellow + '⚠' + ansi.reset + ' ';
           l += _h(name) + ' ';
           const p75 = formatNs(r.stats!.p75).padStart(9);
           const bins = histogramFmt.bins(r.stats!, 21, 0.99);
@@ -790,22 +788,5 @@ export function renderMitata(
         pad + ansi.gray + 'https://github.com/evanwashere/mitata#writing-good-benchmarks' + ansi.reset
       );
     }
-  }
-
-  if (noisy_warning) {
-    if (!nl) print('');
-    const pad = ' '.repeat(k_legend - 13);
-    if (!opts.colors) print(pad + '~ = noisy: confidence target not reached before max cpu time');
-    else
-      print(
-        pad +
-          ansi.yellow +
-          '~' +
-          ansi.reset +
-          ansi.gray +
-          ' = ' +
-          ansi.reset +
-          'noisy: confidence target not reached before max cpu time'
-      );
   }
 }

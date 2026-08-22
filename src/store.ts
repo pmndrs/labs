@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import type { GcMode, Stats } from './bench/types.ts';
+import type { BlockPlan, GcMode, Stats } from './bench/types.ts';
 
 export interface GitInfo {
   /** Full sha of HEAD when the run was saved. */
@@ -28,9 +28,18 @@ export interface SavedStats {
   p25: number;
   p75: number;
   p99: number;
+  /** Adaptive samples did not settle before the measurement time limit. */
+  samplesUnstable?: boolean;
+  /** @deprecated Compatibility field for older saved results. */
   noisy?: boolean;
   gc?: { avg: number; min: number; max: number };
   heap?: { avg: number; min: number; max: number };
+  plan?: BlockPlan;
+  blocks?: {
+    medians: number[];
+    /** Software calibration rates. The `freqs` name is retained for schema compatibility. */
+    freqs: number[];
+  };
 }
 
 export interface WorkerBenchmarkRun {
@@ -130,6 +139,11 @@ export interface SavedResult {
    * file.
    */
   isolation?: 'bench' | 'file';
+  /**
+   * Fresh-process blocks each bench ran as. An omitted value means one block,
+   * so saved spreads exclude between-process variance.
+   */
+  blocks?: number;
   context?: {
     version?: string | null;
     noop?: {
@@ -148,6 +162,8 @@ export interface LastComparison {
 }
 
 function freqReadings(freqs: FreqSample[]): number[] {
+  // Only the two long calibrated readings: the cheap per-block probes use a
+  // different warmup/budget and would read their calibration offset as drift.
   return freqs.flatMap((s) => [s.runFreq, s.postFreq]);
 }
 
@@ -304,6 +320,7 @@ function normalizeTrial(
 }
 
 export function trimStats(stats: Stats): SavedStats {
+  const samplesUnstable = stats.samplesUnstable ?? stats.noisy;
   return {
     kind: stats.kind,
     samples: stats.samples,
@@ -314,7 +331,15 @@ export function trimStats(stats: Stats): SavedStats {
     p25: stats.p25,
     p75: stats.p75,
     p99: stats.p99,
-    ...(stats.noisy !== undefined ? { noisy: stats.noisy } : {}),
+    ...(samplesUnstable !== undefined
+      ? {
+          samplesUnstable,
+          // Keep older Labs versions able to read the same saved result
+          noisy: samplesUnstable,
+        }
+      : {}),
+    ...(stats.plan ? { plan: stats.plan } : {}),
+    ...(stats.blocks ? { blocks: stats.blocks } : {}),
     ...(stats.gc
       ? {
           gc: {

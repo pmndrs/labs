@@ -2,6 +2,13 @@ import type { MeasureOptions, Stats } from '../types.ts';
 import { AsyncFunction, do_not_optimize, GeneratorFunction, kind, now } from './runtime.ts';
 import { defaults } from './constants.ts';
 
+/** Adds the deprecated public field at the measurement API boundary. */
+function withLegacySampleStabilityAlias<T extends { samplesUnstable?: boolean }>(
+  stats: T
+): T & { noisy?: boolean } {
+  return stats.samplesUnstable === undefined ? stats : { ...stats, noisy: stats.samplesUnstable };
+}
+
 /**
  * Measure the performance of `f` by dispatching to the appropriate benchmark
  * engine ({@link benchFn}, {@link benchIter}, or {@link benchGenerator})
@@ -118,6 +125,8 @@ export async function benchFn(fn: (...args: any[]) => any, opts: any = {}): Prom
     }
   }
 
+  if (opts.batch !== undefined) batch = !!opts.batch;
+
   if (opts.manual) {
     batch = false;
     opts.concurrency = 1;
@@ -173,7 +182,7 @@ export async function benchFn(fn: (...args: any[]) => any, opts: any = {}): Prom
 
     let _ = 0; let t = 0;
     let samples = new Array(2 ** 20);
-    ${!opts.target_rel_ci ? '' : 'let _lm = 0; let _lm2 = 0; let _noisy = false;'}
+    ${!opts.target_rel_ci ? '' : 'let _lm = 0; let _lm2 = 0; let _samples_unstable = false;'}
     ${!opts.heap ? '' : 'const heap = { _: 0, total: 0, min: Infinity, max: -Infinity };'}
     ${!(opts.gc && opts.sample_gc && !opts.gc.fallback) ? '' : 'const gc = { total: 0, min: Infinity, max: -Infinity };'}
 
@@ -328,7 +337,7 @@ export async function benchFn(fn: (...args: any[]) => any, opts: any = {}): Prom
         _lm2 += _ld * (_lx - _lm);
         if (_ + 1 >= ${opts.min_samples} && t >= ${opts.min_cpu_time} && _lm2 / (_ * (_ + 1)) <= ${Math.log(1 + opts.target_rel_ci) ** 2}) { _++; break; }
       }
-      if (t >= ${opts.max_cpu_time}) { _noisy = true; _++; break; }
+      if (t >= ${opts.max_cpu_time}) { _samples_unstable = true; _++; break; }
       `
       }
     }
@@ -348,17 +357,18 @@ export async function benchFn(fn: (...args: any[]) => any, opts: any = {}): Prom
       p999: samples[(.999 * (samples.length - 1)) | 0],
       avg: samples.reduce((a, v) => a + v, 0) / samples.length,
       ticks: samples.length ${!batch ? '' : `* ${opts.batch_samples}`},
+      plan: { batch: ${batch}, batch_samples: ${opts.batch_samples}, batch_unroll: ${opts.batch_unroll}, samples: _ },
       ${!opts.heap ? '' : 'heap: { ...heap, avg: heap.total / heap._ },'}
       ${!(opts.gc && opts.sample_gc && !opts.gc.fallback) ? '' : 'gc: { ...gc, avg: gc.total / _ },'}
       ${!opts.$counters ? '' : `...(!_hc ? {} : { counters: $counters.translate(${!batch ? 1 : opts.batch_samples}, _) }),`}
-      ${!opts.target_rel_ci ? '' : 'noisy: _noisy,'}
+      ${!opts.target_rel_ci ? '' : 'samplesUnstable: _samples_unstable,'}
     };
 
     ${!opts.$counters ? '' : 'if (_hc) try { $counters.deinit(); } catch {};'}
   `
   );
 
-  return {
+  return withLegacySampleStabilityAlias({
     kind: 'fn' as const,
     debug: loop.toString(),
     ...(await loop(
@@ -371,7 +381,7 @@ export async function benchFn(fn: (...args: any[]) => any, opts: any = {}): Prom
       consume,
       opts.after
     )),
-  };
+  });
 }
 
 /**
@@ -421,6 +431,8 @@ export async function benchIter(iter: (...args: any[]) => any, opts: any = {}): 
         }
       }
     }
+
+    if (opts.batch !== undefined) batch = !!opts.batch;
 
     const loop: Generator = new GeneratorFunction(
       '$gc',
@@ -479,7 +491,7 @@ export async function benchIter(iter: (...args: any[]) => any, opts: any = {}): 
           _lm2 += _ld * (_lx - _lm);
           if (_ + 1 >= ${opts.min_samples} && t >= ${opts.min_cpu_time} && _lm2 / (_ * (_ + 1)) <= ${Math.log(1 + opts.target_rel_ci) ** 2}) { _++; break; }
         }
-        if (t >= ${opts.max_cpu_time}) { $state.noisy = true; _++; break; }
+        if (t >= ${opts.max_cpu_time}) { $state.samplesUnstable = true; _++; break; }
         `
         }
       }
@@ -499,11 +511,18 @@ export async function benchIter(iter: (...args: any[]) => any, opts: any = {}): 
     throw new TypeError(`expected at least ${opts.min_samples} samples from iterator`);
 
   samples.sort((a, b) => a - b);
+  const rawCount = samples.length;
   if (samples.length > opts.samples_threshold) samples = samples.slice(2, -2);
 
-  return {
+  return withLegacySampleStabilityAlias({
     samples,
     kind: 'iter' as const,
+    plan: {
+      batch: !!_.batch,
+      batch_samples: opts.batch_samples,
+      batch_unroll: opts.batch_unroll,
+      samples: rawCount,
+    },
     debug: _.debug,
     min: samples[0],
     max: samples[samples.length - 1],
@@ -515,6 +534,6 @@ export async function benchIter(iter: (...args: any[]) => any, opts: any = {}): 
     avg: samples.reduce((a, v) => a + v, 0) / samples.length,
     ticks: samples.length * (!_.batch ? 1 : opts.batch_samples),
     ...(_.gc ? { gc: _.gc } : {}),
-    ...(opts.target_rel_ci ? { noisy: _.noisy ?? false } : {}),
-  };
+    ...(opts.target_rel_ci ? { samplesUnstable: _.samplesUnstable ?? false } : {}),
+  });
 }

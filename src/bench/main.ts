@@ -6,7 +6,7 @@ import { arch, colors, cpu, runtime, version } from './env.ts';
 import { measure } from './lib/measure.ts';
 import { _print, kind } from './lib/runtime.ts';
 import { renderMitata, type RenderedCollection } from './render.ts';
-import type { Collection, Context, Stats, Trial } from './types.ts';
+import type { BlockPlan, Collection, Context, Stats, Trial } from './types.ts';
 
 let FLAGS = 0;
 let $counters: any = null;
@@ -16,6 +16,24 @@ export const flags = {
   compact: 1 << 0,
   baseline: 1 << 1,
 };
+
+/**
+ * Tune overrides that replay a pilot block's plan exactly: the batching
+ * decision is forced and the sample count is fixed with no time floor, so
+ * every block does identical work regardless of environment speed.
+ */
+function planOverrides(plan?: BlockPlan): Record<string, unknown> {
+  if (!plan) return {};
+  return {
+    batch: plan.batch,
+    batch_samples: plan.batch_samples,
+    batch_unroll: plan.batch_unroll,
+    min_samples: plan.samples,
+    max_samples: plan.samples,
+    min_cpu_time: 0,
+    adaptive: false,
+  };
+}
 
 export class B {
   f: ((...args: any[]) => any) | null = null;
@@ -123,7 +141,7 @@ export class B {
     }
   }
 
-  async run(thrw = false, _tune: any = {}): Promise<Trial> {
+  async run(thrw = false, _tune: any = {}, plans?: Array<BlockPlan | undefined>): Promise<Trial> {
     const args = Object.keys(this._args);
     const kind = 0 === args.length ? 'static' : 1 === args.length ? 'args' : 'multi-args';
 
@@ -159,7 +177,7 @@ export class B {
     if (kind === 'static') {
       let stats: Stats | undefined, error: unknown;
       try {
-        stats = await measure(this.f!, tune);
+        stats = await measure(this.f!, { ...tune, ...planOverrides(plans?.[0]) });
       } catch (err) {
         error = err;
         if (thrw) throw err;
@@ -202,7 +220,7 @@ export class B {
           for (let oo = 0; oo < args.length; oo++)
             _name = _name.replaceAll(`\$${args[oo]}`, _args[args[oo]]);
           try {
-            stats = await measure(this.f!, { ...tune, args: _args });
+            stats = await measure(this.f!, { ...tune, args: _args, ...planOverrides(plans?.[o]) });
           } catch (err) {
             error = err;
             if (thrw) throw err;
@@ -334,14 +352,18 @@ async function initCounters(arch: string | null, runtime: string | null): Promis
 }
 
 /** Run one registered trial by its global registration index. */
-export async function runTrialAt(index: number, tune: any = {}): Promise<Trial> {
+export async function runTrialAt(
+  index: number,
+  tune: any = {},
+  plans?: Array<BlockPlan | undefined>
+): Promise<Trial> {
   const trials = COLLECTIONS.flatMap((c) => c.trials) as B[];
   const trial = trials[index];
   if (!trial) {
     throw new RangeError(`no bench registered at index ${index} (${trials.length} registered)`);
   }
   await initCounters(await arch(), runtime());
-  return await trial.run(false, tune);
+  return await trial.run(false, tune, plans);
 }
 
 export async function run(
@@ -377,6 +399,19 @@ export async function run(
   };
 
   await initCounters(context.arch, context.runtime);
+
+  if (opts.execute) {
+    const jobs: Array<{ trial: B; index: number }> = [];
+    let index = 0;
+    for (const collection of COLLECTIONS) {
+      for (const trial of collection.trials) {
+        const i = index++;
+        if (opts.filter.test(trial._name)) jobs.push({ trial, index: i });
+      }
+    }
+    const executed: Map<number, Trial> = await opts.execute(jobs);
+    opts.run_trial = (_trial: B, i: number) => executed.get(i)!;
+  }
 
   const layout = COLLECTIONS.map((c) => ({ name: c.name, types: c.types }));
   const format = 'string' === typeof opts.format ? opts.format : Object.keys(opts.format)[0];

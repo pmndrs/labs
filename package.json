@@ -25,7 +25,7 @@
     "build": "tsdown --config .config/build.config.ts",
     "prepack": "tsdown --config .config/build.config.ts",
     "release": "pnpm run build && pnpm publish",
-    "test": "vitest",
+    "test": "vitest -c .config/vitest.config.ts",
     "lint": "oxlint -c .config/oxlint.json",
     "format": "prettier --config .config/prettier.json --ignore-path .config/prettierignore --write .",
     "typecheck": "tsc --build --noEmit",
