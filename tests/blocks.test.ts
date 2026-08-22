@@ -9,7 +9,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { measure } from '../src/bench/index.ts';
 import { compare, printCompareReport } from '../src/compare.ts';
 import { defineConfig } from '../src/config.ts';
-import { blockSpread, mannWhitneyU, minDetectableEffect } from '../src/stats.ts';
+import { mannWhitneyU, minDetectableEffect, runMedianSpread } from '../src/stats.ts';
 import type { SavedResult } from '../src/store.ts';
 
 const fast = { min_cpu_time: 1, min_samples: 12, adaptive: false } as const;
@@ -31,7 +31,7 @@ function syntheticStats(blockMedians: number[], freq = 4, perBlock = 40) {
     p25: q(0.25),
     p75: q(0.75),
     p99: q(0.99),
-    noisy: false,
+    samplesUnstable: false,
     blocks: { medians: blockMedians, freqs: blockMedians.map(() => freq) },
   };
 }
@@ -102,21 +102,21 @@ describe('measurement plans', () => {
   });
 });
 
-describe('between-block statistics', () => {
-  it('reports zero spread for identical or single-block medians', () => {
-    expect(blockSpread([100, 100, 100])).toBe(0);
-    expect(blockSpread([100])).toBe(0);
+describe('fresh-run statistics', () => {
+  it('reports zero spread for identical or single-run medians', () => {
+    expect(runMedianSpread([100, 100, 100])).toBe(0);
+    expect(runMedianSpread([100])).toBe(0);
   });
 
-  it('scales spread with block median dispersion', () => {
-    const tight = blockSpread([99, 100, 101, 100]);
-    const wide = blockSpread([80, 100, 120, 100]);
+  it('scales spread with fresh-run median dispersion', () => {
+    const tight = runMedianSpread([99, 100, 101, 100]);
+    const wide = runMedianSpread([80, 100, 120, 100]);
 
     expect(tight).toBeGreaterThan(0);
     expect(wide).toBeGreaterThan(tight);
   });
 
-  it('derives a detectable-effect floor from spread and block count', () => {
+  it('derives a detectable-effect floor from spread and fresh-run count', () => {
     expect(minDetectableEffect(0.02, 8)).toBeCloseTo(0.028, 5);
     expect(minDetectableEffect(0.02, 16)).toBeLessThan(minDetectableEffect(0.02, 8));
     expect(minDetectableEffect(0.02, 1)).toBe(0);
@@ -184,9 +184,9 @@ describe('comparing blocked results', () => {
     }
   });
 
-  it('skips clock-confounded verdicts where time and cycles disagree', () => {
+  it('skips clock-confounded verdicts when calibration normalization changes the verdict', () => {
     // The candidate is slower in wall time purely because its blocks ran at a
-    // lower clock: in cycles the two sides are identical
+    // lower calibration rate: normalized timings are identical
     const aMedians = [100, 100.4, 99.7, 100.2, 99.9, 100.1, 99.8, 100.3];
     const bMedians = aMedians.map((m) => m * (4.0 / 3.5));
     const a = syntheticResult('a', aMedians);
@@ -221,7 +221,7 @@ describe('comparing blocked results', () => {
 
   it('keeps verdicts when clocks are effectively equal despite probe jitter', () => {
     // A real 6% regression with a candidate clock only ~1% lower: judged in
-    // cycles the shift shrinks below minDelta, but a 1% clock difference is
+    // normalization shrinks the shift below minDelta, but a 1% rate difference is
     // within probe jitter, so the cross-check must stay inert instead of
     // eating the verdict
     const aMedians = [100, 100.4, 99.7, 100.2, 99.9, 100.1, 99.8, 100.3];
@@ -251,10 +251,10 @@ describe('comparing blocked results', () => {
     }
   });
 
-  it('judges large effects on noisy benches and reports their resolution', () => {
-    // ~6% between-block spread cannot resolve minDelta=5%, but a 50% shift
+  it('judges large effects despite limited resolution and reports that resolution', () => {
+    // ~6% fresh-run spread cannot resolve minDelta=5%, but a 50% shift
     // with fully separated blocks is unambiguous: the bench keeps its verdict
-    // and carries its resolution for the report's noisy annotation
+    // and carries its resolution for the report's limited-resolution annotation
     const aMedians = [100, 92, 108, 95, 105, 90, 110, 99];
     const bMedians = aMedians.map((m) => m * 1.5);
 
@@ -263,11 +263,11 @@ describe('comparing blocked results', () => {
     expect(bench.kind).toBe('eligible');
     if (bench.kind === 'eligible') {
       expect(bench.verdict).toBe('slower');
-      expect(bench.resolution).toBeGreaterThan(CONFIG.minDelta);
+      expect(bench.comparisonResolution).toBeGreaterThan(CONFIG.minDelta);
     }
   });
 
-  it('right-aligns noisy resolution beneath the confidence interval', () => {
+  it('right-aligns limited resolution beneath the confidence interval', () => {
     const aMedians = [100, 92, 108, 95, 105, 90, 110, 99];
     const bMedians = aMedians.map((m) => m * 1.5);
     const result = compare(syntheticResult('a', aMedians), syntheticResult('b', bMedians), CONFIG);

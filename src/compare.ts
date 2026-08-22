@@ -3,8 +3,8 @@ import { renderDistributions } from './histogram.ts';
 import {
   type ClassifyOptions,
   type Verdict,
-  benchResolution,
   classify,
+  comparisonResolution,
   median,
   minMannWhitneyP,
 } from './stats.ts';
@@ -21,8 +21,8 @@ type EnvironmentCheck = (baseline: SavedResult, candidate: SavedResult) => Check
 
 interface BenchData {
   samples: number[];
-  /** Per-block medians, the independent experimental units. */
-  blocks?: number[];
+  /** Fresh-run medians, the independent experimental units. */
+  runMedians?: number[];
   /** Isolation mode of the run this bench came from, for actionable skip reasons. */
   isolation?: 'bench' | 'file';
 }
@@ -114,7 +114,7 @@ export const warnIsolationMismatch: EnvironmentWarning = (baseline, candidate) =
   ];
 };
 
-export const warnBlocksMismatch: EnvironmentWarning = (baseline, candidate) => {
+export const warnFreshRunCountMismatch: EnvironmentWarning = (baseline, candidate) => {
   const b = baseline.blocks ?? 1;
   const c = candidate.blocks ?? 1;
   if (b === c) return [];
@@ -127,7 +127,7 @@ export const warnBlocksMismatch: EnvironmentWarning = (baseline, candidate) => {
 export const ENVIRONMENT_WARNINGS: EnvironmentWarning[] = [
   warnClockDrift,
   warnIsolationMismatch,
-  warnBlocksMismatch,
+  warnFreshRunCountMismatch,
 ];
 
 /** All environment checks in order. Any failure blocks the entire comparison. */
@@ -141,17 +141,17 @@ export const ENVIRONMENT_CHECKS: EnvironmentCheck[] = [checkHardwareMatch];
  * both sides. Eligibility also requires enough combined allocations for the
  * exact test to reach the configured alpha.
  *
- * There is deliberately no noisiness gate: the exact test on block medians is
- * already spread-aware (high spread widens the CI and lifts p), so noisy
- * benches keep their verdicts and are annotated with their resolution in the
- * report instead of being hidden.
+ * There is deliberately no run-consistency gate: the exact test on block
+ * medians is already spread-aware (high spread widens the CI and lifts p), so
+ * benchmarks with limited resolution keep their verdicts and are annotated
+ * instead of being hidden.
  */
-const MIN_REPLICATED_BLOCKS = 2;
+const MIN_FRESH_RUNS = 2;
 
-export const checkBlockReplication: BenchCheck = (baseline, candidate, config) => {
-  const bN = baseline.blocks?.length ?? 1;
-  const cN = candidate.blocks?.length ?? 1;
-  if (bN < MIN_REPLICATED_BLOCKS || cN < MIN_REPLICATED_BLOCKS) {
+export const checkFreshRunReplication: BenchCheck = (baseline, candidate, config) => {
+  const bN = baseline.runMedians?.length ?? 1;
+  const cN = candidate.runMedians?.length ?? 1;
+  if (bN < MIN_FRESH_RUNS || cN < MIN_FRESH_RUNS) {
     // With isolation off the runner forces single-block runs, so "re-save"
     // would be a dead end — say what actually has to change.
     const fix =
@@ -162,7 +162,7 @@ export const checkBlockReplication: BenchCheck = (baseline, candidate, config) =
       ok: false,
       reason:
         `insufficient block replication (baseline: ${bN}, candidate: ${cN}; ` +
-        `need ≥${MIN_REPLICATED_BLOCKS} per side) — ${fix}`,
+        `need ≥${MIN_FRESH_RUNS} per side) — ${fix}`,
     };
   }
 
@@ -179,7 +179,7 @@ export const checkBlockReplication: BenchCheck = (baseline, candidate, config) =
 };
 
 /** All per-bench checks in order. Any failure skips that bench with a reason. */
-export const BENCH_CHECKS: BenchCheck[] = [checkBlockReplication];
+export const BENCH_CHECKS: BenchCheck[] = [checkFreshRunReplication];
 
 // ─── Data types ──────────────────────────────────────────────────────────────
 
@@ -207,11 +207,11 @@ export interface EligibleBench {
   ciHigh: number;
   /**
    * Worse of the two sides' between-run resolutions (minimum detectable
-   * effect from between-block spread). Above minDelta the row is annotated
-   * noisy: verdicts still stand, but a neutral means "could not tell", not
-   * "no change".
+   * effect from fresh-run median spread). Above minDelta the row is annotated
+   * with limited resolution: verdicts still stand, but a neutral means "could
+   * not tell", not "no change".
    */
-  resolution: number;
+  comparisonResolution: number;
 }
 
 export interface SkippedBench {
@@ -244,8 +244,8 @@ export interface CompareResult {
 type LegacyTrial = {
   alias?: string;
   groupName?: string;
-  stats?: { samples?: number[]; noisy?: boolean; p99?: number };
-  runs?: Array<{ name?: string; stats?: { samples?: number[]; noisy?: boolean; p99?: number } }>;
+  stats?: { samples?: number[]; p99?: number };
+  runs?: Array<{ name?: string; stats?: { samples?: number[]; p99?: number } }>;
 };
 
 type ComparableTrial = SavedResult['files'][number]['benchmarks'][number] | LegacyTrial;
@@ -254,8 +254,8 @@ function trialRuns(trial: ComparableTrial): Array<{
   name: string;
   samples: number[];
   p99: number;
-  blocks?: number[];
-  freqs?: number[];
+  runMedians?: number[];
+  calibrationRates?: number[];
 }> {
   const alias = (trial as any).alias ?? 'anonymous';
   const runs = (trial as any).runs as Array<any> | undefined;
@@ -263,8 +263,8 @@ function trialRuns(trial: ComparableTrial): Array<{
     name,
     samples: Array.isArray(stats?.samples) ? stats.samples : [],
     p99: typeof stats?.p99 === 'number' ? stats.p99 : 0,
-    ...(Array.isArray(stats?.blocks?.medians) ? { blocks: stats.blocks.medians } : {}),
-    ...(Array.isArray(stats?.blocks?.freqs) ? { freqs: stats.blocks.freqs } : {}),
+    ...(Array.isArray(stats?.blocks?.medians) ? { runMedians: stats.blocks.medians } : {}),
+    ...(Array.isArray(stats?.blocks?.freqs) ? { calibrationRates: stats.blocks.freqs } : {}),
   });
 
   if (Array.isArray(runs) && runs.length > 0) {
@@ -279,8 +279,8 @@ function trialRuns(trial: ComparableTrial): Array<{
 interface IndexEntry {
   p99: number;
   samples: number[];
-  blocks?: number[];
-  freqs?: number[];
+  runMedians?: number[];
+  calibrationRates?: number[];
 }
 
 function buildIndex(result: SavedResult): Map<string, IndexEntry> {
@@ -292,8 +292,8 @@ function buildIndex(result: SavedResult): Map<string, IndexEntry> {
         map.set(key, {
           p99: run.p99,
           samples: run.samples,
-          ...(run.blocks ? { blocks: run.blocks } : {}),
-          ...(run.freqs ? { freqs: run.freqs } : {}),
+          ...(run.runMedians ? { runMedians: run.runMedians } : {}),
+          ...(run.calibrationRates ? { calibrationRates: run.calibrationRates } : {}),
         });
       }
     }
@@ -320,49 +320,53 @@ function benchKey(
 // ─── Clock gate ──────────────────────────────────────────────────────────────
 
 /**
- * Median block clocks must differ by more than this before the cycles
- * cross-check can veto a verdict. The per-block probes carry a percent or two
- * of jitter; below this threshold a time/cycles disagreement says more about
- * probe noise than about the clock, and skipping would eat real verdicts.
+ * Median calibration rates must differ by more than this before normalization
+ * can veto a verdict. The short probes carry a percent or two of variation;
+ * below this threshold a disagreement says more about the probe than machine
+ * state, and skipping would eat real verdicts.
  */
-const CLOCK_GATE_MIN_DIFF = 0.02;
+const CALIBRATION_GATE_MIN_DIFF = 0.02;
 const CLOCK_CONFOUNDED_PREFIX = 'clock-confounded — ';
 
 /**
- * Re-judges a bench in cycles instead of time and returns a skip reason when
- * the two verdicts disagree. Only applies when both sides carry a valid clock
- * probe for every block and the runs' median block clocks actually differ
- * (beyond CLOCK_GATE_MIN_DIFF); with equal clocks the cycles data is just
- * time scaled by probe jitter, so the gate stays inert.
+ * Re-judges a benchmark after calibration-rate normalization and returns a
+ * skip reason when the verdicts disagree. Only applies when both sides carry
+ * a valid probe for every run and their median rates differ beyond the jitter
+ * guard. With similar rates, normalization would mostly add probe variation.
  */
-function clockConfounded(
+function calibrationSensitive(
   base: IndexEntry,
   candidate: IndexEntry,
   timeVerdict: Verdict,
   opts: ClassifyOptions
 ): string | undefined {
-  const bFreqs = base.freqs;
-  const cFreqs = candidate.freqs;
-  const usable = (blocks?: number[], freqs?: number[]) =>
-    blocks && freqs && freqs.length === blocks.length && freqs.every((f) => f > 0);
-  if (!usable(base.blocks, bFreqs) || !usable(candidate.blocks, cFreqs)) return undefined;
+  const baselineRates = base.calibrationRates;
+  const candidateRates = candidate.calibrationRates;
+  const usable = (runMedians?: number[], calibrationRates?: number[]) =>
+    runMedians &&
+    calibrationRates &&
+    calibrationRates.length === runMedians.length &&
+    calibrationRates.every((rate) => rate > 0);
+  if (!usable(base.runMedians, baselineRates) || !usable(candidate.runMedians, candidateRates))
+    return undefined;
 
-  const bClock = median(bFreqs!);
-  const cClock = median(cFreqs!);
-  const clockDiff = Math.abs(bClock - cClock) / ((bClock + cClock) / 2);
-  if (clockDiff <= CLOCK_GATE_MIN_DIFF) return undefined;
+  const baselineRate = median(baselineRates!);
+  const candidateRate = median(candidateRates!);
+  const rateDiff = Math.abs(baselineRate - candidateRate) / ((baselineRate + candidateRate) / 2);
+  if (rateDiff <= CALIBRATION_GATE_MIN_DIFF) return undefined;
 
-  const cycles = (blocks: number[], freqs: number[]) => blocks.map((m, i) => m * freqs[i]);
-  const cyclesVerdict = classify(
-    cycles(base.blocks!, bFreqs!),
-    cycles(candidate.blocks!, cFreqs!),
+  const normalizedTimes = (runMedians: number[], calibrationRates: number[]) =>
+    runMedians.map((runMedian, i) => runMedian * calibrationRates[i]);
+  const normalizedVerdict = classify(
+    normalizedTimes(base.runMedians!, baselineRates!),
+    normalizedTimes(candidate.runMedians!, candidateRates!),
     opts
   ).verdict;
-  if (cyclesVerdict === timeVerdict) return undefined;
+  if (normalizedVerdict === timeVerdict) return undefined;
 
   return (
-    `${CLOCK_CONFOUNDED_PREFIX}${timeVerdict}→${cyclesVerdict} · ` +
-    `${bClock.toFixed(2)}→${cClock.toFixed(2)}`
+    `${CLOCK_CONFOUNDED_PREFIX}${timeVerdict}→${normalizedVerdict} · ` +
+    `${baselineRate.toFixed(2)}→${candidateRate.toFixed(2)}`
   );
 }
 
@@ -431,8 +435,16 @@ export function compare(
         }
 
         const benchData = {
-          baseline: { samples: base.samples, blocks: base.blocks, isolation: baseline.isolation },
-          candidate: { samples: run.samples, blocks: run.blocks, isolation: candidate.isolation },
+          baseline: {
+            samples: base.samples,
+            runMedians: base.runMedians,
+            isolation: baseline.isolation,
+          },
+          candidate: {
+            samples: run.samples,
+            runMedians: run.runMedians,
+            isolation: candidate.isolation,
+          },
         };
 
         let skipReason: string | undefined;
@@ -449,22 +461,21 @@ export function compare(
           continue;
         }
 
-        const baselineMedian = median(base.blocks!);
-        const candidateMedian = median(run.blocks!);
+        const baselineMedian = median(base.runMedians!);
+        const candidateMedian = median(run.runMedians!);
         const deltaP50 = baselineMedian > 0 ? (candidateMedian - baselineMedian) / baselineMedian : 0;
         const deltaP99 = base.p99 > 0 ? (run.p99 - base.p99) / base.p99 : 0;
-        // Verdicts test block medians: samples within a process are correlated,
+        // Verdicts test fresh-run medians: samples within a process are correlated,
         // so pooled samples would shrink p arbitrarily without independent
         // replication. Pooled data remains for the display columns only.
-        const time = classify(base.blocks!, run.blocks!, opts);
+        const time = classify(base.runMedians!, run.runMedians!, opts);
 
-        // A common-mode clock difference between runs shifts every block
-        // together, which the block test cannot see. Judging the same data in
-        // cycles (median × its block's clock) covers the opposite assumption:
-        // the verdict must hold whether the bench is clock-bound or not.
-        const clockGate = clockConfounded(base, run, time.verdict, opts);
-        if (clockGate !== undefined) {
-          benches.push({ kind: 'skipped', key: key_, reason: clockGate });
+        // A common-mode machine-speed difference shifts every run together,
+        // which the rank test cannot see. Require the verdict to survive
+        // normalization by each run's software calibration rate.
+        const calibrationGate = calibrationSensitive(base, run, time.verdict, opts);
+        if (calibrationGate !== undefined) {
+          benches.push({ kind: 'skipped', key: key_, reason: calibrationGate });
           continue;
         }
 
@@ -483,7 +494,10 @@ export function compare(
           hl: time.hl,
           ciLow: time.ciLow,
           ciHigh: time.ciHigh,
-          resolution: Math.max(benchResolution(base.blocks!), benchResolution(run.blocks!)),
+          comparisonResolution: Math.max(
+            comparisonResolution(base.runMedians!),
+            comparisonResolution(run.runMedians!)
+          ),
         });
       }
     }
@@ -609,7 +623,7 @@ export function printCompareReport(result: CompareResult, config: LabsConfig): v
 
     let lastFile = '';
     let lastGroup = '';
-    let sawNoisy = false;
+    let sawLimitedResolution = false;
 
     for (const bench of eligible) {
       if (bench.key.file !== lastFile) {
@@ -636,9 +650,9 @@ export function printCompareReport(result: CompareResult, config: LabsConfig): v
       const dp50Color = neutral ? DIM : bench.verdict === 'faster' ? GREEN : RED;
       const dp99Color = neutral ? DIM : deltaColor(bench.deltaP99, sig);
       const pColor = neutral ? DIM : WHITE;
-      const noisy = bench.resolution > config.minDelta;
-      if (noisy) sawNoisy = true;
-      const noisyLabel = `⚠ ~±${(bench.resolution * 100).toFixed(0)}%`;
+      const hasLimitedResolution = bench.comparisonResolution > config.minDelta;
+      if (hasLimitedResolution) sawLimitedResolution = true;
+      const resolutionLabel = `⚠ ~±${(bench.comparisonResolution * 100).toFixed(0)}%`;
 
       console.log(
         `  ${color}${symbol}${RESET} ${WHITE}${name}${RESET}` +
@@ -651,15 +665,15 @@ export function printCompareReport(result: CompareResult, config: LabsConfig): v
       );
 
       const dist = renderDistributions(bench.baselineSamples, bench.candidateSamples, TIME_COL);
-      const noisyMark = noisy
+      const resolutionMark = hasLimitedResolution
         ? `${' '.repeat(1 + DELTA_COL + 1 + DELTA_COL + 1 + P_COL + 1)}` +
-          `${YELLOW}${noisyLabel.padStart(CI_COL)}${RESET}`
+          `${YELLOW}${resolutionLabel.padStart(CI_COL)}${RESET}`
         : '';
-      console.log(`${' '.repeat(4 + nameCol)} ${dist.baseline} ${dist.candidate}${noisyMark}`);
+      console.log(`${' '.repeat(4 + nameCol)} ${dist.baseline} ${dist.candidate}${resolutionMark}`);
       console.log('');
     }
 
-    if (sawNoisy) {
+    if (sawLimitedResolution) {
       console.log(
         `${YELLOW}⚠ Limited resolution:${RESET} ${DIM}Neutral results are inconclusive at the shown resolution.${RESET}`
       );
@@ -671,12 +685,14 @@ export function printCompareReport(result: CompareResult, config: LabsConfig): v
 
   if (skipped.length > 0) {
     console.log(`\n${YELLOW}skipped (${skipped.length})${RESET}`);
-    const clockConfounded = skipped.filter((b) => b.reason.startsWith(CLOCK_CONFOUNDED_PREFIX));
+    const calibrationSensitiveSkips = skipped.filter((b) =>
+      b.reason.startsWith(CLOCK_CONFOUNDED_PREFIX)
+    );
     const otherSkipped = skipped.filter((b) => !b.reason.startsWith(CLOCK_CONFOUNDED_PREFIX));
 
-    if (clockConfounded.length > 0) {
+    if (calibrationSensitiveSkips.length > 0) {
       console.log(`  ${YELLOW}clock-confounded${RESET}`);
-      for (const b of clockConfounded) {
+      for (const b of calibrationSensitiveSkips) {
         const label = truncate(b.key.name || b.key.group || 'anonymous');
         const detail = b.reason.slice(CLOCK_CONFOUNDED_PREFIX.length);
         console.log(`  ${DIM}· ${label}${RESET}  ${YELLOW}${detail}${RESET}`);

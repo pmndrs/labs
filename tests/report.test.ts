@@ -27,9 +27,9 @@ describe('measurement report', () => {
 
   it('explains inconsistent runs and reports their comparison resolution', () => {
     const lines = captureReport(() =>
-      printReportBox([], [{ name: 'variable work', spread: 0.1 }], 5, undefined, undefined, {
-        blocks: 8,
-        spreads: [0.1],
+      printReportBox([], [{ name: 'variable work', runMedianSpread: 0.1 }], 5, undefined, undefined, {
+        freshRuns: 8,
+        medianSpreads: [0.1],
         minDelta: 0.05,
       })
     );
@@ -52,8 +52,8 @@ describe('measurement report', () => {
     const sampleLines = captureReport(() => printReportBox([], [], 5));
     const blockLines = captureReport(() =>
       printReportBox([], [], 5, undefined, undefined, {
-        blocks: 8,
-        spreads: [0.01],
+        freshRuns: 8,
+        medianSpreads: [0.01],
         minDelta: 0.05,
       })
     );
@@ -62,7 +62,7 @@ describe('measurement report', () => {
     expect(blockLines.some((line) => line.includes('✔ Consistent runs:'))).toBe(true);
   });
 
-  it('marks unstable rows without using the noisy legend', () => {
+  it('marks unstable rows without using the legacy terminology', () => {
     const lines: string[] = [];
     const noop = { avg: 0 };
     const stats = {
@@ -78,7 +78,7 @@ describe('measurement report', () => {
       p999: 102,
       ticks: 5,
       debug: '',
-      noisy: true,
+      samplesUnstable: true,
     };
 
     renderMitata(

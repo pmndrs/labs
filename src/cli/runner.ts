@@ -3,10 +3,11 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync
 import { createRequire } from 'node:module';
 import { basename, dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { hasUnstableSamples } from '../bench/types.ts';
 import { compare, printCompareReport } from '../compare.ts';
 import type { LabsConfig } from '../config.ts';
-import { type NoisyBench, printReportBox } from '../report.ts';
-import { benchResolution, blockSpread, clockExplainedFraction } from '../stats.ts';
+import { type StabilityAffectedBenchmark, printReportBox } from '../report.ts';
+import { calibrationExplainedFraction, comparisonResolution, runMedianSpread } from '../stats.ts';
 import {
   type FreqSample,
   type GitInfo,
@@ -32,34 +33,37 @@ import { runListCommand } from './commands/list.ts';
 import { runPruneCommand } from './commands/prune.ts';
 import { error, gitHint } from './utils.ts';
 
-function collectEnvData(
+function collectReportData(
   workerResult: WorkerResult,
   file: string,
   minDelta: number,
   envData: FreqSample[],
-  noisyBenches: NoisyBench[],
-  blockSpreads: number[],
-  clockExplained: number[]
+  affectedBenchmarks: StabilityAffectedBenchmark[],
+  runMedianSpreads: number[],
+  calibrationExplainedFractions: number[]
 ): void {
   const runFreq = workerResult.context.cpu.freq;
   for (const trial of workerResult.benchmarks) {
     for (const run of trial.runs) {
       const stats = run.stats;
       if (!stats) continue;
-      // Blocked stats derive noisiness from spread against the current
-      // config; single-block stats carry the engine's convergence flag.
-      const noisy = stats.blocks
-        ? benchResolution(stats.blocks.medians) > minDelta
-        : !!(stats as any).noisy;
-      if (noisy) {
-        noisyBenches.push({
+      // Fresh runs use comparison resolution; single runs use adaptive
+      // sample stability. These are separate signals with separate causes.
+      const runsInconsistent = stats.blocks
+        ? comparisonResolution(stats.blocks.medians) > minDelta
+        : false;
+      const samplesUnstable = !stats.blocks && hasUnstableSamples(stats);
+      if (runsInconsistent || samplesUnstable) {
+        affectedBenchmarks.push({
           name: run.name || trial.alias,
-          ...(stats.blocks ? { spread: blockSpread(stats.blocks.medians) } : {}),
+          ...(stats.blocks ? { runMedianSpread: runMedianSpread(stats.blocks.medians) } : {}),
         });
       }
       if (stats.blocks) {
-        blockSpreads.push(blockSpread(stats.blocks.medians));
-        clockExplained.push(clockExplainedFraction(stats.blocks.medians, stats.blocks.freqs));
+        runMedianSpreads.push(runMedianSpread(stats.blocks.medians));
+        calibrationExplainedFractions.push(
+          calibrationExplainedFraction(stats.blocks.medians, stats.blocks.freqs)
+        );
       }
     }
   }
@@ -350,37 +354,37 @@ export async function runCLI(args: string[]) {
       runOutputs.push({ file: f, resultFile });
     }
     const runEnvData: FreqSample[] = [];
-    const runNoisyBenches: NoisyBench[] = [];
-    const runBlockSpreads: number[] = [];
-    const runClockExplained: number[] = [];
+    const runAffectedBenchmarks: StabilityAffectedBenchmark[] = [];
+    const runMedianSpreads: number[] = [];
+    const runCalibrationExplainedFractions: number[] = [];
     let runCpu: string | null = null;
     for (const { file, resultFile } of runOutputs) {
       if (!existsSync(resultFile)) continue;
       const workerResult: WorkerResult = JSON.parse(readFileSync(resultFile, 'utf-8'));
       rmSync(resultFile);
       runCpu ??= workerResult.context.cpu.name;
-      collectEnvData(
+      collectReportData(
         workerResult,
         suiteName(file),
         config.minDelta,
         runEnvData,
-        runNoisyBenches,
-        runBlockSpreads,
-        runClockExplained
+        runAffectedBenchmarks,
+        runMedianSpreads,
+        runCalibrationExplainedFractions
       );
     }
     printReportBox(
       runEnvData,
-      runNoisyBenches,
+      runAffectedBenchmarks,
       config.maxCpuTime!,
       undefined,
       runCpu,
       blocks > 1
         ? {
-            blocks,
-            spreads: runBlockSpreads,
+            freshRuns: blocks,
+            medianSpreads: runMedianSpreads,
             minDelta: config.minDelta,
-            clockExplained: runClockExplained,
+            calibrationExplainedFractions: runCalibrationExplainedFractions,
           }
         : undefined
     );
@@ -435,9 +439,9 @@ export async function runCLI(args: string[]) {
   const files: SavedResult['files'] = [];
   let hardwareSet = false;
   const saveEnvData: FreqSample[] = [];
-  const saveNoisyBenches: NoisyBench[] = [];
-  const saveBlockSpreads: number[] = [];
-  const saveClockExplained: number[] = [];
+  const saveAffectedBenchmarks: StabilityAffectedBenchmark[] = [];
+  const saveRunMedianSpreads: number[] = [];
+  const saveCalibrationExplainedFractions: number[] = [];
   let savedNoop: SavedResult['context'] | undefined;
 
   for (const { file, resultFile } of workerOutputs) {
@@ -464,14 +468,14 @@ export async function runCLI(args: string[]) {
       hardwareSet = true;
     }
 
-    collectEnvData(
+    collectReportData(
       workerResult,
       suiteName(file),
       config.minDelta,
       saveEnvData,
-      saveNoisyBenches,
-      saveBlockSpreads,
-      saveClockExplained
+      saveAffectedBenchmarks,
+      saveRunMedianSpreads,
+      saveCalibrationExplainedFractions
     );
 
     files.push({
@@ -525,16 +529,16 @@ export async function runCLI(args: string[]) {
 
   printReportBox(
     saveEnvData,
-    saveNoisyBenches,
+    saveAffectedBenchmarks,
     config.maxCpuTime!,
     saveMsg,
     hardware.cpu,
     blocks > 1
       ? {
-          blocks,
-          spreads: saveBlockSpreads,
+          freshRuns: blocks,
+          medianSpreads: saveRunMedianSpreads,
           minDelta: config.minDelta,
-          clockExplained: saveClockExplained,
+          calibrationExplainedFractions: saveCalibrationExplainedFractions,
         }
       : undefined
   );

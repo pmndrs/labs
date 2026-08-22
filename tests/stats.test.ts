@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { classify, clockExplainedFraction, mannWhitneyU, minMannWhitneyP } from '../src/stats.ts';
+import {
+  calibrationExplainedFraction,
+  classify,
+  mannWhitneyU,
+  minMannWhitneyP,
+} from '../src/stats.ts';
 
 const samples = (value: number) => Array.from({ length: 30 }, () => value);
 
@@ -54,7 +59,7 @@ describe('effect estimation', () => {
     expect(result.ciHigh).toBeCloseTo(0.1, 10);
   });
 
-  it('brackets the estimate with a widening interval under block noise', () => {
+  it('brackets the estimate with a widening interval under fresh-run variation', () => {
     const baseline = [98, 100, 102, 99, 101, 100, 97, 103];
     const candidate = baseline.map((v) => v * 1.2);
 
@@ -73,12 +78,12 @@ describe('clock attribution', () => {
   it('attributes spread to the clock when medians track 1/frequency', () => {
     const medians = freqs.map((f) => 400 / f);
 
-    expect(clockExplainedFraction(medians, freqs)).toBeCloseTo(1, 6);
+    expect(calibrationExplainedFraction(medians, freqs)).toBeCloseTo(1, 6);
   });
 
   it('attributes nothing to the clock when medians ignore it', () => {
     const medians = [100, 101, 99, 100, 102, 98];
 
-    expect(clockExplainedFraction(medians, freqs)).toBe(0);
+    expect(calibrationExplainedFraction(medians, freqs)).toBe(0);
   });
 });

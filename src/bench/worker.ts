@@ -57,8 +57,8 @@ async function calibrateFreq(): Promise<number> {
   return 1 / (r as any).avg;
 }
 
-/** Cheap clock probe (about 50ms) recording the machine state entering a block. */
-async function probeFreq(): Promise<number> {
+/** Short software calibration probe recording the machine state entering a block. */
+async function probeCalibrationRate(): Promise<number> {
   const r = await measure(() => {}, { batch_unroll: 1, min_cpu_time: 5e7, adaptive: false });
   return 1 / (r as any).avg;
 }
@@ -72,18 +72,21 @@ function errorReplacer(_: string, v: any): any {
 /**
  * Child mode: measure a single trial in this fresh process and write it out.
  * Skips calibration and rendering — the parent worker owns both. When part
- * of a blocked run, probes the clock and replays the pilot's plan if given.
+ * of a blocked run, records a calibration rate and replays the pilot's plan.
  */
 async function childMain(index: number): Promise<void> {
   await import(file!);
-  const freq = blockCount() > 1 ? await probeFreq() : undefined;
+  const calibrationRate = blockCount() > 1 ? await probeCalibrationRate() : undefined;
   const plans = process.env.LABS_BLOCK_PLANS
     ? (JSON.parse(process.env.LABS_BLOCK_PLANS) as BlockPlan[])
     : undefined;
   const trial = await runTrialAt(index, parseTuneEnv(), plans);
   writeFileSync(
     process.env.LABS_RESULT_FILE!,
-    JSON.stringify({ trial, ...(freq !== undefined ? { freq } : {}) }, errorReplacer)
+    JSON.stringify(
+      { trial, ...(calibrationRate !== undefined ? { calibrationRate } : {}) },
+      errorReplacer
+    )
   );
 }
 
@@ -98,7 +101,7 @@ function runTrialChild(
   trial: any,
   index: number,
   extraEnv: Record<string, string> = {}
-): { trial: Trial; freq?: number } {
+): { trial: Trial; calibrationRate?: number } {
   const resultFile = join(tmpdir(), `labs-trial-${process.pid}-${index}-${childSeq++}.json`);
   try {
     execFileSync(process.execPath, [...process.execArgv, process.argv[1]], {
@@ -151,13 +154,13 @@ function mergeRange(
 
 /**
  * Pools samples across blocks and recomputes headline stats, keeping each
- * block's median and clock probe so between-block variance stays observable.
- * Counters and debug come from the pilot. No `noisy` flag is stored for
- * blocked stats: the pilot's convergence flag reflects a fraction of the
- * budget, and spread-based noisiness is policy (it depends on minDelta), so
- * readers derive it from `blocks.medians` against the current config.
+ * block's median and calibration rate so between-run variance stays observable.
+ * Counters and debug come from the pilot. Pilot sample instability is omitted
+ * from merged stats because it reflects only a fraction of the total budget.
+ * Readers derive fresh-run consistency from `blocks.medians` against the
+ * current minDelta instead.
  */
-function mergeStats(list: Stats[], freqs: number[]): Stats {
+function mergeStats(list: Stats[], calibrationRates: number[]): Stats {
   const samples = list.flatMap((s) => s.samples).sort((a, b) => a - b);
   const weights = list.map((s) => s.samples.length);
   const heaps = list.map((s) => s.heap).filter(Boolean) as NonNullable<Stats['heap']>[];
@@ -176,14 +179,17 @@ function mergeStats(list: Stats[], freqs: number[]): Stats {
     p999: percentile(samples, 0.999),
     avg: samples.reduce((a, v) => a + v, 0) / samples.length,
     ticks: list.reduce((a, s) => a + s.ticks, 0),
+    samplesUnstable: undefined,
     noisy: undefined,
     ...(heaps.length === list.length ? { heap: mergeRange(heaps, weights) } : {}),
     ...(gcs.length === list.length ? { gc: mergeRange(gcs, weights) } : {}),
-    blocks: { medians, freqs },
+    // `freqs` is retained in the saved schema for compatibility. The values
+    // are software calibration rates, not literal hardware frequencies.
+    blocks: { medians, freqs: calibrationRates },
   };
 }
 
-function mergeBlocks(parts: Array<{ trial: Trial; freq?: number }>): Trial {
+function mergeBlocks(parts: Array<{ trial: Trial; calibrationRate?: number }>): Trial {
   if (parts.length === 1) return parts[0].trial;
   const pilot = parts[0].trial;
   return {
@@ -205,7 +211,7 @@ function mergeBlocks(parts: Array<{ trial: Trial; freq?: number }>): Trial {
         ...run,
         stats: mergeStats(
           survivors.map((p) => p.trial.runs[j]!.stats!) as Stats[],
-          survivors.map((p) => p.freq ?? 0)
+          survivors.map((p) => p.calibrationRate ?? 0)
         ),
       };
     }),
@@ -228,7 +234,7 @@ function makeBlockExecutor(blocks: number) {
       LABS_MAX_CPU_TIME: String(budget),
     };
 
-    const collected = new Map<number, Array<{ trial: Trial; freq?: number }>>();
+    const collected = new Map<number, Array<{ trial: Trial; calibrationRate?: number }>>();
     const plans = new Map<number, BlockPlan[]>();
 
     for (let block = 0; block < blocks; block++) {

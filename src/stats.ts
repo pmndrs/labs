@@ -234,26 +234,25 @@ export function hodgesLehmannDelta(
 }
 
 /**
- * Fraction of between-block spread explained by clock differences: compares
- * the spread of raw block medians against the spread of clock-normalized
- * medians (median × block frequency). 1 means the clock explains everything,
- * 0 means normalizing does not help (or hurts).
+ * Fraction of fresh-run median spread explained by calibration-rate
+ * differences. Compares raw run medians with calibration-normalized medians.
+ * A value of 1 means normalization removes all spread; 0 means it does not
+ * help or makes the spread worse.
  */
-export function clockExplainedFraction(medians: number[], freqs: number[]): number {
-  if (medians.length < 2 || medians.length !== freqs.length) return 0;
-  if (freqs.some((f) => !(f > 0))) return 0;
-  const time = blockSpread(medians);
+export function calibrationExplainedFraction(medians: number[], calibrationRates: number[]): number {
+  if (medians.length < 2 || medians.length !== calibrationRates.length) return 0;
+  if (calibrationRates.some((rate) => !(rate > 0))) return 0;
+  const time = runMedianSpread(medians);
   if (time <= 0) return 0;
-  const cycles = blockSpread(medians.map((m, i) => m * freqs[i]));
-  return Math.max(0, Math.min(1, 1 - (cycles / time) ** 2));
+  const normalized = runMedianSpread(medians.map((median, i) => median * calibrationRates[i]));
+  return Math.max(0, Math.min(1, 1 - (normalized / time) ** 2));
 }
 
 /**
- * Relative spread of per-block medians: MAD scaled to sigma equivalent, over
- * the median. Captures how much fresh-process runs of the same bench differ,
- * which is the variance a single process cannot observe.
+ * Relative spread of fresh-run medians: MAD scaled to sigma equivalent, over
+ * the median. Captures process-to-process variation that one run cannot see.
  */
-export function blockSpread(medians: number[]): number {
+export function runMedianSpread(medians: number[]): number {
   if (medians.length < 2) return 0;
   const m = median(medians);
   if (m <= 0) return 0;
@@ -262,24 +261,24 @@ export function blockSpread(medians: number[]): number {
 
 /**
  * Rough planning estimate of the smallest relative delta a comparison of two
- * runs with this between-block spread could detect. The 2.8 constant is the
+ * runs with this fresh-run median spread could detect. The 2.8 constant is the
  * normal-theory factor for alpha 0.05 at 0.8 power comparing equal-size
- * means, while actual verdicts use a rank test on block medians, so treat
+ * means, while actual verdicts use a rank test on run medians, so treat
  * this as an order-of-magnitude guide, not a guarantee.
  */
-export function minDetectableEffect(spread: number, blocks: number): number {
-  if (blocks < 2 || spread <= 0) return 0;
-  return 2.8 * spread * Math.sqrt(2 / blocks);
+export function minDetectableEffect(spread: number, freshRuns: number): number {
+  if (freshRuns < 2 || spread <= 0) return 0;
+  return 2.8 * spread * Math.sqrt(2 / freshRuns);
 }
 
 /**
- * A bench's between-run resolution: the smallest relative delta its
- * between-block spread could plausibly detect. Derived from saved block
- * medians on demand — never persisted — so it always reflects the data and
+ * A benchmark's comparison resolution: the smallest relative delta its
+ * fresh-run median spread could plausibly detect. Derived from saved medians
+ * on demand, so it always reflects the data and
  * whatever threshold the current config compares it against.
  */
-export function benchResolution(medians: number[]): number {
-  return minDetectableEffect(blockSpread(medians), medians.length);
+export function comparisonResolution(medians: number[]): number {
+  return minDetectableEffect(runMedianSpread(medians), medians.length);
 }
 
 /** Smallest attainable two-sided exact Mann-Whitney p-value for two sample sizes. */

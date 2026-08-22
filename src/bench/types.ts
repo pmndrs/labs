@@ -26,11 +26,25 @@ export interface Stats {
   p999: number;
   gc?: { avg: number; min: number; max: number; total: number };
   heap?: { avg: number; min: number; max: number; total: number };
+  /** Adaptive samples did not settle before the measurement time limit. */
+  samplesUnstable?: boolean;
+  /** @deprecated Use `samplesUnstable`. */
   noisy?: boolean;
   /** Decisions this measurement made, usable to freeze later blocks. */
   plan?: BlockPlan;
-  /** Per-block summaries when the bench ran as multiple isolated blocks. */
-  blocks?: { medians: number[]; freqs: number[] };
+  /** Per-block summaries when the benchmark ran in multiple fresh processes. */
+  blocks?: {
+    medians: number[];
+    /** Software calibration rates. The `freqs` name is retained for saved-result compatibility. */
+    freqs: number[];
+  };
+}
+
+/** Supports results saved before `samplesUnstable` replaced the ambiguous `noisy` name. */
+export function hasUnstableSamples(
+  stats: Pick<Stats, 'samplesUnstable' | 'noisy'> | undefined
+): boolean {
+  return stats?.samplesUnstable ?? stats?.noisy ?? false;
 }
 
 export interface MeasureOptions {

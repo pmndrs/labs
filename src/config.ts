@@ -19,7 +19,7 @@ export interface LabsConfig {
    * minCpuTime + minSamples stopping. @default true
    */
   adaptive?: boolean | number;
-  /** Maximum CPU time budget in seconds for adaptive sampling. If hit before convergence, the benchmark is flagged `noisy`. @default 5 */
+  /** Maximum CPU time budget in seconds for adaptive sampling. If hit before convergence, samples are reported as unstable. @default 5 */
   maxCpuTime?: number;
   /** Mann-Whitney U significance level. @default 0.05 */
   alpha: number;

@@ -1,40 +1,40 @@
 import type { LabsConfig } from './config.ts';
 import { renderMitata, type RenderedCollection } from './bench/render.ts';
-import type { Context, Stats, Trial } from './bench/types.ts';
+import { hasUnstableSamples, type Context, type Stats, type Trial } from './bench/types.ts';
 import {
-  benchResolution,
-  blockSpread,
-  clockExplainedFraction,
+  calibrationExplainedFraction,
+  comparisonResolution,
   median,
   minDetectableEffect,
+  runMedianSpread,
 } from './stats.ts';
 import type { SavedBenchmarkTrial, SavedFile, SavedResult, FreqSample } from './store.ts';
 import { BLUE, BOLD, DIM, GREEN, RESET, YELLOW } from './utils/ansi.ts';
 import { visibleLength } from './utils/format.ts';
 
-export interface NoisyBench {
+export interface StabilityAffectedBenchmark {
   name: string;
-  /** The bench's own between-block spread, shown inline when available. */
-  spread?: number;
+  /** This benchmark's fresh-run median spread, shown inline when available. */
+  runMedianSpread?: number;
 }
 
-export interface BlockInfo {
-  blocks: number;
-  /** Per-bench relative spread of block medians. */
-  spreads: number[];
-  /** Configured verdict threshold, so the warning agrees with the noisy flag. */
+export interface RunConsistencyInfo {
+  freshRuns: number;
+  /** Per-benchmark relative spread of fresh-run medians. */
+  medianSpreads: number[];
+  /** Configured verdict threshold used to identify inconsistent runs. */
   minDelta: number;
-  /** Per-bench fraction of block spread explained by clock differences. */
-  clockExplained?: number[];
+  /** Per-benchmark fraction of fresh-run spread explained by calibration-rate differences. */
+  calibrationExplainedFractions?: number[];
 }
 
 export function printReportBox(
   envData: FreqSample[],
-  noisyBenches: NoisyBench[],
+  affectedBenchmarks: StabilityAffectedBenchmark[],
   maxCpuTime: number,
   saveMsg?: string,
   cpu?: string | null,
-  blockInfo?: BlockInfo
+  runConsistency?: RunConsistencyInfo
 ): void {
   const lines: string[] = [];
 
@@ -68,43 +68,50 @@ export function printReportBox(
 
   if (envData.length > 0) lines.push('');
 
-  let hasBlockSummary = false;
-  if (blockInfo && blockInfo.blocks > 1 && blockInfo.spreads.length > 0) {
-    hasBlockSummary = true;
-    const spread = median(blockInfo.spreads);
-    const mde = minDetectableEffect(spread, blockInfo.blocks);
+  let hasRunConsistencySummary = false;
+  if (runConsistency && runConsistency.freshRuns > 1 && runConsistency.medianSpreads.length > 0) {
+    hasRunConsistencySummary = true;
+    const spread = median(runConsistency.medianSpreads);
+    const resolution = minDetectableEffect(spread, runConsistency.freshRuns);
     const spreadStr = `±${(spread * 100).toFixed(1)}%`;
-    // Same rule the readers use to derive per-bench noisiness, so the two agree
-    const noisy = mde > blockInfo.minDelta;
+    // Use the same resolution rule as individual benchmark classification
+    const runsInconsistent = resolution > runConsistency.minDelta;
     lines.push(
-      noisy
+      runsInconsistent
         ? `${YELLOW}⚠ Inconsistent runs:${RESET} ${DIM}Median timings changed across fresh runs suggesting an unstable machine.${RESET}`
         : `${GREEN}✔ Consistent runs:${RESET} ${DIM}Median timings remained stable across fresh runs.${RESET}`
     );
-    lines.push(`  ${DIM}Median spread: ${spreadStr} across ${blockInfo.blocks} fresh runs.${RESET}`);
-    lines.push(`  ${DIM}Comparison resolution: ~±${(mde * 100).toFixed(1)}%.${RESET}`);
-    if (blockInfo.clockExplained && blockInfo.clockExplained.length > 0) {
-      const explained = median(blockInfo.clockExplained);
+    lines.push(
+      `  ${DIM}Median spread: ${spreadStr} across ${runConsistency.freshRuns} fresh runs.${RESET}`
+    );
+    lines.push(`  ${DIM}Comparison resolution: ~±${(resolution * 100).toFixed(1)}%.${RESET}`);
+    if (
+      runConsistency.calibrationExplainedFractions &&
+      runConsistency.calibrationExplainedFractions.length > 0
+    ) {
+      const explained = median(runConsistency.calibrationExplainedFractions);
       lines.push(
         `  ${DIM}Clock estimate explains ~${(explained * 100).toFixed(0)}% of run-to-run spread.${RESET}`
       );
     }
   }
 
-  if (noisyBenches.length > 0) {
-    if (!hasBlockSummary) {
+  if (affectedBenchmarks.length > 0) {
+    if (!hasRunConsistencySummary) {
       lines.push(
         `${YELLOW}⚠ Unstable samples:${RESET} ${DIM}Timings did not settle suggesting non-deterministic work or runtime interference.${RESET}`
       );
       lines.push(`  ${DIM}Time limit: ${maxCpuTime}s.${RESET}`);
     }
-    lines.push(`  ${DIM}Affected benchmarks (${noisyBenches.length}):${RESET}`);
-    for (const bench of noisyBenches) {
+    lines.push(`  ${DIM}Affected benchmarks (${affectedBenchmarks.length}):${RESET}`);
+    for (const benchmark of affectedBenchmarks) {
       const spread =
-        bench.spread !== undefined ? `  ${YELLOW}±${(bench.spread * 100).toFixed(1)}%${RESET}` : '';
-      lines.push(`    ${YELLOW}⚠${RESET} ${DIM}${bench.name}${RESET}${spread}`);
+        benchmark.runMedianSpread !== undefined
+          ? `  ${YELLOW}±${(benchmark.runMedianSpread * 100).toFixed(1)}%${RESET}`
+          : '';
+      lines.push(`    ${YELLOW}⚠${RESET} ${DIM}${benchmark.name}${RESET}${spread}`);
     }
-  } else if (!hasBlockSummary) {
+  } else if (!hasRunConsistencySummary) {
     lines.push(
       `${GREEN}✔ Stable samples:${RESET} ${DIM}Timings settled within the ${maxCpuTime}s time limit.${RESET}`
     );
@@ -149,40 +156,50 @@ export function replayReport(result: SavedResult, config: LabsConfig): void {
     );
   }
 
-  const noisyBenches: NoisyBench[] = [];
-  const spreads: number[] = [];
-  const clockExplained: number[] = [];
+  const affectedBenchmarks: StabilityAffectedBenchmark[] = [];
+  const runMedianSpreads: number[] = [];
+  const calibrationExplainedFractions: number[] = [];
   for (const f of result.files) {
     for (const b of f.benchmarks) {
       for (const run of b.runs) {
-        // Blocked stats derive noisiness from spread against the current
-        // config; single-block stats carry the engine's convergence flag.
-        const noisy = run.stats?.blocks
-          ? benchResolution(run.stats.blocks.medians) > config.minDelta
-          : !!run.stats?.noisy;
-        if (noisy) {
-          noisyBenches.push({
+        // Fresh runs use comparison resolution; single runs use adaptive
+        // sample stability. These are separate signals with separate causes.
+        const runsInconsistent = run.stats?.blocks
+          ? comparisonResolution(run.stats.blocks.medians) > config.minDelta
+          : false;
+        const samplesUnstable = !run.stats?.blocks && hasUnstableSamples(run.stats);
+        if (runsInconsistent || samplesUnstable) {
+          affectedBenchmarks.push({
             name: run.name || b.alias,
-            ...(run.stats?.blocks ? { spread: blockSpread(run.stats.blocks.medians) } : {}),
+            ...(run.stats?.blocks
+              ? { runMedianSpread: runMedianSpread(run.stats.blocks.medians) }
+              : {}),
           });
         }
         if (run.stats?.blocks) {
-          spreads.push(blockSpread(run.stats.blocks.medians));
-          clockExplained.push(
-            clockExplainedFraction(run.stats.blocks.medians, run.stats.blocks.freqs)
+          runMedianSpreads.push(runMedianSpread(run.stats.blocks.medians));
+          calibrationExplainedFractions.push(
+            calibrationExplainedFraction(run.stats.blocks.medians, run.stats.blocks.freqs)
           );
         }
       }
     }
   }
-  const blocks = result.blocks ?? 1;
+  const freshRuns = result.blocks ?? 1;
   printReportBox(
     result.environment?.freqs ?? [],
-    noisyBenches,
+    affectedBenchmarks,
     config.maxCpuTime!,
     undefined,
     result.hardware.cpu,
-    blocks > 1 ? { blocks, spreads, minDelta: config.minDelta, clockExplained } : undefined
+    freshRuns > 1
+      ? {
+          freshRuns,
+          medianSpreads: runMedianSpreads,
+          minDelta: config.minDelta,
+          calibrationExplainedFractions,
+        }
+      : undefined
   );
 }
 
