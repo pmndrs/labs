@@ -51,7 +51,7 @@ export function printReportBox(
 
     if (drift > 0.05) {
       lines.push(
-        `${YELLOW}⚠ CPU unstable${RESET}  ${rangeStr}  ${DIM}(${(drift * 100).toFixed(1)}% drift)${RESET}`
+        `${YELLOW}⚠ Unstable clock:${RESET} ${DIM}Readings ranged ${rangeStr} (${(drift * 100).toFixed(1)}% drift).${RESET}`
       );
       if (cpu && /apple/i.test(cpu)) {
         lines.push(`  ${DIM}Apple Silicon does not support CPU controls.${RESET}`);
@@ -62,43 +62,52 @@ export function printReportBox(
         );
       }
     } else {
-      lines.push(`${GREEN}✔ CPU stable${RESET}  ${DIM}${rangeStr}${RESET}`);
+      lines.push(`${GREEN}✔ Stable clock:${RESET} ${DIM}Readings ranged ${rangeStr}.${RESET}`);
     }
   }
 
   if (envData.length > 0) lines.push('');
 
+  let hasBlockSummary = false;
   if (blockInfo && blockInfo.blocks > 1 && blockInfo.spreads.length > 0) {
+    hasBlockSummary = true;
     const spread = median(blockInfo.spreads);
     const mde = minDetectableEffect(spread, blockInfo.blocks);
     const spreadStr = `±${(spread * 100).toFixed(1)}%`;
     // Same rule the readers use to derive per-bench noisiness, so the two agree
     const noisy = mde > blockInfo.minDelta;
     lines.push(
-      `${noisy ? YELLOW + '⚠' : GREEN + '✔'} between-block spread ${spreadStr}${RESET}  ${DIM}(${blockInfo.blocks} blocks/bench)${RESET}`
+      noisy
+        ? `${YELLOW}⚠ Inconsistent runs:${RESET} ${DIM}Median timings changed across fresh runs suggesting an unstable machine.${RESET}`
+        : `${GREEN}✔ Consistent runs:${RESET} ${DIM}Median timings remained stable across fresh runs.${RESET}`
     );
-    lines.push(`  ${DIM}between-run resolution ~±${(mde * 100).toFixed(1)}%${RESET}`);
+    lines.push(`  ${DIM}Median spread: ${spreadStr} across ${blockInfo.blocks} fresh runs.${RESET}`);
+    lines.push(`  ${DIM}Comparison resolution: ~±${(mde * 100).toFixed(1)}%.${RESET}`);
     if (blockInfo.clockExplained && blockInfo.clockExplained.length > 0) {
       const explained = median(blockInfo.clockExplained);
-      lines.push(`  ${DIM}clock explains ~${(explained * 100).toFixed(0)}% of block spread${RESET}`);
+      lines.push(
+        `  ${DIM}Clock estimate explains ~${(explained * 100).toFixed(0)}% of run-to-run spread.${RESET}`
+      );
     }
-    lines.push('');
   }
 
   if (noisyBenches.length > 0) {
-    lines.push(`${YELLOW}⚠ (${noisyBenches.length}) noisy benches${RESET}`);
+    if (!hasBlockSummary) {
+      lines.push(
+        `${YELLOW}⚠ Unstable samples:${RESET} ${DIM}Timings did not settle suggesting non-deterministic work or runtime interference.${RESET}`
+      );
+      lines.push(`  ${DIM}Time limit: ${maxCpuTime}s.${RESET}`);
+    }
+    lines.push(`  ${DIM}Affected benchmarks (${noisyBenches.length}):${RESET}`);
     for (const bench of noisyBenches) {
       const spread =
         bench.spread !== undefined ? `  ${YELLOW}±${(bench.spread * 100).toFixed(1)}%${RESET}` : '';
-      lines.push(`  ${DIM}· ${bench.name}${RESET}${spread}`);
+      lines.push(`    ${YELLOW}⚠${RESET} ${DIM}${bench.name}${RESET}${spread}`);
     }
+  } else if (!hasBlockSummary) {
     lines.push(
-      blockInfo
-        ? `  ${DIM}Between-block spread exceeds the verdict threshold.${RESET}`
-        : `  ${DIM}Increase maxCpuTime (currently ${maxCpuTime}s) to allow convergence.${RESET}`
+      `${GREEN}✔ Stable samples:${RESET} ${DIM}Timings settled within the ${maxCpuTime}s time limit.${RESET}`
     );
-  } else {
-    lines.push(`${GREEN}✔ All measurements stable${RESET}`);
   }
 
   const PAD = 2;

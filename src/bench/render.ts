@@ -68,7 +68,6 @@ export function renderMitata(
 
   let first = true;
   let optimized_out_warning = false;
-  let noisy_warning = false;
 
   for (const collection of collections) {
     let prev_run_gap = false;
@@ -122,7 +121,6 @@ export function renderMitata(
         optimized_out_warning = optimized_out_warning || optimized_out;
 
         const noisy = !!r.stats!.noisy;
-        noisy_warning = noisy_warning || noisy;
 
         if (compact) {
           let l = '';
@@ -131,7 +129,7 @@ export function renderMitata(
           const nw = noisy ? k_legend - 2 : k_legend;
           const name = truncate(r.name, nw).padEnd(nw);
 
-          if (noisy) l += !opts.colors ? '~ ' : ansi.yellow + '~' + ansi.reset + ' ';
+          if (noisy) l += !opts.colors ? '⚠ ' : ansi.yellow + '⚠' + ansi.reset + ' ';
           l += _h(name) + ' ';
           if (!opts.colors) l += avg + '/iter';
           else l += ansi.bold + ansi.yellow + avg + ansi.reset + ansi.bold + '/iter' + ansi.reset;
@@ -153,7 +151,7 @@ export function renderMitata(
           const nw = noisy ? k_legend - 2 : k_legend;
           const name = truncate(r.name, nw).padEnd(nw);
 
-          if (noisy) l += !opts.colors ? '~ ' : ansi.yellow + '~' + ansi.reset + ' ';
+          if (noisy) l += !opts.colors ? '⚠ ' : ansi.yellow + '⚠' + ansi.reset + ' ';
           l += _h(name) + ' ';
           const p75 = formatNs(r.stats!.p75).padStart(9);
           const bins = histogramFmt.bins(r.stats!, 21, 0.99);
@@ -790,22 +788,5 @@ export function renderMitata(
         pad + ansi.gray + 'https://github.com/evanwashere/mitata#writing-good-benchmarks' + ansi.reset
       );
     }
-  }
-
-  if (noisy_warning) {
-    if (!nl) print('');
-    const pad = ' '.repeat(k_legend - 13);
-    if (!opts.colors) print(pad + '~ = noisy: confidence target not reached before max cpu time');
-    else
-      print(
-        pad +
-          ansi.yellow +
-          '~' +
-          ansi.reset +
-          ansi.gray +
-          ' = ' +
-          ansi.reset +
-          'noisy: confidence target not reached before max cpu time'
-      );
   }
 }

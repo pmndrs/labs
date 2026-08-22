@@ -661,7 +661,7 @@ export function printCompareReport(result: CompareResult, config: LabsConfig): v
 
     if (sawNoisy) {
       console.log(
-        `${YELLOW}⚠${RESET} ${DIM}Neutral means inconclusive at the shown resolution.${RESET}`
+        `${YELLOW}⚠ Limited resolution:${RESET} ${DIM}Neutral results are inconclusive at the shown resolution.${RESET}`
       );
       console.log('');
     }

@@ -290,7 +290,9 @@ describe('comparing blocked results', () => {
     expect(lines[warningIndex - 1]).toContain('unit');
     expect(warning).toHaveLength(header!.length);
     expect(warning).toMatch(/⚠ ~±\d+%$/);
-    expect(lines).toContain('⚠ Neutral means inconclusive at the shown resolution.');
+    expect(lines).toContain(
+      '⚠ Limited resolution: Neutral results are inconclusive at the shown resolution.'
+    );
   });
 
   it('points isolation-disabled runs at isolate, not at re-saving', () => {
