@@ -26,10 +26,6 @@ export interface Stats {
   p999: number;
   gc?: { avg: number; min: number; max: number; total: number };
   heap?: { avg: number; min: number; max: number; total: number };
-  /** Adaptive samples did not settle before the measurement time limit. */
-  samplesUnstable?: boolean;
-  /** @deprecated Use `samplesUnstable`. */
-  noisy?: boolean;
   /** Decisions this measurement made, usable to freeze later blocks. */
   plan?: BlockPlan;
   /** Output compared with the baseline. */
@@ -39,6 +35,8 @@ export interface Stats {
     medians: number[];
     /** Software calibration rates. The `freqs` name is retained for saved-result compatibility. */
     freqs: number[];
+    /** Relative spread of each block's own samples, the within-process noise. */
+    spreads?: number[];
   };
 }
 
@@ -55,13 +53,6 @@ export function isAssertionError(error: unknown): boolean {
 
 export type GeneratorBench = (state: any) => Generator<any, any, any>;
 
-/** Supports results saved before `samplesUnstable` replaced the ambiguous `noisy` name. */
-export function hasUnstableSamples(
-  stats: Pick<Stats, 'samplesUnstable' | 'noisy'> | undefined
-): boolean {
-  return stats?.samplesUnstable ?? stats?.noisy ?? false;
-}
-
 export interface MeasureOptions {
   now?: () => number;
   sample_gc?: boolean;
@@ -69,10 +60,14 @@ export interface MeasureOptions {
   concurrency?: number;
   min_samples?: number;
   max_samples?: number;
+  /** Time budget in ns a run must reach, together with `min_samples`, before it stops. */
   min_cpu_time?: number;
-  max_cpu_time?: number;
   batch_unroll?: number;
+  /** Iterations per batched sample. Derived from `batch_duration` when omitted. */
   batch_samples?: number;
+  /** Target ns per batched sample. */
+  batch_duration?: number;
+  batch_max?: number;
   /** Forces the batching decision instead of probing for it. */
   batch?: boolean;
   warmup_samples?: number;
@@ -80,8 +75,6 @@ export interface MeasureOptions {
   warmup_threshold?: number;
   samples_threshold?: number;
   gc?: boolean | ((() => void) & { fallback?: boolean });
-  adaptive?: boolean | number;
-  target_rel_ci?: number;
   $counters?: any;
   params?: Record<string | number, (...args: any[]) => any>;
   manual?: string | false;

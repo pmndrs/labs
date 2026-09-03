@@ -1,14 +1,7 @@
 import type { GeneratorBench, MeasureOptions, Snapshot, Stats } from '../types.ts';
 import { AsyncFunction, do_not_optimize, GeneratorFunction, kind, now } from './runtime.ts';
 import { toSnapshot } from './snapshot.ts';
-import { defaults } from './constants.ts';
-
-/** Adds the deprecated public field at the measurement API boundary. */
-function withLegacySampleStabilityAlias<T extends { samplesUnstable?: boolean }>(
-  stats: T
-): T & { noisy?: boolean } {
-  return stats.samplesUnstable === undefined ? stats : { ...stats, noisy: stats.samplesUnstable };
-}
+import { batchSize, defaults } from './constants.ts';
 
 /**
  * Measure the performance of `f` by dispatching to the appropriate benchmark
@@ -101,15 +94,16 @@ export async function benchGenerator(gen: (...args: any[]) => any, opts: any = {
  * Core benchmark engine for zero-arg and parameterised functions.
  *
  * Generates an {@link AsyncFunction} loop at runtime that handles warm-up,
- * batching, parameter injection, heap tracking, inner GC, hardware counters,
- * and adaptive stopping via Welford's online variance (when `target_rel_ci`
- * is set).  The generated source is attached as `debug` on the returned stats.
+ * batching, parameter injection, heap tracking, inner GC, and hardware
+ * counters. Sampling stops once both `min_samples` and `min_cpu_time` are
+ * met. The generated source is attached as `debug` on the returned stats.
  */
 export async function benchFn(fn: (...args: any[]) => any, opts: any = {}): Promise<Stats> {
   defaults(opts);
   const consume = opts.$consume ?? do_not_optimize;
   let async = false;
   let batch = false;
+  let single = 0;
   const params: string[] = Object.keys(opts.params);
 
   {
@@ -139,7 +133,8 @@ export async function benchFn(fn: (...args: any[]) => any, opts: any = {}): Prom
 
     if (opts.after) await opts.after();
 
-    if (t1 - t0 <= opts.warmup_threshold) {
+    single = t1 - t0;
+    if (single <= opts.warmup_threshold) {
       for (let o = 0; o < opts.warmup_samples; o++) {
         for (let oo = 0; oo < params.length; oo++) {
           $p[oo] = await opts.params[oo]();
@@ -150,7 +145,8 @@ export async function benchFn(fn: (...args: any[]) => any, opts: any = {}): Prom
         if (!opts.manual && value !== void 0) consume(value);
         const t1 = now();
         if (opts.after) await opts.after();
-        if ((batch = t1 - t0 <= opts.batch_threshold)) break;
+        single = t1 - t0;
+        if ((batch = single <= opts.batch_threshold)) break;
       }
     }
   }
@@ -161,6 +157,8 @@ export async function benchFn(fn: (...args: any[]) => any, opts: any = {}): Prom
     batch = false;
     opts.concurrency = 1;
   }
+
+  const batchSamples: number = opts.batch_samples ?? (batch ? batchSize(opts, single) : 0);
 
   const call = (concurrency: number, unroll?: number): string => {
     if (!params.length) return '$fn()';
@@ -212,7 +210,6 @@ export async function benchFn(fn: (...args: any[]) => any, opts: any = {}): Prom
 
     let _ = 0; let t = 0;
     let samples = new Array(2 ** 20);
-    ${!opts.target_rel_ci ? '' : 'let _lm = 0; let _lm2 = 0; let _samples_unstable = false;'}
     ${!opts.heap ? '' : 'const heap = { _: 0, total: 0, min: Infinity, max: -Infinity };'}
     ${!(opts.gc && opts.sample_gc && !opts.gc.fallback) ? '' : 'const gc = { total: 0, min: Infinity, max: -Infinity };'}
 
@@ -223,7 +220,7 @@ export async function benchFn(fn: (...args: any[]) => any, opts: any = {}): Prom
             `
       ${Array.from({ length: opts.concurrency }, (_, c) =>
         `
-        let param_${o}_${c} = ${!batch ? 'null' : `new Array(${opts.batch_samples})`};
+        let param_${o}_${c} = ${!batch ? 'null' : `new Array(${batchSamples})`};
       `.trim()
       ).join(' ')}
     `.trim()
@@ -250,7 +247,7 @@ export async function benchFn(fn: (...args: any[]) => any, opts: any = {}): Prom
     }
 
     for (; _ < ${opts.max_samples}; _++) {
-      ${!opts.target_rel_ci ? `if (_ >= ${opts.min_samples} && t >= ${opts.min_cpu_time}) break;` : ''}
+      if (_ >= ${opts.min_samples} && t >= ${opts.min_cpu_time}) break;
 
       ${
         !params.length
@@ -270,7 +267,7 @@ export async function benchFn(fn: (...args: any[]) => any, opts: any = {}): Prom
           ).join('\n')}
         `
             : `
-          for (let o = 0; o < ${opts.batch_samples}; o++) {
+          for (let o = 0; o < ${batchSamples}; o++) {
             ${Array.from({ length: params.length }, (_, o) =>
               `
               ${Array.from({ length: opts.concurrency }, (_, c) =>
@@ -307,7 +304,7 @@ export async function benchFn(fn: (...args: any[]) => any, opts: any = {}): Prom
         ${calls()}
       `
           : `
-        for (let o = 0; o < ${(opts.batch_samples / opts.batch_unroll) | 0}; o++) {
+        for (let o = 0; o < ${(batchSamples / opts.batch_unroll) | 0}; o++) {
           ${!params.length ? '' : `const param_offset = o * ${opts.batch_unroll};`}
 
           ${Array.from({ length: opts.batch_unroll }, (_, unroll) => calls(unroll)).join('\n')}
@@ -324,7 +321,7 @@ export async function benchFn(fn: (...args: any[]) => any, opts: any = {}): Prom
           : `
         heap: {
           const t0 = $now();
-          const h1 = ($heap() - h0 - _hself) ${!batch ? '' : `/ ${opts.batch_samples}`}; t += $now() - t0;
+          const h1 = ($heap() - h0 - _hself) ${!batch ? '' : `/ ${batchSamples}`}; t += $now() - t0;
 
           if (0 <= h1) {
             heap._++;
@@ -354,22 +351,8 @@ export async function benchFn(fn: (...args: any[]) => any, opts: any = {}): Prom
 
       const diff = ${opts.manual ? 't2' : 't1 - t0'};
       t += ${'manual' === opts.manual ? 't2' : 't1 - t0'};
-      samples[_] = diff ${!batch ? '' : `/ ${opts.batch_samples}`};
+      samples[_] = diff ${!batch ? '' : `/ ${batchSamples}`};
       ${!opts.after ? '' : 'await $after();'}
-      ${
-        !opts.target_rel_ci
-          ? ''
-          : `
-      if (samples[_] > 0) {
-        const _lx = Math.log(samples[_]);
-        const _ld = _lx - _lm;
-        _lm += _ld / (_ + 1);
-        _lm2 += _ld * (_lx - _lm);
-        if (_ + 1 >= ${opts.min_samples} && t >= ${opts.min_cpu_time} && _lm2 / (_ * (_ + 1)) <= ${Math.log(1 + opts.target_rel_ci) ** 2}) { _++; break; }
-      }
-      if (t >= ${opts.max_cpu_time}) { _samples_unstable = true; _++; break; }
-      `
-      }
     }
 
     samples.length = _;
@@ -386,19 +369,18 @@ export async function benchFn(fn: (...args: any[]) => any, opts: any = {}): Prom
       p99: samples[(.99 * (samples.length - 1)) | 0],
       p999: samples[(.999 * (samples.length - 1)) | 0],
       avg: samples.reduce((a, v) => a + v, 0) / samples.length,
-      ticks: samples.length ${!batch ? '' : `* ${opts.batch_samples}`},
-      plan: { batch: ${batch}, batch_samples: ${opts.batch_samples}, batch_unroll: ${opts.batch_unroll}, samples: _ },
+      ticks: samples.length ${!batch ? '' : `* ${batchSamples}`},
+      plan: { batch: ${batch}, batch_samples: ${batchSamples}, batch_unroll: ${opts.batch_unroll}, samples: _ },
       ${!opts.heap ? '' : 'heap: { ...heap, avg: heap.total / heap._ },'}
       ${!(opts.gc && opts.sample_gc && !opts.gc.fallback) ? '' : 'gc: { ...gc, avg: gc.total / _ },'}
-      ${!opts.$counters ? '' : `...(!_hc ? {} : { counters: $counters.translate(${!batch ? 1 : opts.batch_samples}, _) }),`}
-      ${!opts.target_rel_ci ? '' : 'samplesUnstable: _samples_unstable,'}
+      ${!opts.$counters ? '' : `...(!_hc ? {} : { counters: $counters.translate(${!batch ? 1 : batchSamples}, _) }),`}
     };
 
     ${!opts.$counters ? '' : 'if (_hc) try { $counters.deinit(); } catch {};'}
   `
   );
 
-  return withLegacySampleStabilityAlias({
+  return {
     kind: 'fn' as const,
     debug: loop.toString(),
     ...(await loop(
@@ -411,7 +393,7 @@ export async function benchFn(fn: (...args: any[]) => any, opts: any = {}): Prom
       consume,
       opts.after
     )),
-  });
+  };
 }
 
 /**
@@ -419,12 +401,13 @@ export async function benchFn(fn: (...args: any[]) => any, opts: any = {}): Prom
  *
  * The caller receives an iterable context. Each `for..of` / `for await..of`
  * iteration is one timed sample.  Internally a {@link GeneratorFunction} loop
- * is code-generated with the same adaptive-stopping and batching logic as
+ * is code-generated with the same stopping and batching logic as
  * {@link benchFn}.
  */
 export async function benchIter(iter: (...args: any[]) => any, opts: any = {}): Promise<Stats> {
   const _: any = {};
   defaults(opts);
+  let batchSamples = 0;
   let samples = Array.from({ length: 2 ** 20 }, () => 0);
   const _i = {
     next() {
@@ -446,23 +429,27 @@ export async function benchIter(iter: (...args: any[]) => any, opts: any = {}): 
 
   const gen: Generator = (function* () {
     let batch = false;
+    let single = 0;
 
     {
       const t0 = now();
       yield void 0;
       const t1 = now();
 
-      if (t1 - t0 <= opts.warmup_threshold) {
+      single = t1 - t0;
+      if (single <= opts.warmup_threshold) {
         for (let o = 0; o < opts.warmup_samples; o++) {
           const t0 = now();
           yield void 0;
           const t1 = now();
-          if ((batch = t1 - t0 <= opts.batch_threshold)) break;
+          single = t1 - t0;
+          if ((batch = single <= opts.batch_threshold)) break;
         }
       }
     }
 
     if (opts.batch !== undefined) batch = !!opts.batch;
+    batchSamples = opts.batch_samples ?? (batch ? batchSize(opts, single) : 0);
 
     const loop: Generator = new GeneratorFunction(
       '$gc',
@@ -471,13 +458,12 @@ export async function benchIter(iter: (...args: any[]) => any, opts: any = {}): 
       '$state',
       (_.debug = `
       let _ = 0; let t = 0;
-      ${!opts.target_rel_ci ? '' : 'let _lm = 0; let _lm2 = 0;'}
       ${!(opts.gc && opts.sample_gc && !opts.gc.fallback) ? '' : 'const gc = { total: 0, min: Infinity, max: -Infinity };'}
 
       ${!opts.gc ? '' : `$gc();`}
 
       for (; _ < ${opts.max_samples}; _++) {
-        ${!opts.target_rel_ci ? `if (_ >= ${opts.min_samples} && t >= ${opts.min_cpu_time}) break;` : ''}
+        if (_ >= ${opts.min_samples} && t >= ${opts.min_cpu_time}) break;
 
         ${
           !(opts.gc && opts.sample_gc)
@@ -499,7 +485,7 @@ export async function benchIter(iter: (...args: any[]) => any, opts: any = {}): 
           !batch
             ? 'yield void 0;'
             : `
-          for (let o = 0; o < ${(opts.batch_samples / opts.batch_unroll) | 0}; o++) {
+          for (let o = 0; o < ${(batchSamples / opts.batch_unroll) | 0}; o++) {
             ${Array.from({ length: opts.batch_unroll }, () => 'yield void 0;').join(' ')}
           }
         `
@@ -508,22 +494,8 @@ export async function benchIter(iter: (...args: any[]) => any, opts: any = {}): 
         const t1 = $now();
         const diff = t1 - t0;
 
-        $samples[_] = diff ${!batch ? '' : `/ ${opts.batch_samples}`};
+        $samples[_] = diff ${!batch ? '' : `/ ${batchSamples}`};
         t += diff ${!(opts.gc && opts.sample_gc) ? '' : '+ sample_gc_cost'};
-        ${
-          !opts.target_rel_ci
-            ? ''
-            : `
-        if ($samples[_] > 0) {
-          const _lx = Math.log($samples[_]);
-          const _ld = _lx - _lm;
-          _lm += _ld / (_ + 1);
-          _lm2 += _ld * (_lx - _lm);
-          if (_ + 1 >= ${opts.min_samples} && t >= ${opts.min_cpu_time} && _lm2 / (_ * (_ + 1)) <= ${Math.log(1 + opts.target_rel_ci) ** 2}) { _++; break; }
-        }
-        if (t >= ${opts.max_cpu_time}) { $state.samplesUnstable = true; _++; break; }
-        `
-        }
       }
 
       $samples.length = _;
@@ -544,12 +516,12 @@ export async function benchIter(iter: (...args: any[]) => any, opts: any = {}): 
   const rawCount = samples.length;
   if (samples.length > opts.samples_threshold) samples = samples.slice(2, -2);
 
-  return withLegacySampleStabilityAlias({
+  return {
     samples,
     kind: 'iter' as const,
     plan: {
       batch: !!_.batch,
-      batch_samples: opts.batch_samples,
+      batch_samples: batchSamples,
       batch_unroll: opts.batch_unroll,
       samples: rawCount,
     },
@@ -562,8 +534,7 @@ export async function benchIter(iter: (...args: any[]) => any, opts: any = {}): 
     p99: samples[(0.99 * (samples.length - 1)) | 0],
     p999: samples[(0.999 * (samples.length - 1)) | 0],
     avg: samples.reduce((a, v) => a + v, 0) / samples.length,
-    ticks: samples.length * (!_.batch ? 1 : opts.batch_samples),
+    ticks: samples.length * (!_.batch ? 1 : batchSamples),
     ...(_.gc ? { gc: _.gc } : {}),
-    ...(opts.target_rel_ci ? { samplesUnstable: _.samplesUnstable ?? false } : {}),
-  });
+  };
 }

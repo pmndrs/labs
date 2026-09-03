@@ -12,20 +12,18 @@ export const tuning = {
   max_samples: 1e9,
   /** Warm-up iterations before timing begins. */
   warmup_samples: 2,
-  /** Iterations per batch when batching is enabled. */
-  batch_samples: 4096,
+  /** Target duration (ns) of one batched sample. Batch size is derived from it. */
+  batch_duration: 1e6,
+  /** Upper bound on iterations per batched sample. */
+  batch_max: 1 << 20,
   /** Sample count above which outlier trimming kicks in. */
   samples_threshold: 12,
   /** Single-iteration ns threshold below which batching activates. */
   batch_threshold: 65536,
-  /** Minimum total CPU time (ns) before a run may stop. */
-  min_cpu_time: 642 * 1e6,
+  /** Time budget (ns) a run must reach before it may stop. */
+  min_cpu_time: 500 * 1e6,
   /** Single-iteration ns threshold below which warm-up is skipped. */
   warmup_threshold: 500_000,
-  /** CPU time rescale factor when heap tracking is enabled. */
-  cpu_time_rescale_heap: 1.1,
-  /** CPU time rescale factor when per-sample GC is enabled. */
-  cpu_time_rescale_sample_gc: 2,
 } as const;
 
 /**
@@ -46,18 +44,21 @@ export function defaults(opts: any): void {
   opts.max_samples ??= tuning.max_samples;
   opts.min_cpu_time ??= tuning.min_cpu_time;
   opts.batch_unroll ??= tuning.batch_unroll;
-  opts.batch_samples ??= tuning.batch_samples;
+  opts.batch_duration ??= tuning.batch_duration;
+  opts.batch_max ??= tuning.batch_max;
   opts.warmup_samples ??= tuning.warmup_samples;
   opts.batch_threshold ??= tuning.batch_threshold;
   opts.warmup_threshold ??= tuning.warmup_threshold;
   opts.samples_threshold ??= tuning.samples_threshold;
-  opts.adaptive ??= true;
-  opts.max_cpu_time ??= 5e9;
-  if (opts.target_rel_ci === undefined) {
-    opts.target_rel_ci =
-      opts.adaptive === false ? 0 : opts.adaptive === true ? 0.025 : +opts.adaptive;
-  }
+}
 
-  if (opts.heap) opts.min_cpu_time *= tuning.cpu_time_rescale_heap;
-  if (opts.gc && opts.sample_gc) opts.min_cpu_time *= tuning.cpu_time_rescale_sample_gc;
+/**
+ * Iterations per batched sample so one sample lasts about `batch_duration`,
+ * rounded to whole unrolled groups. A pilot decides this once and later
+ * blocks replay it through `batch_samples`.
+ */
+export function batchSize(opts: any, singleIterationNs: number): number {
+  const groups = Math.ceil(opts.batch_duration / Math.max(singleIterationNs, 1) / opts.batch_unroll);
+  const size = Math.max(1, Math.min(groups, opts.batch_max / opts.batch_unroll)) * opts.batch_unroll;
+  return size;
 }

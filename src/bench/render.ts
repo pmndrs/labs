@@ -5,13 +5,7 @@ import * as histogramFmt from './format/histogram.ts';
 import * as boxplotFmt from './format/boxplot.ts';
 import * as barplotFmt from './format/barplot.ts';
 import * as lineplotFmt from './format/lineplot.ts';
-import {
-  hasUnstableSamples,
-  isAssertionError,
-  type Context,
-  type GcMode,
-  type Trial,
-} from './types.ts';
+import { isAssertionError, type Context, type GcMode, type Trial } from './types.ts';
 
 export interface RenderedTrial {
   highlight: false | string | null;
@@ -127,16 +121,12 @@ export function renderMitata(
         const optimized_out = r.stats!.avg < 1.42 * noop.avg;
         optimized_out_warning = optimized_out_warning || optimized_out;
 
-        const samplesUnstable = hasUnstableSamples(r.stats);
-
         if (compact) {
           let l = '';
           prev_run_gap = false;
           const avg = formatNs(r.stats!.avg).padStart(9);
-          const nw = samplesUnstable ? k_legend - 2 : k_legend;
-          const name = truncate(r.name, nw).padEnd(nw);
+          const name = truncate(r.name, k_legend).padEnd(k_legend);
 
-          if (samplesUnstable) l += !opts.colors ? '⚠ ' : ansi.yellow + '⚠' + ansi.reset + ' ';
           l += _h(name) + ' ';
           if (!opts.colors) l += avg + '/iter';
           else l += ansi.bold + ansi.yellow + avg + ansi.reset + ansi.bold + '/iter' + ansi.reset;
@@ -155,10 +145,8 @@ export function renderMitata(
         } else {
           let l = '';
           const avg = formatNs(r.stats!.avg).padStart(9);
-          const nw = samplesUnstable ? k_legend - 2 : k_legend;
-          const name = truncate(r.name, nw).padEnd(nw);
+          const name = truncate(r.name, k_legend).padEnd(k_legend);
 
-          if (samplesUnstable) l += !opts.colors ? '⚠ ' : ansi.yellow + '⚠' + ansi.reset + ' ';
           l += _h(name) + ' ';
           const p75 = formatNs(r.stats!.p75).padStart(9);
           const bins = histogramFmt.bins(r.stats!, 21, 0.99);

@@ -39,7 +39,6 @@ function planOverrides(plan?: BlockPlan): Record<string, unknown> {
     min_samples: plan.samples,
     max_samples: plan.samples,
     min_cpu_time: 0,
-    adaptive: false,
   };
 }
 

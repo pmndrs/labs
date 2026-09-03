@@ -1,8 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import { measure, B, bench, group, run } from '../src/bench/index.ts';
-import { hasUnstableSamples } from '../src/bench/types.ts';
 
-const fast = { min_cpu_time: 1, min_samples: 12, adaptive: false } as const;
+const fast = { min_cpu_time: 1, min_samples: 12 } as const;
+
+/** Spins for roughly `us` microseconds and returns a value to consume. */
+const busy = (us: number) => () => {
+  const end = performance.now() + us / 1000;
+  let x = 0;
+  while (performance.now() < end) x++;
+  return x;
+};
 
 function expectUsefulStats(stats: any) {
   expect(stats.samples.length).toBeGreaterThan(0);
@@ -55,21 +62,21 @@ describe('measuring work', () => {
     expectUsefulStats(stats);
   });
 
-  it('marks samples unstable when they cannot converge within the time budget', async () => {
-    const stats = await measure(() => {}, {
-      min_cpu_time: 1,
-      min_samples: 12,
-      max_cpu_time: 1,
-      adaptive: 0.0001,
-    });
+  it('sizes batches so each sample lasts about a millisecond', async () => {
+    const stats = await measure(busy(40), fast);
 
-    expect(stats.samplesUnstable).toBe(true);
-    expect(stats.noisy).toBe(true);
+    expect(stats.plan?.batch).toBe(true);
+    const sampleNs = stats.plan!.batch_samples * 40_000;
+    expect(sampleNs).toBeGreaterThanOrEqual(1e6);
+    expect(sampleNs).toBeLessThan(4e6);
+    expect(stats.samples.length).toBeGreaterThanOrEqual(12);
   });
 
-  it('recognizes the deprecated stability field in older results', () => {
-    expect(hasUnstableSamples({ noisy: true })).toBe(true);
-    expect(hasUnstableSamples({ noisy: false })).toBe(false);
+  it('runs at least the sample floor and the time budget', async () => {
+    const stats = await measure(busy(100), { min_cpu_time: 20e6, min_samples: 12 });
+
+    expect(stats.plan?.batch).toBe(false);
+    expect(stats.plan!.samples).toBeGreaterThanOrEqual(200);
   });
 
   it('protects returned benchmark results from dead-code elimination', async () => {
@@ -169,7 +176,6 @@ describe('run policy', () => {
       min_cpu_time: 0,
       min_samples: 1,
       max_samples: 1,
-      adaptive: false,
     } as const;
 
     await new B('sample collection', () => {}).run(true, tune);
