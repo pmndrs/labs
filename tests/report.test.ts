@@ -70,6 +70,27 @@ describe('measurement report', () => {
     expect(diagnostics.medianSpreads).toHaveLength(3);
   });
 
+  it('labels affected benchmarks with a compact group name', () => {
+    const steady = [100, 101, 99, 100, 100, 101, 99, 100];
+    const noisy = (name: string, groupName: string) => ({
+      ...trial(
+        name,
+        steady,
+        steady.map(() => 0.3)
+      ),
+      groupName,
+    });
+    const diagnostics = collectDiagnostics(
+      [noisy('math', 'vec3'), noisy('math', 'a-very-long-group-name-that-keeps-going')],
+      0.05
+    );
+
+    expect(diagnostics.noisy.map((b) => b.name)).toEqual([
+      'vec3 › math',
+      'a-very-long-group-name-that-… › math',
+    ]);
+  });
+
   it('explains noisy samples and lists the affected benchmarks', () => {
     const lines = report(3, {
       medianSpreads: [0.01],
@@ -78,11 +99,10 @@ describe('measurement report', () => {
     });
 
     expect(
-      lines.some((line) =>
-        line.includes(
-          '⚠ Noisy samples: Timings varied widely within a process suggesting non-deterministic work or runtime interference.'
-        )
-      )
+      lines.some((line) => line.includes('⚠ Noisy samples: Timings varied widely within a process.'))
+    ).toBe(true);
+    expect(
+      lines.some((line) => line.includes('Suggests non-deterministic work or runtime interference.'))
     ).toBe(true);
     expect(lines.some((line) => line.includes('⚠ random work  ±30.0%'))).toBe(true);
   });
@@ -96,11 +116,10 @@ describe('measurement report', () => {
 
     expect(
       lines.some((line) =>
-        line.includes(
-          '⚠ Inconsistent runs: Median timings changed across fresh runs suggesting an unstable machine.'
-        )
+        line.includes('⚠ Inconsistent runs: Median timings changed across fresh runs.')
       )
     ).toBe(true);
+    expect(lines.some((line) => line.includes('Suggests an unstable machine.'))).toBe(true);
     expect(lines.some((line) => line.includes('Median spread: ±10.0% across 8 fresh runs.'))).toBe(
       true
     );

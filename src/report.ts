@@ -43,8 +43,17 @@ export function emptyDiagnostics(): BenchDiagnostics {
 
 type DiagnosableTrial = {
   alias: string;
+  groupName?: string;
   runs: Array<{ name: string; error?: unknown; stats?: Pick<Stats, 'blocks'> }>;
 };
+
+/** `group › bench`, trimming the group first so the bench name stays readable. */
+function benchLabel(groupName: string | undefined, name: string): string {
+  if (!groupName) return name;
+  const room = Math.max(8, 36 - name.length - 3);
+  const group = groupName.length > room ? groupName.slice(0, room - 1) + '…' : groupName;
+  return `${group} › ${name}`;
+}
 
 /**
  * Folds one file's trials into `into`. Between-block spread decides whether a
@@ -59,7 +68,7 @@ export function collectDiagnostics(
 ): BenchDiagnostics {
   for (const trial of trials) {
     for (const run of trial.runs) {
-      const name = run.name || trial.alias;
+      const name = benchLabel(trial.groupName, run.name || trial.alias);
       if (isAssertionError(run.error)) into.failedChecks.push(name);
       const blocks = run.stats?.blocks;
       if (!blocks) continue;
@@ -144,11 +153,16 @@ export function printReportBox(input: ReportInput): void {
     const spread = median(diagnostics.medianSpreads);
     const resolution = minDetectableEffect(spread, blocks);
     // Same resolution rule as per-bench classification
-    lines.push(
-      resolution > minDelta
-        ? `${YELLOW}⚠ Inconsistent runs:${RESET} ${DIM}Median timings changed across fresh runs suggesting an unstable machine.${RESET}`
-        : `${GREEN}✔ Consistent runs:${RESET} ${DIM}Median timings remained stable across fresh runs.${RESET}`
-    );
+    if (resolution > minDelta) {
+      lines.push(
+        `${YELLOW}⚠ Inconsistent runs:${RESET} ${DIM}Median timings changed across fresh runs.${RESET}`
+      );
+      lines.push(`  ${DIM}Suggests an unstable machine.${RESET}`);
+    } else {
+      lines.push(
+        `${GREEN}✔ Consistent runs:${RESET} ${DIM}Median timings remained stable across fresh runs.${RESET}`
+      );
+    }
     lines.push(
       `  ${DIM}Median spread: ±${(spread * 100).toFixed(1)}% across ${blocks} fresh runs.${RESET}`
     );
@@ -163,8 +177,9 @@ export function printReportBox(input: ReportInput): void {
   if (diagnostics.noisy.length > 0) {
     lines.push('');
     lines.push(
-      `${YELLOW}⚠ Noisy samples:${RESET} ${DIM}Timings varied widely within a process suggesting non-deterministic work or runtime interference.${RESET}`
+      `${YELLOW}⚠ Noisy samples:${RESET} ${DIM}Timings varied widely within a process.${RESET}`
     );
+    lines.push(`  ${DIM}Suggests non-deterministic work or runtime interference.${RESET}`);
     affected(diagnostics.noisy);
   }
 
