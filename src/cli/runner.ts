@@ -29,7 +29,7 @@ import { runCompareCommand } from './commands/compare.ts';
 import { runDeleteCommand } from './commands/delete.ts';
 import { runListCommand } from './commands/list.ts';
 import { runPruneCommand } from './commands/prune.ts';
-import { error, gitHint } from './utils.ts';
+import { error, fileHasAnyTag, gitHint } from './utils.ts';
 
 function freqSample(workerResult: WorkerResult, file: string): FreqSample {
   const runFreq = workerResult.context.cpu.freq;
@@ -105,12 +105,6 @@ function runBench(
       ...(resultFile ? { LABS_RESULT_FILE: resultFile } : {}),
     },
   });
-}
-
-function fileHasAnyTag(file: string, tags: string[]): boolean {
-  if (tags.length === 0) return true;
-  const content = readFileSync(file, 'utf-8');
-  return tags.some((tag) => content.includes(tag));
 }
 
 /** Snapshot of the git state a run was produced from. Undefined outside a repo. */
@@ -261,7 +255,7 @@ export async function runCLI(args: string[]) {
     }
 
     if (tagFilters.length > 0) {
-      selected = selected.filter((file) => fileHasAnyTag(file, tagFilters));
+      selected = selected.filter((file) => fileHasAnyTag(readFileSync(file, 'utf-8'), tagFilters));
     }
     if (selected.length === 0) {
       error(

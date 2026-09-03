@@ -18,6 +18,17 @@ export function gitHint(git: GitInfo): string {
   return git.branch ? `${git.branch}@${sha}${dirty}` : `${sha}${dirty}`;
 }
 
+/**
+ * Tags declared in bench source, matched as whole tokens so `@vec` does not
+ * select a file that only declares `@vec3`. Mirrors the worker's exact-token
+ * tag filter.
+ */
+export function fileHasAnyTag(content: string, tags: string[]): boolean {
+  if (tags.length === 0) return true;
+  const declared = new Set(content.match(/@[^\s'"`]+/g) ?? []);
+  return tags.some((tag) => declared.has(tag));
+}
+
 export function error(msg: string): never {
   console.error(`${RED}✖${RESET} ${msg}`);
   process.exit(1);
