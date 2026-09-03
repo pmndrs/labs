@@ -3,6 +3,7 @@ import { readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { getBenchRegistry } from '../index.ts';
+import { relativeSpread } from '../stats.ts';
 import { measure, run } from './index.ts';
 import { runTrialAt } from './main.ts';
 import type { BlockPlan, Stats, Trial } from './types.ts';
@@ -10,34 +11,16 @@ import type { BlockPlan, Stats, Trial } from './types.ts';
 type TuneOptions = {
   min_cpu_time?: number;
   min_samples?: number;
-  max_samples?: number;
-  adaptive?: boolean | number;
-  max_cpu_time?: number;
 };
 
+/** Per-block budget (LABS_BLOCK_TIME, ns) and sample floor (LABS_MIN_SAMPLES). */
 function parseTuneEnv(): TuneOptions {
-  const minCpuTime = Number(process.env.LABS_MIN_CPU_TIME);
+  const blockTime = Number(process.env.LABS_BLOCK_TIME);
   const minSamples = Number(process.env.LABS_MIN_SAMPLES);
-  const maxSamples = Number(process.env.LABS_MAX_SAMPLES);
-  const maxCpuTime = Number(process.env.LABS_MAX_CPU_TIME);
-
-  // LABS_ADAPTIVE: "false" → false, a numeric string → that number, anything else → true
-  let adaptive: boolean | number | undefined;
-  const adaptiveEnv = process.env.LABS_ADAPTIVE;
-  if (adaptiveEnv !== undefined) {
-    if (adaptiveEnv === 'false') adaptive = false;
-    else {
-      const n = Number(adaptiveEnv);
-      adaptive = Number.isFinite(n) && n > 0 ? n : true;
-    }
-  }
 
   return {
-    ...(Number.isFinite(minCpuTime) && minCpuTime > 0 ? { min_cpu_time: minCpuTime } : {}),
+    ...(Number.isFinite(blockTime) && blockTime > 0 ? { min_cpu_time: blockTime } : {}),
     ...(Number.isFinite(minSamples) && minSamples > 0 ? { min_samples: minSamples } : {}),
-    ...(Number.isFinite(maxSamples) && maxSamples > 0 ? { max_samples: maxSamples } : {}),
-    ...(Number.isFinite(maxCpuTime) && maxCpuTime > 0 ? { max_cpu_time: maxCpuTime } : {}),
-    ...(adaptive !== undefined ? { adaptive } : {}),
   };
 }
 
@@ -47,9 +30,10 @@ if (!file) {
   process.exit(1);
 }
 
+/** Fresh processes per bench. Verdicts need replication, so never fewer than two. */
 function blockCount(): number {
   const n = Number(process.env.LABS_BLOCKS);
-  return Number.isFinite(n) && n > 1 ? Math.floor(n) : 1;
+  return Number.isFinite(n) && n >= 2 ? Math.floor(n) : 2;
 }
 
 async function calibrateFreq(): Promise<number> {
@@ -59,7 +43,7 @@ async function calibrateFreq(): Promise<number> {
 
 /** Short software calibration probe recording the machine state entering a block. */
 async function probeCalibrationRate(): Promise<number> {
-  const r = await measure(() => {}, { batch_unroll: 1, min_cpu_time: 5e7, adaptive: false });
+  const r = await measure(() => {}, { batch_unroll: 1, min_cpu_time: 5e7 });
   return 1 / (r as any).avg;
 }
 
@@ -71,22 +55,19 @@ function errorReplacer(_: string, v: any): any {
 
 /**
  * Child mode: measure a single trial in this fresh process and write it out.
- * Skips calibration and rendering — the parent worker owns both. When part
- * of a blocked run, records a calibration rate and replays the pilot's plan.
+ * Skips calibration and rendering, the parent worker owns both. Records a
+ * calibration rate for the clock gate and replays the pilot's plan when given.
  */
 async function childMain(index: number): Promise<void> {
   await import(file!);
-  const calibrationRate = blockCount() > 1 ? await probeCalibrationRate() : undefined;
+  const calibrationRate = await probeCalibrationRate();
   const plans = process.env.LABS_BLOCK_PLANS
     ? (JSON.parse(process.env.LABS_BLOCK_PLANS) as BlockPlan[])
     : undefined;
   const trial = await runTrialAt(index, parseTuneEnv(), plans);
   writeFileSync(
     process.env.LABS_RESULT_FILE!,
-    JSON.stringify(
-      { trial, ...(calibrationRate !== undefined ? { calibrationRate } : {}) },
-      errorReplacer
-    )
+    JSON.stringify({ trial, calibrationRate }, errorReplacer)
   );
 }
 
@@ -101,7 +82,7 @@ function runTrialChild(
   trial: any,
   index: number,
   extraEnv: Record<string, string> = {}
-): { trial: Trial; calibrationRate?: number } {
+): { trial: Trial; calibrationRate: number } {
   const resultFile = join(tmpdir(), `labs-trial-${process.pid}-${index}-${childSeq++}.json`);
   try {
     execFileSync(process.execPath, [...process.execArgv, process.argv[1]], {
@@ -121,10 +102,6 @@ function runTrialChild(
   } finally {
     rmSync(resultFile, { force: true });
   }
-}
-
-function runTrialIsolated(trial: any, index: number): Trial {
-  return runTrialChild(trial, index).trial;
 }
 
 /** Per run plans from a pilot trial, or null when any run failed to produce one. */
@@ -154,11 +131,9 @@ function mergeRange(
 
 /**
  * Pools samples across blocks and recomputes headline stats, keeping each
- * block's median and calibration rate so between-run variance stays observable.
- * Counters and debug come from the pilot. Pilot sample instability is omitted
- * from merged stats because it reflects only a fraction of the total budget.
- * Readers derive fresh-run consistency from `blocks.medians` against the
- * current minDelta instead.
+ * block's median, calibration rate, and within-block spread so between-run
+ * variance and per-process noise both stay observable. Counters and debug
+ * come from the pilot.
  */
 function mergeStats(list: Stats[], calibrationRates: number[]): Stats {
   const samples = list.flatMap((s) => s.samples).sort((a, b) => a - b);
@@ -179,18 +154,15 @@ function mergeStats(list: Stats[], calibrationRates: number[]): Stats {
     p999: percentile(samples, 0.999),
     avg: samples.reduce((a, v) => a + v, 0) / samples.length,
     ticks: list.reduce((a, s) => a + s.ticks, 0),
-    samplesUnstable: undefined,
-    noisy: undefined,
     ...(heaps.length === list.length ? { heap: mergeRange(heaps, weights) } : {}),
     ...(gcs.length === list.length ? { gc: mergeRange(gcs, weights) } : {}),
     // `freqs` is retained in the saved schema for compatibility. The values
     // are software calibration rates, not literal hardware frequencies.
-    blocks: { medians, freqs: calibrationRates },
+    blocks: { medians, freqs: calibrationRates, spreads: list.map((s) => relativeSpread(s.samples)) },
   };
 }
 
-function mergeBlocks(parts: Array<{ trial: Trial; calibrationRate?: number }>): Trial {
-  if (parts.length === 1) return parts[0].trial;
+function mergeBlocks(parts: Array<{ trial: Trial; calibrationRate: number }>): Trial {
   const pilot = parts[0].trial;
   return {
     ...pilot,
@@ -221,7 +193,7 @@ function mergeBlocks(parts: Array<{ trial: Trial; calibrationRate?: number }>): 
         ...run,
         stats: mergeStats(
           survivors.map((p) => p.trial.runs[j]!.stats!) as Stats[],
-          survivors.map((p) => p.calibrationRate ?? 0)
+          survivors.map((p) => p.calibrationRate)
         ),
       };
     }),
@@ -230,21 +202,15 @@ function mergeBlocks(parts: Array<{ trial: Trial; calibrationRate?: number }>): 
 
 /**
  * Runs every bench as `blocks` fresh child processes. Block 0 is the pilot:
- * it samples adaptively within a per-block budget and its measurement plan
- * freezes the remaining blocks. Blocks are scheduled round robin across
- * benches so each bench's blocks span the whole sitting and between-block
- * spread samples real environment drift, not just adjacent seconds.
+ * it samples until the block budget and sample floor are both met, and its
+ * measurement plan freezes the remaining blocks. Blocks are scheduled round
+ * robin across benches so each bench's blocks span the whole sitting and
+ * between-block spread samples real environment drift, not just adjacent
+ * seconds.
  */
 function makeBlockExecutor(blocks: number) {
   return async (jobs: Array<{ trial: any; index: number }>): Promise<Map<number, Trial>> => {
-    const tune = parseTuneEnv();
-    const budget = (tune.max_cpu_time ?? 5e9) / blocks;
-    const pilotEnv = {
-      LABS_MIN_CPU_TIME: String(Math.min(tune.min_cpu_time ?? 642e6, budget / 2)),
-      LABS_MAX_CPU_TIME: String(budget),
-    };
-
-    const collected = new Map<number, Array<{ trial: Trial; calibrationRate?: number }>>();
+    const collected = new Map<number, Array<{ trial: Trial; calibrationRate: number }>>();
     const plans = new Map<number, BlockPlan[]>();
 
     for (let block = 0; block < blocks; block++) {
@@ -254,7 +220,7 @@ function makeBlockExecutor(blocks: number) {
         const out = runTrialChild(
           trial,
           index,
-          block === 0 ? pilotEnv : { LABS_BLOCK_PLANS: JSON.stringify(plans.get(index)) }
+          block === 0 ? {} : { LABS_BLOCK_PLANS: JSON.stringify(plans.get(index)) }
         );
         let list = collected.get(index);
         if (!list) collected.set(index, (list = []));
@@ -273,17 +239,8 @@ function makeBlockExecutor(blocks: number) {
 }
 
 async function main(): Promise<void> {
-  const isolate = process.env.LABS_ISOLATE !== 'false';
-  const blocks = isolate ? blockCount() : 1;
   await import(file!);
-  const result = await run({
-    tune: parseTuneEnv(),
-    ...(isolate
-      ? blocks > 1
-        ? { execute: makeBlockExecutor(blocks) }
-        : { run_trial: runTrialIsolated }
-      : {}),
-  });
+  const result = await run({ tune: parseTuneEnv(), execute: makeBlockExecutor(blockCount()) });
   const postFreq = await calibrateFreq();
 
   const registry = getBenchRegistry();

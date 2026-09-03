@@ -14,7 +14,7 @@ import { compare, printCompareReport } from '../src/compare.ts';
 import { defineConfig } from '../src/config.ts';
 import type { SavedResult } from '../src/store.ts';
 
-const fast = { min_cpu_time: 1, min_samples: 12, adaptive: false } as const;
+const fast = { min_cpu_time: 1, min_samples: 12 } as const;
 const CONFIG = defineConfig({ benchDir: '.' });
 
 describe('stable serialization', () => {
@@ -224,7 +224,6 @@ function syntheticResult(
     name,
     timestamp: '2026-01-01T00:00:00.000Z',
     hardware: { cpu: 'test-cpu', arch: 'test', runtime: 'node', freq: 4 },
-    isolation: 'bench',
     blocks: medians.length,
     files: [
       {
@@ -349,9 +348,8 @@ describe('worker checks', () => {
           ...process.env,
           LABS_BENCH_FILE: pathToFileURL(FIXTURE).href,
           LABS_RESULT_FILE: resultFile,
-          LABS_MIN_CPU_TIME: '1',
+          LABS_BLOCK_TIME: '1',
           LABS_MIN_SAMPLES: '12',
-          LABS_ADAPTIVE: 'false',
         },
       });
       result = JSON.parse(readFileSync(resultFile, 'utf-8'));

@@ -1,60 +1,109 @@
 import type { LabsConfig } from './config.ts';
 import { renderMitata, type RenderedCollection } from './bench/render.ts';
-import {
-  hasUnstableSamples,
-  isAssertionError,
-  type Context,
-  type Stats,
-  type Trial,
-} from './bench/types.ts';
+import { isAssertionError, type Context, type Stats, type Trial } from './bench/types.ts';
 import {
   calibrationExplainedFraction,
   comparisonResolution,
   median,
   minDetectableEffect,
-  runMedianSpread,
+  relativeSpread,
 } from './stats.ts';
 import type { SavedBenchmarkTrial, SavedFile, SavedResult, FreqSample } from './store.ts';
 import { BLUE, BOLD, DIM, GREEN, RED, RESET, YELLOW } from './utils/ansi.ts';
 import { visibleLength } from './utils/format.ts';
 
-export interface StabilityAffectedBenchmark {
+export interface ReportBench {
   name: string;
-  /** This benchmark's fresh-run median spread, shown inline when available. */
-  runMedianSpread?: number;
+  /** Relative spread shown next to the name. */
+  spread: number;
 }
 
-export interface RunConsistencyInfo {
-  freshRuns: number;
-  /** Per-benchmark relative spread of fresh-run medians. */
+/** Per-bench signals gathered from a run's block summaries. */
+export interface BenchDiagnostics {
+  failedChecks: string[];
+  /** Between-block spread of medians, one per bench. */
   medianSpreads: number[];
-  /** Configured verdict threshold used to identify inconsistent runs. */
-  minDelta: number;
-  /** Per-benchmark fraction of fresh-run spread explained by calibration-rate differences. */
-  calibrationExplainedFractions?: number[];
+  /** Fraction of between-block spread explained by calibration-rate differences, one per bench. */
+  calibrationExplainedFractions: number[];
+  /** Benches whose between-block resolution is coarser than minDelta. */
+  inconsistent: ReportBench[];
+  /** Benches whose samples vary widely inside a single process. */
+  noisy: ReportBench[];
 }
 
-export function printReportBox(
-  envData: FreqSample[],
-  affectedBenchmarks: StabilityAffectedBenchmark[],
-  maxCpuTime: number,
-  saveMsg?: string,
-  cpu?: string | null,
-  runConsistency?: RunConsistencyInfo,
-  failedChecks: string[] = []
-): void {
+export function emptyDiagnostics(): BenchDiagnostics {
+  return {
+    failedChecks: [],
+    medianSpreads: [],
+    calibrationExplainedFractions: [],
+    inconsistent: [],
+    noisy: [],
+  };
+}
+
+type DiagnosableTrial = {
+  alias: string;
+  runs: Array<{ name: string; error?: unknown; stats?: Pick<Stats, 'blocks'> }>;
+};
+
+/**
+ * Folds one file's trials into `into`. Between-block spread decides whether a
+ * comparison could resolve minDelta. Within-block spread is a separate signal:
+ * a bench whose own samples disagree is nondeterministic or being interfered
+ * with, whichever way its blocks line up.
+ */
+export function collectDiagnostics(
+  trials: DiagnosableTrial[],
+  minDelta: number,
+  into: BenchDiagnostics = emptyDiagnostics()
+): BenchDiagnostics {
+  for (const trial of trials) {
+    for (const run of trial.runs) {
+      const name = run.name || trial.alias;
+      if (isAssertionError(run.error)) into.failedChecks.push(name);
+      const blocks = run.stats?.blocks;
+      if (!blocks) continue;
+
+      const spread = relativeSpread(blocks.medians);
+      into.medianSpreads.push(spread);
+      into.calibrationExplainedFractions.push(
+        calibrationExplainedFraction(blocks.medians, blocks.freqs)
+      );
+      if (comparisonResolution(blocks.medians) > minDelta) into.inconsistent.push({ name, spread });
+
+      // A robust spread this wide inside one process means the timed work
+      // itself is not settling, not that processes differ.
+      const within = median(blocks.spreads ?? []);
+      if (within > 0.1) into.noisy.push({ name, spread: within });
+    }
+  }
+  return into;
+}
+
+export interface ReportInput {
+  envData: FreqSample[];
+  cpu?: string | null;
+  saveMsg?: string;
+  blocks: number;
+  minDelta: number;
+  diagnostics: BenchDiagnostics;
+}
+
+export function printReportBox(input: ReportInput): void {
+  const { envData, cpu, saveMsg, blocks, minDelta, diagnostics } = input;
   const lines: string[] = [];
 
   if (saveMsg) {
     lines.push(saveMsg);
     lines.push('');
   }
-  if (failedChecks.length > 0) {
+  if (diagnostics.failedChecks.length > 0) {
     lines.push(
       `${RED}✖ Failed checks:${RESET} ${DIM}Assertions did not hold, so these benchmarks have no results.${RESET}`
     );
-    lines.push(`  ${DIM}Affected benchmarks (${failedChecks.length}):${RESET}`);
-    for (const name of failedChecks) lines.push(`    ${RED}✖${RESET} ${DIM}${name}${RESET}`);
+    lines.push(`  ${DIM}Affected benchmarks (${diagnostics.failedChecks.length}):${RESET}`);
+    for (const name of diagnostics.failedChecks)
+      lines.push(`    ${RED}✖${RESET} ${DIM}${name}${RESET}`);
     lines.push('');
   }
   if (envData.length > 0) {
@@ -79,57 +128,44 @@ export function printReportBox(
     } else {
       lines.push(`${GREEN}✔ Stable clock:${RESET} ${DIM}Readings ranged ${rangeStr}.${RESET}`);
     }
+    lines.push('');
   }
 
-  if (envData.length > 0) lines.push('');
+  const affected = (benches: ReportBench[]) => {
+    lines.push(`  ${DIM}Affected benchmarks (${benches.length}):${RESET}`);
+    for (const bench of benches) {
+      lines.push(
+        `    ${YELLOW}⚠${RESET} ${DIM}${bench.name}${RESET}  ${YELLOW}±${(bench.spread * 100).toFixed(1)}%${RESET}`
+      );
+    }
+  };
 
-  let hasRunConsistencySummary = false;
-  if (runConsistency && runConsistency.freshRuns > 1 && runConsistency.medianSpreads.length > 0) {
-    hasRunConsistencySummary = true;
-    const spread = median(runConsistency.medianSpreads);
-    const resolution = minDetectableEffect(spread, runConsistency.freshRuns);
-    const spreadStr = `±${(spread * 100).toFixed(1)}%`;
-    // Use the same resolution rule as individual benchmark classification
-    const runsInconsistent = resolution > runConsistency.minDelta;
+  if (diagnostics.medianSpreads.length > 0) {
+    const spread = median(diagnostics.medianSpreads);
+    const resolution = minDetectableEffect(spread, blocks);
+    // Same resolution rule as per-bench classification
     lines.push(
-      runsInconsistent
+      resolution > minDelta
         ? `${YELLOW}⚠ Inconsistent runs:${RESET} ${DIM}Median timings changed across fresh runs suggesting an unstable machine.${RESET}`
         : `${GREEN}✔ Consistent runs:${RESET} ${DIM}Median timings remained stable across fresh runs.${RESET}`
     );
     lines.push(
-      `  ${DIM}Median spread: ${spreadStr} across ${runConsistency.freshRuns} fresh runs.${RESET}`
+      `  ${DIM}Median spread: ±${(spread * 100).toFixed(1)}% across ${blocks} fresh runs.${RESET}`
     );
     lines.push(`  ${DIM}Comparison resolution: ~±${(resolution * 100).toFixed(1)}%.${RESET}`);
-    if (
-      runConsistency.calibrationExplainedFractions &&
-      runConsistency.calibrationExplainedFractions.length > 0
-    ) {
-      const explained = median(runConsistency.calibrationExplainedFractions);
-      lines.push(
-        `  ${DIM}Clock estimate explains ~${(explained * 100).toFixed(0)}% of run-to-run spread.${RESET}`
-      );
-    }
+    const explained = median(diagnostics.calibrationExplainedFractions);
+    lines.push(
+      `  ${DIM}Clock estimate explains ~${(explained * 100).toFixed(0)}% of run-to-run spread.${RESET}`
+    );
+    if (diagnostics.inconsistent.length > 0) affected(diagnostics.inconsistent);
   }
 
-  if (affectedBenchmarks.length > 0) {
-    if (!hasRunConsistencySummary) {
-      lines.push(
-        `${YELLOW}⚠ Unstable samples:${RESET} ${DIM}Timings did not settle suggesting non-deterministic work or runtime interference.${RESET}`
-      );
-      lines.push(`  ${DIM}Time limit: ${maxCpuTime}s.${RESET}`);
-    }
-    lines.push(`  ${DIM}Affected benchmarks (${affectedBenchmarks.length}):${RESET}`);
-    for (const benchmark of affectedBenchmarks) {
-      const spread =
-        benchmark.runMedianSpread !== undefined
-          ? `  ${YELLOW}±${(benchmark.runMedianSpread * 100).toFixed(1)}%${RESET}`
-          : '';
-      lines.push(`    ${YELLOW}⚠${RESET} ${DIM}${benchmark.name}${RESET}${spread}`);
-    }
-  } else if (!hasRunConsistencySummary) {
+  if (diagnostics.noisy.length > 0) {
+    lines.push('');
     lines.push(
-      `${GREEN}✔ Stable samples:${RESET} ${DIM}Timings settled within the ${maxCpuTime}s time limit.${RESET}`
+      `${YELLOW}⚠ Noisy samples:${RESET} ${DIM}Timings varied widely within a process suggesting non-deterministic work or runtime interference.${RESET}`
     );
+    affected(diagnostics.noisy);
   }
 
   const PAD = 2;
@@ -171,54 +207,15 @@ export function replayReport(result: SavedResult, config: LabsConfig): void {
     );
   }
 
-  const affectedBenchmarks: StabilityAffectedBenchmark[] = [];
-  const runMedianSpreads: number[] = [];
-  const calibrationExplainedFractions: number[] = [];
-  const failedChecks: string[] = [];
-  for (const f of result.files) {
-    for (const b of f.benchmarks) {
-      for (const run of b.runs) {
-        if (isAssertionError(run.error)) failedChecks.push(run.name || b.alias);
-        // Fresh runs use comparison resolution; single runs use adaptive
-        // sample stability. These are separate signals with separate causes.
-        const runsInconsistent = run.stats?.blocks
-          ? comparisonResolution(run.stats.blocks.medians) > config.minDelta
-          : false;
-        const samplesUnstable = !run.stats?.blocks && hasUnstableSamples(run.stats);
-        if (runsInconsistent || samplesUnstable) {
-          affectedBenchmarks.push({
-            name: run.name || b.alias,
-            ...(run.stats?.blocks
-              ? { runMedianSpread: runMedianSpread(run.stats.blocks.medians) }
-              : {}),
-          });
-        }
-        if (run.stats?.blocks) {
-          runMedianSpreads.push(runMedianSpread(run.stats.blocks.medians));
-          calibrationExplainedFractions.push(
-            calibrationExplainedFraction(run.stats.blocks.medians, run.stats.blocks.freqs)
-          );
-        }
-      }
-    }
-  }
-  const freshRuns = result.blocks ?? 1;
-  printReportBox(
-    result.environment?.freqs ?? [],
-    affectedBenchmarks,
-    config.maxCpuTime!,
-    undefined,
-    result.hardware.cpu,
-    freshRuns > 1
-      ? {
-          freshRuns,
-          medianSpreads: runMedianSpreads,
-          minDelta: config.minDelta,
-          calibrationExplainedFractions,
-        }
-      : undefined,
-    failedChecks
-  );
+  const diagnostics = emptyDiagnostics();
+  for (const file of result.files) collectDiagnostics(file.benchmarks, config.minDelta, diagnostics);
+  printReportBox({
+    envData: result.environment?.freqs ?? [],
+    cpu: result.hardware.cpu,
+    blocks: result.blocks ?? 1,
+    minDelta: config.minDelta,
+    diagnostics,
+  });
 }
 
 function replayCollections(file: SavedFile): RenderedCollection[] {

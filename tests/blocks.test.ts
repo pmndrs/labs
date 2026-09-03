@@ -9,10 +9,10 @@ import { describe, expect, it, vi } from 'vitest';
 import { measure } from '../src/bench/index.ts';
 import { compare, printCompareReport } from '../src/compare.ts';
 import { defineConfig } from '../src/config.ts';
-import { mannWhitneyU, minDetectableEffect, runMedianSpread } from '../src/stats.ts';
+import { mannWhitneyU, minDetectableEffect, relativeSpread } from '../src/stats.ts';
 import type { SavedResult } from '../src/store.ts';
 
-const fast = { min_cpu_time: 1, min_samples: 12, adaptive: false } as const;
+const fast = { min_cpu_time: 1, min_samples: 12 } as const;
 const CONFIG = defineConfig({ benchDir: '.' });
 
 function syntheticStats(blockMedians: number[], freq = 4, perBlock = 40) {
@@ -31,15 +31,18 @@ function syntheticStats(blockMedians: number[], freq = 4, perBlock = 40) {
     p25: q(0.25),
     p75: q(0.75),
     p99: q(0.99),
-    samplesUnstable: false,
-    blocks: { medians: blockMedians, freqs: blockMedians.map(() => freq) },
+    blocks: {
+      medians: blockMedians,
+      freqs: blockMedians.map(() => freq),
+      spreads: blockMedians.map(() => 0.01),
+    },
   };
 }
 
 function syntheticResult(
   name: string,
   blockMedians: number[],
-  opts: { legacy?: boolean; freq?: number; isolation?: 'bench' | 'file' } = {}
+  opts: { legacy?: boolean; freq?: number } = {}
 ): SavedResult {
   const stats = syntheticStats(blockMedians, opts.freq ?? 4);
   if (opts.legacy) delete (stats as any).blocks;
@@ -47,7 +50,6 @@ function syntheticResult(
     name,
     timestamp: '2026-01-01T00:00:00.000Z',
     hardware: { cpu: 'test-cpu', arch: 'test', runtime: 'node', freq: 4 },
-    isolation: opts.isolation ?? 'bench',
     ...(opts.legacy ? {} : { blocks: blockMedians.length }),
     files: [
       {
@@ -86,7 +88,6 @@ describe('measurement plans', () => {
       min_samples: 20,
       max_samples: 20,
       min_cpu_time: 0,
-      adaptive: false,
     });
 
     expect(stats.plan).toMatchObject({ batch: false, samples: 20 });
@@ -104,13 +105,13 @@ describe('measurement plans', () => {
 
 describe('fresh-run statistics', () => {
   it('reports zero spread for identical or single-run medians', () => {
-    expect(runMedianSpread([100, 100, 100])).toBe(0);
-    expect(runMedianSpread([100])).toBe(0);
+    expect(relativeSpread([100, 100, 100])).toBe(0);
+    expect(relativeSpread([100])).toBe(0);
   });
 
   it('scales spread with fresh-run median dispersion', () => {
-    const tight = runMedianSpread([99, 100, 101, 100]);
-    const wide = runMedianSpread([80, 100, 120, 100]);
+    const tight = relativeSpread([99, 100, 101, 100]);
+    const wide = relativeSpread([80, 100, 120, 100]);
 
     expect(tight).toBeGreaterThan(0);
     expect(wide).toBeGreaterThan(tight);
@@ -295,19 +296,6 @@ describe('comparing blocked results', () => {
     );
   });
 
-  it('points isolation-disabled runs at isolate, not at re-saving', () => {
-    const medians = [100, 101, 99, 100, 100, 101, 99, 100];
-    const shared = syntheticResult('shared', medians, { legacy: true, isolation: 'file' });
-    const fresh = syntheticResult('fresh', medians);
-
-    const bench = compare(shared, fresh, CONFIG).benches[0];
-    expect(bench.kind).toBe('skipped');
-    if (bench.kind === 'skipped') {
-      expect(bench.reason).toContain('requires isolation');
-      expect(bench.reason).not.toContain('re-save with blocked sampling');
-    }
-  });
-
   it('skips benches without block replication instead of judging them', () => {
     const medians = [100, 101, 99, 100, 100, 101, 99, 100];
     const legacy = syntheticResult('old', medians, { legacy: true });
@@ -337,9 +325,8 @@ describe('worker blocked sampling', () => {
           ...process.env,
           LABS_BENCH_FILE: pathToFileURL(FIXTURE).href,
           LABS_RESULT_FILE: resultFile,
-          LABS_MIN_CPU_TIME: '1',
+          LABS_BLOCK_TIME: '1',
           LABS_MIN_SAMPLES: '12',
-          LABS_ADAPTIVE: 'false',
           ...env,
         },
       });
@@ -359,19 +346,19 @@ describe('worker blocked sampling', () => {
       expect(stats.blocks.medians).toHaveLength(3);
       expect(stats.blocks.freqs).toHaveLength(3);
       expect(stats.blocks.freqs.every((f: number) => f > 0)).toBe(true);
-      // The pilot plan fixes 12 samples per block, pooled across 3 blocks
+      expect(stats.blocks.spreads).toHaveLength(3);
+      // The pilot plan honours the 12 sample floor per block, pooled across 3 blocks
       expect(stats.plan.samples).toBe(12);
       expect(stats.samples).toHaveLength(36);
     }
     expect(result.benchmarks[0].runs[0].stats.snapshot).toBe(499500);
   });
 
-  it('keeps single-block runs identical to unblocked sampling', { timeout: 60_000 }, () => {
+  it('never runs fewer than two blocks', { timeout: 60_000 }, () => {
     const result = runWorker({});
 
     for (const trial of result.benchmarks) {
-      expect(trial.runs[0].stats.blocks).toBeUndefined();
-      expect(trial.runs[0].stats.samples.length).toBeGreaterThan(0);
+      expect(trial.runs[0].stats.blocks.medians).toHaveLength(2);
     }
   });
 
@@ -380,7 +367,6 @@ describe('worker blocked sampling', () => {
       name,
       timestamp: '2026-01-01T00:00:00.000Z',
       hardware: { cpu: 'test-cpu', arch: 'test', runtime: 'node', freq: 4 },
-      isolation: 'bench',
       blocks: 5,
       files: [{ file: 'blocks.bench.ts', benchmarks: workerResult.benchmarks }],
       environment: { freqs: [] },

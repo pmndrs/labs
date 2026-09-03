@@ -2,7 +2,6 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import type { Stats } from '../src/bench/types.ts';
 import {
   type SavedResult,
   deleteResult,
@@ -10,7 +9,6 @@ import {
   loadResult,
   resultExists,
   saveResult,
-  trimStats,
   uniqueResultName,
 } from '../src/store.ts';
 
@@ -67,25 +65,5 @@ describe('saved benchmark results', () => {
 
     saveResult(labsDir, result('main-2'));
     expect(uniqueResultName(labsDir, 'main')).toBe('main-3');
-  });
-
-  it('saves the explicit sample stability field with its legacy alias', () => {
-    const stats = {
-      kind: 'fn',
-      samples: [100],
-      min: 100,
-      max: 100,
-      avg: 100,
-      p25: 100,
-      p50: 100,
-      p75: 100,
-      p99: 100,
-      p999: 100,
-      ticks: 1,
-      debug: '',
-      samplesUnstable: true,
-    } satisfies Stats;
-
-    expect(trimStats(stats)).toMatchObject({ samplesUnstable: true, noisy: true });
   });
 });

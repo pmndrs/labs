@@ -28,10 +28,6 @@ export interface SavedStats {
   p25: number;
   p75: number;
   p99: number;
-  /** Adaptive samples did not settle before the measurement time limit. */
-  samplesUnstable?: boolean;
-  /** @deprecated Compatibility field for older saved results. */
-  noisy?: boolean;
   gc?: { avg: number; min: number; max: number };
   heap?: { avg: number; min: number; max: number };
   plan?: BlockPlan;
@@ -41,6 +37,8 @@ export interface SavedStats {
     medians: number[];
     /** Software calibration rates. The `freqs` name is retained for schema compatibility. */
     freqs: number[];
+    /** Relative spread of each block's own samples. Absent in older results. */
+    spreads?: number[];
   };
 }
 
@@ -137,13 +135,8 @@ export interface SavedResult {
   git?: GitInfo;
   hardware: HardwareInfo;
   /**
-   * Worker isolation used for the run. An omitted value means one worker per
-   * file.
-   */
-  isolation?: 'bench' | 'file';
-  /**
-   * Fresh-process blocks each bench ran as. An omitted value means one block,
-   * so saved spreads exclude between-process variance.
+   * Fresh-process blocks each bench ran as. Results saved before blocked
+   * sampling omit it and cannot receive compare verdicts.
    */
   blocks?: number;
   context?: {
@@ -322,7 +315,6 @@ function normalizeTrial(
 }
 
 export function trimStats(stats: Stats): SavedStats {
-  const samplesUnstable = stats.samplesUnstable ?? stats.noisy;
   return {
     kind: stats.kind,
     samples: stats.samples,
@@ -333,13 +325,6 @@ export function trimStats(stats: Stats): SavedStats {
     p25: stats.p25,
     p75: stats.p75,
     p99: stats.p99,
-    ...(samplesUnstable !== undefined
-      ? {
-          samplesUnstable,
-          // Keep older Labs versions able to read the same saved result
-          noisy: samplesUnstable,
-        }
-      : {}),
     ...(stats.plan ? { plan: stats.plan } : {}),
     ...(stats.snapshot !== undefined ? { snapshot: stats.snapshot } : {}),
     ...(stats.blocks ? { blocks: stats.blocks } : {}),

@@ -7,7 +7,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { bench, group, runTrialAt } from '../src/bench/main.ts';
 
-const fast = { min_cpu_time: 1, min_samples: 12, adaptive: false } as const;
+const fast = { min_cpu_time: 1, min_samples: 12 } as const;
 
 describe('runTrialAt', () => {
   it('addresses trials by global registration order across groups', async () => {
@@ -46,9 +46,8 @@ describe('worker bench isolation', () => {
           ...process.env,
           LABS_BENCH_FILE: pathToFileURL(FIXTURE).href,
           LABS_RESULT_FILE: resultFile,
-          LABS_MIN_CPU_TIME: '1',
+          LABS_BLOCK_TIME: '1',
           LABS_MIN_SAMPLES: '12',
-          LABS_ADAPTIVE: 'false',
           ...env,
         },
       });
@@ -58,27 +57,14 @@ describe('worker bench isolation', () => {
     }
   }
 
-  it(
-    "keeps benches from observing each other's process state by default",
-    { timeout: 60_000 },
-    () => {
-      const result = runWorker({});
-      const [polluter, victim] = result.benchmarks;
-
-      expect(result.benchmarks).toHaveLength(2);
-      expect(polluter.runs[0].stats.samples.length).toBeGreaterThan(0);
-      expect(victim.runs[0].error).toBeUndefined();
-      expect(victim.runs[0].stats.samples.length).toBeGreaterThan(0);
-      expect(victim.groupName).toBe('isolation');
-    }
-  );
-
-  it('shares one process per file when ejected via LABS_ISOLATE=false', { timeout: 60_000 }, () => {
-    const result = runWorker({ LABS_ISOLATE: 'false' });
+  it("keeps benches from observing each other's process state", { timeout: 60_000 }, () => {
+    const result = runWorker({});
     const [polluter, victim] = result.benchmarks;
 
+    expect(result.benchmarks).toHaveLength(2);
     expect(polluter.runs[0].stats.samples.length).toBeGreaterThan(0);
-    expect(victim.runs[0].error?.message).toContain('leaked');
-    expect(victim.runs[0].stats).toBeUndefined();
+    expect(victim.runs[0].error).toBeUndefined();
+    expect(victim.runs[0].stats.samples.length).toBeGreaterThan(0);
+    expect(victim.groupName).toBe('isolation');
   });
 });

@@ -242,21 +242,22 @@ export function hodgesLehmannDelta(
 export function calibrationExplainedFraction(medians: number[], calibrationRates: number[]): number {
   if (medians.length < 2 || medians.length !== calibrationRates.length) return 0;
   if (calibrationRates.some((rate) => !(rate > 0))) return 0;
-  const time = runMedianSpread(medians);
+  const time = relativeSpread(medians);
   if (time <= 0) return 0;
-  const normalized = runMedianSpread(medians.map((median, i) => median * calibrationRates[i]));
+  const normalized = relativeSpread(medians.map((median, i) => median * calibrationRates[i]));
   return Math.max(0, Math.min(1, 1 - (normalized / time) ** 2));
 }
 
 /**
- * Relative spread of fresh-run medians: MAD scaled to sigma equivalent, over
- * the median. Captures process-to-process variation that one run cannot see.
+ * Robust relative spread: MAD scaled to a sigma equivalent, over the median.
+ * Applied to block medians it captures process-to-process variation, and
+ * applied to one block's samples it captures within-process noise.
  */
-export function runMedianSpread(medians: number[]): number {
-  if (medians.length < 2) return 0;
-  const m = median(medians);
+export function relativeSpread(values: number[]): number {
+  if (values.length < 2) return 0;
+  const m = median(values);
   if (m <= 0) return 0;
-  return (1.4826 * mad(medians)) / m;
+  return (1.4826 * mad(values)) / m;
 }
 
 /**
@@ -278,7 +279,7 @@ export function minDetectableEffect(spread: number, freshRuns: number): number {
  * whatever threshold the current config compares it against.
  */
 export function comparisonResolution(medians: number[]): number {
-  return minDetectableEffect(runMedianSpread(medians), medians.length);
+  return minDetectableEffect(relativeSpread(medians), medians.length);
 }
 
 /** Smallest attainable two-sided exact Mann-Whitney p-value for two sample sizes. */

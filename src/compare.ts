@@ -25,8 +25,6 @@ interface BenchData {
   samples: number[];
   /** Fresh-run medians, the independent experimental units. */
   runMedians?: number[];
-  /** Isolation mode of the run this bench came from, for actionable skip reasons. */
-  isolation?: 'bench' | 'file';
 }
 
 type BenchCheck = (baseline: BenchData, candidate: BenchData, config: LabsConfig) => CheckResult;
@@ -106,16 +104,6 @@ export const warnClockDrift: EnvironmentWarning = (baseline, candidate) => {
   return warnings;
 };
 
-export const warnIsolationMismatch: EnvironmentWarning = (baseline, candidate) => {
-  const b = baseline.isolation ?? 'file';
-  const c = candidate.isolation ?? 'file';
-  if (b === c) return [];
-  return [
-    `runs used different bench isolation (baseline: per-${b}, candidate: per-${c}) — ` +
-      `benches sharing a process inherit each other's JIT/heap state, so absolute numbers may not be comparable`,
-  ];
-};
-
 export const warnFreshRunCountMismatch: EnvironmentWarning = (baseline, candidate) => {
   const b = baseline.blocks ?? 1;
   const c = candidate.blocks ?? 1;
@@ -126,11 +114,7 @@ export const warnFreshRunCountMismatch: EnvironmentWarning = (baseline, candidat
   ];
 };
 
-export const ENVIRONMENT_WARNINGS: EnvironmentWarning[] = [
-  warnClockDrift,
-  warnIsolationMismatch,
-  warnFreshRunCountMismatch,
-];
+export const ENVIRONMENT_WARNINGS: EnvironmentWarning[] = [warnClockDrift, warnFreshRunCountMismatch];
 
 /** All environment checks in order. Any failure blocks the entire comparison. */
 export const ENVIRONMENT_CHECKS: EnvironmentCheck[] = [checkHardwareMatch];
@@ -146,7 +130,8 @@ export const ENVIRONMENT_CHECKS: EnvironmentCheck[] = [checkHardwareMatch];
  * There is deliberately no run-consistency gate: the exact test on block
  * medians is already spread-aware (high spread widens the CI and lifts p), so
  * benchmarks with limited resolution keep their verdicts and are annotated
- * instead of being hidden.
+ * instead of being hidden. Results saved before blocked sampling carry no
+ * block medians and are skipped.
  */
 const MIN_FRESH_RUNS = 2;
 
@@ -154,17 +139,11 @@ export const checkFreshRunReplication: BenchCheck = (baseline, candidate, config
   const bN = baseline.runMedians?.length ?? 1;
   const cN = candidate.runMedians?.length ?? 1;
   if (bN < MIN_FRESH_RUNS || cN < MIN_FRESH_RUNS) {
-    // With isolation off the runner forces single-block runs, so "re-save"
-    // would be a dead end — say what actually has to change.
-    const fix =
-      baseline.isolation === 'file' || candidate.isolation === 'file'
-        ? 'blocked sampling requires isolation; enable isolate and re-save'
-        : 're-save with blocked sampling';
     return {
       ok: false,
       reason:
         `insufficient block replication (baseline: ${bN}, candidate: ${cN}; ` +
-        `need ≥${MIN_FRESH_RUNS} per side) — ${fix}`,
+        `need ≥${MIN_FRESH_RUNS} per side) — re-save with the current version`,
     };
   }
 
@@ -511,16 +490,8 @@ export function compare(
         }
 
         const benchData = {
-          baseline: {
-            samples: base.samples,
-            runMedians: base.runMedians,
-            isolation: baseline.isolation,
-          },
-          candidate: {
-            samples: run.samples,
-            runMedians: run.runMedians,
-            isolation: candidate.isolation,
-          },
+          baseline: { samples: base.samples, runMedians: base.runMedians },
+          candidate: { samples: run.samples, runMedians: run.runMedians },
         };
 
         let skipReason: string | undefined;
