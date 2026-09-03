@@ -26,6 +26,11 @@ export interface LabsConfig {
   /** Minimum |Hodges-Lehmann delta| required to flag a verdict. Filters environmental noise on identical code. @default 0.05 */
   minDelta: number;
   /**
+   * Relative tolerance for numeric snapshots with an absolute floor at one.
+   * @default 1e-9
+   */
+  snapshotTolerance: number;
+  /**
    * Whether each bench runs in a fresh worker process. Disable for suites that
    * require shared process state or have expensive module setup. @default true
    */
@@ -50,6 +55,7 @@ export function defineConfig(config: Partial<LabsConfig> & Pick<LabsConfig, 'ben
     maxCpuTime: 5,
     alpha: 0.05,
     minDelta: 0.05,
+    snapshotTolerance: 1e-9,
     isolate: true,
     blocks: 8,
     ...config,

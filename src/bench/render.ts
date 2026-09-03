@@ -5,7 +5,13 @@ import * as histogramFmt from './format/histogram.ts';
 import * as boxplotFmt from './format/boxplot.ts';
 import * as barplotFmt from './format/barplot.ts';
 import * as lineplotFmt from './format/lineplot.ts';
-import { hasUnstableSamples, type Context, type GcMode, type Trial } from './types.ts';
+import {
+  hasUnstableSamples,
+  isAssertionError,
+  type Context,
+  type GcMode,
+  type Trial,
+} from './types.ts';
 
 export interface RenderedTrial {
   highlight: false | string | null;
@@ -99,13 +105,14 @@ export function renderMitata(
         if (prev_run_gap) print('');
 
         if (r.error) {
+          const label = isAssertionError(r.error) ? 'failed:' : 'error:';
           if (!opts.colors)
             print(
-              `${_h(truncate(r.name, k_legend).padEnd(k_legend))} error: ${(r.error as any).message ?? r.error}`
+              `${_h(truncate(r.name, k_legend).padEnd(k_legend))} ${label} ${(r.error as any).message ?? r.error}`
             );
           else
             print(
-              `${_h(truncate(r.name, k_legend).padEnd(k_legend))} ${ansi.red + 'error:' + ansi.reset} ${(r.error as any).message ?? r.error}`
+              `${_h(truncate(r.name, k_legend).padEnd(k_legend))} ${ansi.red + label + ansi.reset} ${(r.error as any).message ?? r.error}`
             );
           continue;
         }

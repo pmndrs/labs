@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import type { BlockPlan, GcMode, Stats } from './bench/types.ts';
+import type { BlockPlan, GcMode, Snapshot, Stats } from './bench/types.ts';
 
 export interface GitInfo {
   /** Full sha of HEAD when the run was saved. */
@@ -35,6 +35,8 @@ export interface SavedStats {
   gc?: { avg: number; min: number; max: number };
   heap?: { avg: number; min: number; max: number };
   plan?: BlockPlan;
+  /** Output compared with the baseline. */
+  snapshot?: Snapshot;
   blocks?: {
     medians: number[];
     /** Software calibration rates. The `freqs` name is retained for schema compatibility. */
@@ -339,6 +341,7 @@ export function trimStats(stats: Stats): SavedStats {
         }
       : {}),
     ...(stats.plan ? { plan: stats.plan } : {}),
+    ...(stats.snapshot !== undefined ? { snapshot: stats.snapshot } : {}),
     ...(stats.blocks ? { blocks: stats.blocks } : {}),
     ...(stats.gc
       ? {

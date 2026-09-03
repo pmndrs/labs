@@ -3,8 +3,8 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync
 import { createRequire } from 'node:module';
 import { basename, dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { hasUnstableSamples } from '../bench/types.ts';
-import { compare, printCompareReport } from '../compare.ts';
+import { hasUnstableSamples, isAssertionError } from '../bench/types.ts';
+import { compare, compareFailed, printCompareReport } from '../compare.ts';
 import type { LabsConfig } from '../config.ts';
 import { type StabilityAffectedBenchmark, printReportBox } from '../report.ts';
 import { calibrationExplainedFraction, comparisonResolution, runMedianSpread } from '../stats.ts';
@@ -40,11 +40,13 @@ function collectReportData(
   envData: FreqSample[],
   affectedBenchmarks: StabilityAffectedBenchmark[],
   runMedianSpreads: number[],
-  calibrationExplainedFractions: number[]
+  calibrationExplainedFractions: number[],
+  failedChecks: string[]
 ): void {
   const runFreq = workerResult.context.cpu.freq;
   for (const trial of workerResult.benchmarks) {
     for (const run of trial.runs) {
+      if (isAssertionError(run.error)) failedChecks.push(run.name || trial.alias);
       const stats = run.stats;
       if (!stats) continue;
       // Fresh runs use comparison resolution; single runs use adaptive
@@ -357,6 +359,7 @@ export async function runCLI(args: string[]) {
     const runAffectedBenchmarks: StabilityAffectedBenchmark[] = [];
     const runMedianSpreads: number[] = [];
     const runCalibrationExplainedFractions: number[] = [];
+    const runFailedChecks: string[] = [];
     let runCpu: string | null = null;
     for (const { file, resultFile } of runOutputs) {
       if (!existsSync(resultFile)) continue;
@@ -370,7 +373,8 @@ export async function runCLI(args: string[]) {
         runEnvData,
         runAffectedBenchmarks,
         runMedianSpreads,
-        runCalibrationExplainedFractions
+        runCalibrationExplainedFractions,
+        runFailedChecks
       );
     }
     printReportBox(
@@ -386,8 +390,10 @@ export async function runCLI(args: string[]) {
             minDelta: config.minDelta,
             calibrationExplainedFractions: runCalibrationExplainedFractions,
           }
-        : undefined
+        : undefined,
+      runFailedChecks
     );
+    if (runFailedChecks.length > 0) process.exitCode = 1;
     return;
   }
 
@@ -442,6 +448,7 @@ export async function runCLI(args: string[]) {
   const saveAffectedBenchmarks: StabilityAffectedBenchmark[] = [];
   const saveRunMedianSpreads: number[] = [];
   const saveCalibrationExplainedFractions: number[] = [];
+  const saveFailedChecks: string[] = [];
   let savedNoop: SavedResult['context'] | undefined;
 
   for (const { file, resultFile } of workerOutputs) {
@@ -475,7 +482,8 @@ export async function runCLI(args: string[]) {
       saveEnvData,
       saveAffectedBenchmarks,
       saveRunMedianSpreads,
-      saveCalibrationExplainedFractions
+      saveCalibrationExplainedFractions,
+      saveFailedChecks
     );
 
     files.push({
@@ -516,15 +524,23 @@ export async function runCLI(args: string[]) {
   saveResult(labsDir, result);
   const isFirstSave = !getBaseline(labsDir);
   let markedBaseline = false;
+  const checksFailed = saveFailedChecks.length > 0;
 
-  if (setAsBaseline || isFirstSave) {
+  // Failed checks cannot establish a baseline.
+  if ((setAsBaseline || isFirstSave) && !checksFailed) {
     setBaseline(labsDir, saveName);
     markedBaseline = true;
   }
+  if (checksFailed) process.exitCode = 1;
 
   const gitNote = git && suppliedName ? ` ${DIM}${gitHint(git)}${RESET}` : '';
-  const fileNote = `${files.length} file${files.length !== 1 ? 's' : ''}`;
-  const details = markedBaseline ? `${CYAN}baseline${RESET}, ${fileNote}` : fileNote;
+  const details = [
+    markedBaseline ? `${CYAN}baseline${RESET}` : '',
+    `${files.length} file${files.length !== 1 ? 's' : ''}`,
+    checksFailed && (setAsBaseline || isFirstSave) ? `${RED}not set as baseline${RESET}` : '',
+  ]
+    .filter(Boolean)
+    .join(', ');
   const saveMsg = `${GREEN}✔${RESET} Saved "${saveName}"${gitNote} (${details})`;
 
   printReportBox(
@@ -540,7 +556,8 @@ export async function runCLI(args: string[]) {
           minDelta: config.minDelta,
           calibrationExplainedFractions: saveCalibrationExplainedFractions,
         }
-      : undefined
+      : undefined,
+    saveFailedChecks
   );
 
   if (shouldCompare) {
@@ -552,8 +569,10 @@ export async function runCLI(args: string[]) {
     } else {
       try {
         const baselineResult = loadResult(labsDir, baselineName);
-        printCompareReport(compare(baselineResult, result, config), config);
+        const comparison = compare(baselineResult, result, config);
+        printCompareReport(comparison, config);
         setLastComparison(labsDir, baselineName, saveName);
+        if (compareFailed(comparison)) process.exitCode = 1;
       } catch (e: any) {
         console.log(`\n${RED}✖${RESET} Compare failed: ${e.message}`);
       }

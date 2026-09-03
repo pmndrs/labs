@@ -6,7 +6,15 @@ import { arch, colors, cpu, runtime, version } from './env.ts';
 import { measure } from './lib/measure.ts';
 import { _print, kind } from './lib/runtime.ts';
 import { renderMitata, type RenderedCollection } from './render.ts';
-import type { BlockPlan, Collection, Context, Stats, Trial } from './types.ts';
+import {
+  type BlockPlan,
+  type Collection,
+  type Context,
+  type GeneratorBench,
+  type Stats,
+  type Trial,
+  isAssertionError,
+} from './types.ts';
 
 let FLAGS = 0;
 let $counters: any = null;
@@ -44,6 +52,8 @@ export class B {
   flags: number = FLAGS;
   _highlight: string | false = false;
 
+  constructor(name: string, gen: GeneratorBench);
+  constructor(name: string, fn: (...args: any[]) => any);
   constructor(name: string, f: any) {
     this.f = f;
     this.name(name);
@@ -465,7 +475,7 @@ const formats = {
           if (!samples && k === 'samples') return null;
 
           if (!(v instanceof Error)) return v;
-          return { message: String(v.message), stack: v.stack };
+          return { name: v.name, message: String(v.message), stack: v.stack };
         },
         0
       )
@@ -521,7 +531,7 @@ const formats = {
         for (const run of trial.runs) {
           if (run.error)
             print(
-              `| ${run.name.padEnd(name_len)} | error: ${(run.error as any).message ?? run.error} |`
+              `| ${run.name.padEnd(name_len)} | ${isAssertionError(run.error) ? 'failed' : 'error'}: ${(run.error as any).message ?? run.error} |`
             );
           else
             print(

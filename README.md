@@ -117,6 +117,42 @@ Labs promises to give results you can trust. To do this a number of guarantees a
 - Detect if a bench has unstable samples. Samples are taken until the configured uncertainty target is reached. If this fails, a warning is given. This likely means the bench is non-deterministic or affected by runtime interference like background processes.
 - Machine stability is measured. When median timings vary too much across blocks of samples, a warning is given. This can indicate an unstable machine ranging from thermal throttling to background processes.
 
+### Test correctness
+
+A faster result only matters if the work is still correct. Labs keeps the result of the first untimed call and hands it back from `yield` once measurement finishes, so teardown can check it. Use any assertion library, or the small `assert` included with Labs. A failed check exits with code 1, keeps the saved result out of the baseline, and stops the remaining blocks of that bench.
+
+```ts
+import { assert, bench } from '@pmndrs/labs'
+
+bench('sort', function* () {
+  const result = yield () => [3, 1, 2].toSorted()
+  assert.equal(result, [1, 2, 3])
+})
+```
+
+Return the result from the generator to compare it automatically against the baseline's output.
+
+```ts
+bench('sort', function* () {
+  const result = yield () => [3, 1, 2].toSorted()
+  return result
+})
+```
+
+For work that mutates state, use a snapshot hook to select the output.
+
+```ts
+bench('append', function* () {
+  const values: number[] = []
+  yield {
+    bench: () => values.push(values.length),
+    snapshot: () => values,
+  }
+})
+```
+
+When you compare runs, Labs replaces the speed verdict with `output changed` if the candidate no longer matches the baseline, and exits with code 1. Numeric outputs are compared with `snapshotTolerance` so float refactors do not trip it, non-finite numbers are spelled out and compared exactly, and anything else is digested. Assertions and snapshots run outside the timed work, so checking an answer does not affect its result.
+
 ## How to control my CPU
 
 One of the largest sources of noise when running benchmarks is an unstable environment, and the usual culprit is the CPU. The CPU boosts or thermal throttles, or a process gets put on a P-core (performance) instead of an E-core (efficiency). Labs checks the CPU clocks before and after each benchmark file and before each block, and tracks whether they vary across the runs. If it detects too much variance, you will get warned and the run will be flagged. But what can you do about it?
@@ -218,7 +254,7 @@ Outputs a colored table for each eligible benchmark:
 | p         | Two-sided Mann-Whitney U p-value on block medians; at or below `alpha` passes the statistical-significance gate        |
 | Δ CI      | Nominal `1 − alpha` interval for the Hodges-Lehmann relative effect used by the verdict; not an interval around `Δp50` |
 
-Each row is prefixed with a verdict icon: green `▲` (faster), red `▼` (slower), or gray `■` (neutral). The verdict uses the Mann-Whitney p-value and the Hodges-Lehmann relative effect, not `Δp50`. Below each row, two distribution sparklines sit under their respective columns — baseline (cyan) and candidate (magenta) — on a shared axis. The sparklines use pooled inner samples and are descriptive only.
+Each row is prefixed with a verdict icon: green `▲` (faster), red `▼` (slower), or gray `■` (neutral). A red `✗` marks a bench whose snapshot differs from the baseline and shows `output changed` in place of a verdict. Candidate runs that failed a check or threw are listed under `failed` and receive no verdict. The verdict uses the Mann-Whitney p-value and the Hodges-Lehmann relative effect, not `Δp50`. Below each row, two distribution sparklines sit under their respective columns — baseline (cyan) and candidate (magenta) — on a shared axis. The sparklines use pooled inner samples and are descriptive only.
 
 Comparison is gated. Two runs must pass environment checks before results are shown.
 
@@ -319,21 +355,22 @@ export default defineConfig({
 })
 ```
 
-| Option       | Default                                     | Description                                                                                                                                                                                                                                             |
-| ------------ | ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `benchDir`   | (required)                                  | Directory to search, relative to config file                                                                                                                                                                                                            |
-| `benchMatch` | `**/*.bench.ts`                             | Glob pattern for discovery                                                                                                                                                                                                                              |
-| `nodeFlags`  | `['--allow-natives-syntax', '--expose-gc']` | Node flags per worker process                                                                                                                                                                                                                           |
-| `resultsDir` | `.labs`                                     | Directory for saved results, relative to config                                                                                                                                                                                                         |
-| `adaptive`   | `true`                                      | Adaptive sampling mode: `true` uses the default 2.5% relative uncertainty target, `false` uses fixed stopping, and a number sets a custom target                                                                                                        |
-| `maxCpuTime` | `5`                                         | Maximum sampling-time budget in seconds; a multi-block pilot receives a per-block share, while later blocks replay its fixed sample count                                                                                                               |
-| `minCpuTime` | `0.642`                                     | Minimum CPU time budget per benchmark in seconds; set to raise/lower runtime budget                                                                                                                                                                     |
-| `minSamples` | `20`                                        | Minimum sample count per benchmark; set to increase/decrease sample floor                                                                                                                                                                               |
-| `maxSamples` | `1e9`                                       | Maximum sample cap per benchmark to prevent pathological long runs                                                                                                                                                                                      |
-| `alpha`      | `0.05`                                      | Mann-Whitney U significance level                                                                                                                                                                                                                       |
-| `minDelta`   | `0.05`                                      | Minimum absolute Hodges-Lehmann relative effect for a verdict; rows whose approximate resolution exceeds it are annotated as limited-resolution                                                                                                         |
-| `isolate`    | `true`                                      | Run each bench in its own fresh worker process so benches can't contaminate each other's JIT/heap state (order-dependent results); `false` shares one process per file and disables multi-block sampling, so such saves cannot receive compare verdicts |
-| `blocks`     | `8`                                         | Fresh-process blocks per benchmark for saved runs; `bench run` uses one unless overridden with `--blocks`                                                                                                                                               |
+| Option              | Default                                     | Description                                                                                                                                                                                                                                             |
+| ------------------- | ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `benchDir`          | (required)                                  | Directory to search, relative to config file                                                                                                                                                                                                            |
+| `benchMatch`        | `**/*.bench.ts`                             | Glob pattern for discovery                                                                                                                                                                                                                              |
+| `nodeFlags`         | `['--allow-natives-syntax', '--expose-gc']` | Node flags per worker process                                                                                                                                                                                                                           |
+| `resultsDir`        | `.labs`                                     | Directory for saved results, relative to config                                                                                                                                                                                                         |
+| `adaptive`          | `true`                                      | Adaptive sampling mode: `true` uses the default 2.5% relative uncertainty target, `false` uses fixed stopping, and a number sets a custom target                                                                                                        |
+| `maxCpuTime`        | `5`                                         | Maximum sampling-time budget in seconds; a multi-block pilot receives a per-block share, while later blocks replay its fixed sample count                                                                                                               |
+| `minCpuTime`        | `0.642`                                     | Minimum CPU time budget per benchmark in seconds; set to raise/lower runtime budget                                                                                                                                                                     |
+| `minSamples`        | `20`                                        | Minimum sample count per benchmark; set to increase/decrease sample floor                                                                                                                                                                               |
+| `maxSamples`        | `1e9`                                       | Maximum sample cap per benchmark to prevent pathological long runs                                                                                                                                                                                      |
+| `alpha`             | `0.05`                                      | Mann-Whitney U significance level                                                                                                                                                                                                                       |
+| `minDelta`          | `0.05`                                      | Minimum absolute Hodges-Lehmann relative effect for a verdict; rows whose approximate resolution exceeds it are annotated as limited-resolution                                                                                                         |
+| `snapshotTolerance` | `1e-9`                                      | Relative tolerance for numeric snapshots, with an absolute floor at one; digests of non-numeric snapshots are compared exactly                                                                                                                          |
+| `isolate`           | `true`                                      | Run each bench in its own fresh worker process so benches can't contaminate each other's JIT/heap state (order-dependent results); `false` shares one process per file and disables multi-block sampling, so such saves cannot receive compare verdicts |
+| `blocks`            | `8`                                         | Fresh-process blocks per benchmark for saved runs; `bench run` uses one unless overridden with `--blocks`                                                                                                                                               |
 
 Sampling behavior:
 

@@ -1,5 +1,5 @@
 import { isCancel, select } from '@clack/prompts';
-import { compare, printCompareReport } from '../../compare.ts';
+import { compare, compareFailed, printCompareReport } from '../../compare.ts';
 import {
   getBaseline,
   getLastComparison,
@@ -71,8 +71,10 @@ export async function runCompareCommand(ctx: CLIContext, candidateArg?: string):
   try {
     const baseline = loadResult(ctx.labsDir, compareBaselineName);
     const candidate = loadResult(ctx.labsDir, candidateName);
-    printCompareReport(compare(baseline, candidate, ctx.config), ctx.config);
+    const result = compare(baseline, candidate, ctx.config);
+    printCompareReport(result, ctx.config);
     setLastComparison(ctx.labsDir, compareBaselineName, candidateName);
+    if (compareFailed(result)) process.exitCode = 1;
   } catch (e: any) {
     error(e.message);
   }

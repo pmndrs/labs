@@ -1,5 +1,6 @@
-import type { MeasureOptions, Stats } from '../types.ts';
+import type { GeneratorBench, MeasureOptions, Snapshot, Stats } from '../types.ts';
 import { AsyncFunction, do_not_optimize, GeneratorFunction, kind, now } from './runtime.ts';
+import { toSnapshot } from './snapshot.ts';
 import { defaults } from './constants.ts';
 
 /** Adds the deprecated public field at the measurement API boundary. */
@@ -14,6 +15,8 @@ function withLegacySampleStabilityAlias<T extends { samplesUnstable?: boolean }>
  * engine ({@link benchFn}, {@link benchIter}, or {@link benchGenerator})
  * based on its {@link kind}.
  */
+export function measure(gen: GeneratorBench, opts?: MeasureOptions): Promise<Stats>;
+export function measure(f: (...args: any[]) => any, opts?: MeasureOptions): Promise<Stats>;
 export async function measure(f: (...args: any[]) => any, opts: MeasureOptions = {}): Promise<Stats> {
   const dispatch: Record<string, (f: any, opts?: any) => Promise<Stats>> = {
     fn: benchFn,
@@ -29,9 +32,9 @@ export async function measure(f: (...args: any[]) => any, opts: MeasureOptions =
 /**
  * Benchmark adapter for generator functions.
  *
- * The generator yields a benchmarkable function (or an options object with a
- * `bench` / `manual` key) and is resumed after measurement completes.
- * Delegates the actual timing to {@link benchFn}.
+ * The generator yields a benchmarkable function or options object. After
+ * measurement it receives the first untimed result. The snapshot comes from
+ * the yielded object's `snapshot` hook or the generator's return value.
  */
 export async function benchGenerator(gen: (...args: any[]) => any, opts: any = {}): Promise<Stats> {
   const ctx = {
@@ -49,6 +52,20 @@ export async function benchGenerator(gen: (...args: any[]) => any, opts: any = {
   if (!n.value?.counters && null != n.value?.counters) opts.$counters = false;
   if (n.value?.after) opts.after = n.value.after;
 
+  const hook = n.value?.snapshot;
+  if (hook !== undefined && 'function' !== typeof hook)
+    throw new TypeError('expected snapshot to be a function');
+
+  let first: unknown;
+  let snapshot: Snapshot | undefined;
+  opts.$first = async (value: unknown) => {
+    first = value;
+    if (!hook) return;
+    const output = await hook();
+    if (output === undefined) throw new TypeError('expected a value to snapshot, got undefined');
+    snapshot = toSnapshot(output);
+  };
+
   if (n.done || 'fn' !== kind($fn)) {
     $fn = n.value?.bench || n.value?.manual;
     if ('fn' !== kind($fn, true)) throw new TypeError('expected benchmarkable yield from generator');
@@ -64,11 +81,19 @@ export async function benchGenerator(gen: (...args: any[]) => any, opts: any = {
   }
 
   const stats = await benchFn($fn, opts);
-  if (!(await g.next()).done) throw new TypeError('expected generator to yield once');
+  const end = await g.next(first);
+  if (!end.done) throw new TypeError('expected generator to yield once');
+
+  if (end.value !== undefined) {
+    if (snapshot !== undefined)
+      throw new TypeError('expected one snapshot source, not both a hook and a generator return');
+    snapshot = toSnapshot(end.value);
+  }
 
   return {
     ...stats,
     kind: 'yield' as const,
+    ...(snapshot !== undefined ? { snapshot } : {}),
   };
 }
 
@@ -97,15 +122,20 @@ export async function benchFn(fn: (...args: any[]) => any, opts: any = {}): Prom
     const t0 = now();
     const r = fn(...$p);
     let t1: number;
+    let first: unknown;
 
     if ((async = r instanceof Promise)) {
-      const value = await r;
-      if (!opts.manual && value !== void 0) consume(value);
+      first = await r;
+      if (!opts.manual && first !== void 0) consume(first);
       t1 = now();
     } else {
+      first = r;
       if (!opts.manual && r !== void 0) consume(r);
       t1 = now();
     }
+
+    // Manual benchmarks return durations instead of results.
+    if (!opts.manual && opts.$first) await opts.$first(first);
 
     if (opts.after) await opts.after();
 

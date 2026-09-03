@@ -1,6 +1,12 @@
 import type { LabsConfig } from './config.ts';
 import { renderMitata, type RenderedCollection } from './bench/render.ts';
-import { hasUnstableSamples, type Context, type Stats, type Trial } from './bench/types.ts';
+import {
+  hasUnstableSamples,
+  isAssertionError,
+  type Context,
+  type Stats,
+  type Trial,
+} from './bench/types.ts';
 import {
   calibrationExplainedFraction,
   comparisonResolution,
@@ -9,7 +15,7 @@ import {
   runMedianSpread,
 } from './stats.ts';
 import type { SavedBenchmarkTrial, SavedFile, SavedResult, FreqSample } from './store.ts';
-import { BLUE, BOLD, DIM, GREEN, RESET, YELLOW } from './utils/ansi.ts';
+import { BLUE, BOLD, DIM, GREEN, RED, RESET, YELLOW } from './utils/ansi.ts';
 import { visibleLength } from './utils/format.ts';
 
 export interface StabilityAffectedBenchmark {
@@ -34,12 +40,21 @@ export function printReportBox(
   maxCpuTime: number,
   saveMsg?: string,
   cpu?: string | null,
-  runConsistency?: RunConsistencyInfo
+  runConsistency?: RunConsistencyInfo,
+  failedChecks: string[] = []
 ): void {
   const lines: string[] = [];
 
   if (saveMsg) {
     lines.push(saveMsg);
+    lines.push('');
+  }
+  if (failedChecks.length > 0) {
+    lines.push(
+      `${RED}✖ Failed checks:${RESET} ${DIM}Assertions did not hold, so these benchmarks have no results.${RESET}`
+    );
+    lines.push(`  ${DIM}Affected benchmarks (${failedChecks.length}):${RESET}`);
+    for (const name of failedChecks) lines.push(`    ${RED}✖${RESET} ${DIM}${name}${RESET}`);
     lines.push('');
   }
   if (envData.length > 0) {
@@ -159,9 +174,11 @@ export function replayReport(result: SavedResult, config: LabsConfig): void {
   const affectedBenchmarks: StabilityAffectedBenchmark[] = [];
   const runMedianSpreads: number[] = [];
   const calibrationExplainedFractions: number[] = [];
+  const failedChecks: string[] = [];
   for (const f of result.files) {
     for (const b of f.benchmarks) {
       for (const run of b.runs) {
+        if (isAssertionError(run.error)) failedChecks.push(run.name || b.alias);
         // Fresh runs use comparison resolution; single runs use adaptive
         // sample stability. These are separate signals with separate causes.
         const runsInconsistent = run.stats?.blocks
@@ -199,7 +216,8 @@ export function replayReport(result: SavedResult, config: LabsConfig): void {
           minDelta: config.minDelta,
           calibrationExplainedFractions,
         }
-      : undefined
+      : undefined,
+    failedChecks
   );
 }
 

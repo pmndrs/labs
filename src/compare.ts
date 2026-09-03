@@ -1,3 +1,5 @@
+import { snapshotsDiffer } from './bench/lib/snapshot.ts';
+import { type Snapshot, isAssertionError } from './bench/types.ts';
 import type { LabsConfig } from './config.ts';
 import { renderDistributions } from './histogram.ts';
 import {
@@ -226,7 +228,24 @@ export interface MissingBench {
   presentIn: 'baseline' | 'candidate';
 }
 
-export type BenchResult = EligibleBench | SkippedBench | MissingBench;
+/** A candidate whose output differs from the baseline. */
+export interface ChangedBench {
+  kind: 'changed';
+  key: BenchKey;
+  baselineP50: number;
+  candidateP50: number;
+}
+
+/** A candidate error without benchmark stats. */
+export interface FailedBench {
+  kind: 'failed';
+  key: BenchKey;
+  /** Whether the error is a failed assertion. */
+  check: boolean;
+  message: string;
+}
+
+export type BenchResult = EligibleBench | SkippedBench | MissingBench | ChangedBench | FailedBench;
 
 export interface CompareResult {
   baselineName: string;
@@ -245,7 +264,8 @@ type LegacyTrial = {
   alias?: string;
   groupName?: string;
   stats?: { samples?: number[]; p99?: number };
-  runs?: Array<{ name?: string; stats?: { samples?: number[]; p99?: number } }>;
+  error?: unknown;
+  runs?: Array<{ name?: string; stats?: { samples?: number[]; p99?: number }; error?: unknown }>;
 };
 
 type ComparableTrial = SavedResult['files'][number]['benchmarks'][number] | LegacyTrial;
@@ -256,22 +276,33 @@ function trialRuns(trial: ComparableTrial): Array<{
   p99: number;
   runMedians?: number[];
   calibrationRates?: number[];
+  snapshot?: Snapshot;
+  error?: unknown;
 }> {
   const alias = (trial as any).alias ?? 'anonymous';
   const runs = (trial as any).runs as Array<any> | undefined;
-  const fromStats = (name: string, stats: any) => ({
+  const fromStats = (name: string, stats: any, error: unknown) => ({
     name,
     samples: Array.isArray(stats?.samples) ? stats.samples : [],
     p99: typeof stats?.p99 === 'number' ? stats.p99 : 0,
     ...(Array.isArray(stats?.blocks?.medians) ? { runMedians: stats.blocks.medians } : {}),
     ...(Array.isArray(stats?.blocks?.freqs) ? { calibrationRates: stats.blocks.freqs } : {}),
+    ...(stats?.snapshot !== undefined ? { snapshot: stats.snapshot } : {}),
+    ...(error !== undefined ? { error } : {}),
   });
 
   if (Array.isArray(runs) && runs.length > 0) {
-    return runs.map((run) => fromStats(run?.name ?? alias, run?.stats));
+    return runs.map((run) => fromStats(run?.name ?? alias, run?.stats, run?.error));
   }
 
-  return [fromStats(alias, (trial as any).stats)];
+  return [fromStats(alias, (trial as any).stats, (trial as any).error)];
+}
+
+function errorMessage(error: unknown): string {
+  if (typeof error === 'object' && error !== null && 'message' in error) {
+    return String((error as { message: unknown }).message);
+  }
+  return String(error);
 }
 
 // ─── Index helpers ───────────────────────────────────────────────────────────
@@ -281,6 +312,14 @@ interface IndexEntry {
   samples: number[];
   runMedians?: number[];
   calibrationRates?: number[];
+  snapshot?: Snapshot;
+  error?: unknown;
+}
+
+/** Median block time, or pooled median for legacy results. */
+function typicalTime(entry: IndexEntry): number {
+  if (entry.runMedians?.length) return median(entry.runMedians);
+  return entry.samples.length ? median(entry.samples) : 0;
 }
 
 function buildIndex(result: SavedResult): Map<string, IndexEntry> {
@@ -294,6 +333,8 @@ function buildIndex(result: SavedResult): Map<string, IndexEntry> {
           samples: run.samples,
           ...(run.runMedians ? { runMedians: run.runMedians } : {}),
           ...(run.calibrationRates ? { calibrationRates: run.calibrationRates } : {}),
+          ...(run.snapshot !== undefined ? { snapshot: run.snapshot } : {}),
+          ...(run.error !== undefined ? { error: run.error } : {}),
         });
       }
     }
@@ -434,6 +475,41 @@ export function compare(
           continue;
         }
 
+        if (run.error !== undefined) {
+          benches.push({
+            kind: 'failed',
+            key: key_,
+            check: isAssertionError(run.error),
+            message: errorMessage(run.error),
+          });
+          continue;
+        }
+
+        if (base.error !== undefined) {
+          const how = isAssertionError(base.error) ? 'failed its check' : 'errored';
+          benches.push({
+            kind: 'skipped',
+            key: key_,
+            reason: `baseline run ${how}: ${errorMessage(base.error)}`,
+          });
+          continue;
+        }
+
+        // Output changes take precedence over speed verdicts.
+        if (
+          base.snapshot !== undefined &&
+          run.snapshot !== undefined &&
+          snapshotsDiffer(base.snapshot, run.snapshot, config.snapshotTolerance)
+        ) {
+          benches.push({
+            kind: 'changed',
+            key: key_,
+            baselineP50: typicalTime(base),
+            candidateP50: typicalTime(run),
+          });
+          continue;
+        }
+
         const benchData = {
           baseline: {
             samples: base.samples,
@@ -515,6 +591,11 @@ export function compare(
   };
 }
 
+/** Whether correctness checks should fail the CLI command. */
+export function compareFailed(result: CompareResult): boolean {
+  return result.benches.some((b) => b.kind === 'changed' || b.kind === 'failed');
+}
+
 // ─── Report formatting ───────────────────────────────────────────────────────
 
 function deltaColor(delta: number, significant: boolean): string {
@@ -557,6 +638,11 @@ export function printCompareReport(result: CompareResult, config: LabsConfig): v
   }
 
   const eligible = result.benches.filter((b): b is EligibleBench => b.kind === 'eligible');
+  const changed = result.benches.filter((b): b is ChangedBench => b.kind === 'changed');
+  const failed = result.benches.filter((b): b is FailedBench => b.kind === 'failed');
+  const rows = result.benches.filter(
+    (b): b is EligibleBench | ChangedBench => b.kind === 'eligible' || b.kind === 'changed'
+  );
   const skipped = result.benches.filter((b): b is SkippedBench => b.kind === 'skipped');
   const baselineOnly = result.benches.filter(
     (b): b is MissingBench => b.kind === 'missing' && b.presentIn === 'baseline'
@@ -565,7 +651,12 @@ export function printCompareReport(result: CompareResult, config: LabsConfig): v
     (b): b is MissingBench => b.kind === 'missing' && b.presentIn === 'candidate'
   );
 
-  if (eligible.length === 0 && skipped.length === 0 && candidateOnly.length === 0) {
+  if (
+    rows.length === 0 &&
+    failed.length === 0 &&
+    skipped.length === 0 &&
+    candidateOnly.length === 0
+  ) {
     console.log(`${DIM}No benchmarks to compare${RESET}`);
     return;
   }
@@ -574,10 +665,10 @@ export function printCompareReport(result: CompareResult, config: LabsConfig): v
 
   const NAME_MAX = 36;
   const nameCol =
-    eligible.length > 0
+    rows.length > 0
       ? Math.min(
           NAME_MAX,
-          Math.max(16, ...eligible.map((b) => (b.key.name || b.key.group || 'anonymous').length))
+          Math.max(16, ...rows.map((b) => (b.key.name || b.key.group || 'anonymous').length))
         )
       : 16;
 
@@ -594,7 +685,7 @@ export function printCompareReport(result: CompareResult, config: LabsConfig): v
 
   // ── Eligible bench table ─────────────────────────────────────────────────
 
-  if (eligible.length > 0) {
+  if (rows.length > 0) {
     const totalWidth =
       4 +
       nameCol +
@@ -625,7 +716,7 @@ export function printCompareReport(result: CompareResult, config: LabsConfig): v
     let lastGroup = '';
     let sawLimitedResolution = false;
 
-    for (const bench of eligible) {
+    for (const bench of rows) {
       if (bench.key.file !== lastFile) {
         if (lastFile) console.log('');
         lastFile = bench.key.file;
@@ -642,10 +733,23 @@ export function printCompareReport(result: CompareResult, config: LabsConfig): v
         }
       }
 
-      const sig = bench.p <= config.alpha;
-      const { color, symbol } = verdictStyle(bench.verdict);
       const rawName = bench.key.name || bench.key.group || 'anonymous';
       const name = truncate(rawName);
+
+      if (bench.kind === 'changed') {
+        const tail = 1 + DELTA_COL + 1 + DELTA_COL + 1 + P_COL + 1 + CI_COL;
+        console.log(
+          `  ${RED}✗${RESET} ${WHITE}${name}${RESET}` +
+            ` ${GRAY}${formatTime(bench.baselineP50).padStart(TIME_COL)}${RESET}` +
+            ` ${GRAY}${formatTime(bench.candidateP50).padStart(TIME_COL)}${RESET}` +
+            `${RED}${'output changed'.padStart(tail)}${RESET}`
+        );
+        console.log('');
+        continue;
+      }
+
+      const sig = bench.p <= config.alpha;
+      const { color, symbol } = verdictStyle(bench.verdict);
       const neutral = bench.verdict === 'neutral';
       const dp50Color = neutral ? DIM : bench.verdict === 'faster' ? GREEN : RED;
       const dp99Color = neutral ? DIM : deltaColor(bench.deltaP99, sig);
@@ -678,6 +782,17 @@ export function printCompareReport(result: CompareResult, config: LabsConfig): v
         `${YELLOW}⚠ Limited resolution:${RESET} ${DIM}Neutral results are inconclusive at the shown resolution.${RESET}`
       );
       console.log('');
+    }
+  }
+
+  // Failed benches
+
+  if (failed.length > 0) {
+    console.log(`\n${RED}failed (${failed.length})${RESET}`);
+    for (const b of failed) {
+      const label = truncate(b.key.name || b.key.group || 'anonymous');
+      const how = b.check ? 'check failed' : 'error';
+      console.log(`  ${RED}✗${RESET} ${label}  ${RED}${how}:${RESET} ${DIM}${b.message}${RESET}`);
     }
   }
 
@@ -736,6 +851,8 @@ export function printCompareReport(result: CompareResult, config: LabsConfig): v
   const neutral = eligible.length - faster - slower;
 
   const parts: string[] = [];
+  if (changed.length > 0) parts.push(`${RED}${changed.length} changed${RESET}`);
+  if (failed.length > 0) parts.push(`${RED}${failed.length} failed${RESET}`);
   if (faster > 0) parts.push(`${GREEN}${faster} faster${RESET}`);
   if (slower > 0) parts.push(`${RED}${slower} slower${RESET}`);
   if (neutral > 0) parts.push(`${DIM}${neutral} neutral${RESET}`);

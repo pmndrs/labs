@@ -32,6 +32,8 @@ export interface Stats {
   noisy?: boolean;
   /** Decisions this measurement made, usable to freeze later blocks. */
   plan?: BlockPlan;
+  /** Output compared with the baseline. */
+  snapshot?: Snapshot;
   /** Per-block summaries when the benchmark ran in multiple fresh processes. */
   blocks?: {
     medians: number[];
@@ -39,6 +41,19 @@ export interface Stats {
     freqs: number[];
   };
 }
+
+/**
+ * Numeric output kept as values so compare can apply a tolerance, with
+ * non-finite numbers spelled out for JSON. Any other output is a digest.
+ */
+export type Snapshot = string | number | Snapshot[];
+
+/** Recognizes assertion errors from Labs and other assertion libraries. */
+export function isAssertionError(error: unknown): boolean {
+  return typeof error === 'object' && error !== null && (error as any).name === 'AssertionError';
+}
+
+export type GeneratorBench = (state: any) => Generator<any, any, any>;
 
 /** Supports results saved before `samplesUnstable` replaced the ambiguous `noisy` name. */
 export function hasUnstableSamples(
@@ -71,6 +86,8 @@ export interface MeasureOptions {
   params?: Record<string | number, (...args: any[]) => any>;
   manual?: string | false;
   args?: Record<string, any>;
+  /** Receives the first untimed result before warmup. */
+  $first?: (value: unknown) => void | Promise<void>;
 }
 
 export type FnKind = 'fn' | 'iter' | 'yield';

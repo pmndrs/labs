@@ -66,7 +66,7 @@ async function probeCalibrationRate(): Promise<number> {
 /** Serializes Error instances the same way the `json` format does. */
 function errorReplacer(_: string, v: any): any {
   if (!(v instanceof Error)) return v;
-  return { message: String(v.message), stack: v.stack };
+  return { name: v.name, message: String(v.message), stack: v.stack };
 }
 
 /**
@@ -207,6 +207,16 @@ function mergeBlocks(parts: Array<{ trial: Trial; calibrationRate?: number }>): 
         );
       }
       if (survivors.length < 2) return run;
+      // Different block snapshots indicate nondeterministic output.
+      const snapshots = new Set(
+        survivors.map((p) => JSON.stringify(p.trial.runs[j]!.stats!.snapshot))
+      );
+      if (snapshots.size > 1) {
+        console.error(
+          `labs: bench "${run.name || pilot.alias}" produced different snapshots across ` +
+            `blocks; make its output deterministic or compare will report it as changed`
+        );
+      }
       return {
         ...run,
         stats: mergeStats(

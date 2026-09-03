@@ -1,8 +1,12 @@
 import { bench, group } from '../../src/index.ts';
 
-bench('sum', () => {
+bench('sum', function* () {
   let s = 0;
-  for (let i = 0; i < 1000; i++) s += i;
+  yield () => {
+    s = 0;
+    for (let i = 0; i < 1000; i++) s += i;
+    return s;
+  };
   return s;
 });
 

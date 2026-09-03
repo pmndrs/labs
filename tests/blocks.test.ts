@@ -363,6 +363,7 @@ describe('worker blocked sampling', () => {
       expect(stats.plan.samples).toBe(12);
       expect(stats.samples).toHaveLength(36);
     }
+    expect(result.benchmarks[0].runs[0].stats.snapshot).toBe(499500);
   });
 
   it('keeps single-block runs identical to unblocked sampling', { timeout: 60_000 }, () => {

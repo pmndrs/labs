@@ -1,5 +1,7 @@
 import { bench as _bench, group as _group, type B } from './bench/index.ts';
+import type { GeneratorBench } from './bench/types.ts';
 
+export { assert, AssertionError } from './assert.ts';
 export { defineConfig } from './config.ts';
 export type { LabsConfig } from './config.ts';
 
@@ -41,10 +43,11 @@ const NOOP_B = new Proxy({} as B, {
   get: (_, prop) => (prop === 'run' ? () => Promise.resolve({}) : () => NOOP_B),
 });
 
+// Keep generator overloads first to prevent implicit any on yield expressions.
+export function bench(gen: GeneratorBench): B;
+export function bench(name: string, gen: GeneratorBench): B;
 export function bench(fn: () => any): B;
 export function bench(name: string, fn: () => any): B;
-export function bench(gen: (state: any) => Generator): B;
-export function bench(name: string, gen: (state: any) => Generator): B;
 export function bench(nameOrFn: string | ((...args: any[]) => any), fn?: any): B {
   if (typeof nameOrFn === 'function') {
     if (!matchesGrep(effectiveTags([]))) return NOOP_B;
