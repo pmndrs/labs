@@ -109,12 +109,12 @@ relation-churn.bench.ts
 
 Labs promises to give results you can trust. To do this a number of guarantees are made when running benches.
 
-- Each bench block runs in its own isolated worker process, preventing benches in the same file from contaminating each other's JIT state, heap layout, or GC history. Reordering benches can otherwise skew results by 2x or more. Opt out with `isolate: false` in the config or `--no-isolate` in the CLI.
+- Each bench block runs in its own isolated worker process, preventing benches in the same file from contaminating each other's JIT state, heap layout, or GC history. Reordering benches can otherwise skew results by 2x or more.
 - GC influence is mitigated. By default, each sample starts with a garbage collection (GC) reset so previous samples don't affect it.
-- Saved benches are run in blocks that are interleaved: `A₁ B₁ C₁ → A₂ B₂ C₂ → … → A₈ B₈ C₈`. This reduces bias from gradual changes such as CPU throttling or even boosting.
-- Timing overhead is controlled. If a sample's measurement time is so fast that the overhead of the timing itself would bias the results, then it is run in a batch.
+- Every bench is run in isolated blocks that are interleaved: `A₁ B₁ C₁ → A₂ B₂ C₂ → … → A₈ B₈ C₈`. This reduces bias from gradual changes such as CPU throttling or even boosting.
+- Timing overhead is controlled. If a sample's measurement time is so fast that the overhead of the timing itself would bias the results, then it is run in a batch sized so each sample lasts about a millisecond.
 - Detect dead code elimination (DCE). If the samples measure the same as an empty function call, then we detect DCE and report it. This can be mitigated by returning a result from the yielded function.
-- Detect if a bench has unstable samples. Samples are taken until the configured uncertainty target is reached. If this fails, a warning is given. This likely means the bench is non-deterministic or affected by runtime interference like background processes.
+- Detect noisy samples. Each block runs for a fixed time budget and sample floor. When the samples inside one process vary widely, a warning is given. This likely means the bench is non-deterministic or affected by runtime interference like background processes.
 - Machine stability is measured. When median timings vary too much across blocks of samples, a warning is given. This can indicate an unstable machine ranging from thermal throttling to background processes.
 
 ### Test correctness
@@ -180,7 +180,7 @@ Linux gives the most controls getting the best possible environment for testing.
 
 ## API
 
-Every run saves results by default, named after the current commit (`abc1234`, with `-dirty` when the tree has uncommitted changes, and a counter for repeat runs: `abc1234-2`). Outside a git repo, names fall back to a timestamp. Each result also records the commit, branch, and dirty state it was produced from. Use `bench run` to execute without saving.
+Every run saves results by default, named after the current commit (`abc1234`, with `-dirty` when the tree has uncommitted changes, and a counter for repeat runs: `abc1234-2`). Outside a git repo, names fall back to a timestamp. Each result also records the commit, branch, and dirty state it was produced from. `bench run` is an alias for `bench`; pass `--no-save` to execute without saving.
 
 ```sh
 pnpm bench                              # run all, save named after the current commit
@@ -196,7 +196,6 @@ pnpm bench --baseline                   # save and set as baseline
 pnpm bench -b                           # shorthand for --baseline
 pnpm bench -n "v1.2.0" -b              # save with name and set as baseline
 pnpm bench --compare                    # save, then compare vs baseline
-pnpm bench --no-isolate                 # share one process per file (skip per-bench isolation)
 pnpm bench --blocks 12                  # save with 12 fresh-process blocks per benchmark
 pnpm bench -c                           # shorthand for --compare
 pnpm bench --last                       # rerun previous selection, save
@@ -207,11 +206,11 @@ Results are saved to `<benchDir>/.labs/results/<name>.json` and include hardware
 ## Running without saving
 
 ```sh
-pnpm bench run                          # run all, no save
-pnpm bench run "relation"              # filtered, no save
-pnpm bench run "@relation"             # filtered by tag, no save
-pnpm bench run --blocks 8              # no save, but use interleaved block sampling
-pnpm bench run --last                  # replay last selection, no save
+pnpm bench --no-save                    # run all, no save
+pnpm bench run --no-save "relation"    # filtered, no save
+pnpm bench --no-save "@relation"       # filtered by tag, no save
+pnpm bench --no-save --blocks 3        # no save, with 3 blocks for faster feedback
+pnpm bench --no-save --last            # replay last selection, no save
 ```
 
 ## Managing Results
@@ -266,14 +265,13 @@ Comparison is gated. Two runs must pass environment checks before results are sh
 
 - **Clock drift** — if either run's CPU frequency drifted > 5% during the run, a warning is shown. On Apple Silicon this is expected (no governor or turbo control); on other platforms it usually means turbo boost or thermal throttling is active.
 - **Clock speed mismatch** — if the two runs' median clock speeds differ by > 5%, a warning is shown. Absolute timings may not be directly comparable.
-- **Isolation mismatch** — if the runs used different per-bench isolation modes, a warning is shown because shared-process JIT and heap state may make their absolute timings incomparable.
 - **Block count mismatch** — unequal counts are supported, but the actual counts determine whether the test can reach the configured significance level.
 
 **Per-benchmark eligibility and annotations:**
 
 - **Not missing** — the bench must exist in both runs. Benches present only in baseline or only in candidate are reported separately.
 - **Limited-resolution benches are annotated, not skipped** — a bench whose approximate between-block resolution is coarser than `minDelta` still gets judged because the rank test already responds to spread. Its row carries a `⚠ ~±N%` marker; a neutral result there is inconclusive at the shown resolution, not evidence of no change.
-- **Block replication** — both sides need at least two fresh-process blocks, and their combined counts must permit an exact p-value at or below `alpha`. Legacy single-process results are descriptive only.
+- **Block replication** — both sides need at least two fresh-process blocks, and their combined counts must permit an exact p-value at or below `alpha`. Results saved before blocked sampling are skipped.
 
 ## Writing a bench
 
@@ -318,7 +316,7 @@ pnpm bench "@slow"        # runs only wildcard
 
 ## Statistical comparison strategy
 
-Saved runs measure each benchmark in fresh-process blocks, eight by default. The first block of each benchmark chooses a measurement plan within its share of the configured budget; later blocks replay its batching and sample-count decisions exactly. Blocks are interleaved across benchmarks so every benchmark spans the run. Inner timing samples remain useful for distributions and p99, but each block's median is treated as one independent experimental unit for comparison verdicts.
+Every run measures each benchmark in fresh-process blocks, eight by default. The first block of each benchmark runs until both the block time budget and the sample floor are met, then records its batching and sample-count decisions; later blocks replay that plan exactly. Blocks are interleaved across benchmarks so every benchmark spans the run. Inner timing samples remain useful for distributions and p99, but each block's median is treated as one independent experimental unit for comparison verdicts.
 
 A change is flagged only when both conditions are met:
 
@@ -355,39 +353,21 @@ export default defineConfig({
 })
 ```
 
-| Option              | Default                                     | Description                                                                                                                                                                                                                                             |
-| ------------------- | ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `benchDir`          | (required)                                  | Directory to search, relative to config file                                                                                                                                                                                                            |
-| `benchMatch`        | `**/*.bench.ts`                             | Glob pattern for discovery                                                                                                                                                                                                                              |
-| `nodeFlags`         | `['--allow-natives-syntax', '--expose-gc']` | Node flags per worker process                                                                                                                                                                                                                           |
-| `resultsDir`        | `.labs`                                     | Directory for saved results, relative to config                                                                                                                                                                                                         |
-| `adaptive`          | `true`                                      | Adaptive sampling mode: `true` uses the default 2.5% relative uncertainty target, `false` uses fixed stopping, and a number sets a custom target                                                                                                        |
-| `maxCpuTime`        | `5`                                         | Maximum sampling-time budget in seconds; a multi-block pilot receives a per-block share, while later blocks replay its fixed sample count                                                                                                               |
-| `minCpuTime`        | `0.642`                                     | Minimum CPU time budget per benchmark in seconds; set to raise/lower runtime budget                                                                                                                                                                     |
-| `minSamples`        | `20`                                        | Minimum sample count per benchmark; set to increase/decrease sample floor                                                                                                                                                                               |
-| `maxSamples`        | `1e9`                                       | Maximum sample cap per benchmark to prevent pathological long runs                                                                                                                                                                                      |
-| `alpha`             | `0.05`                                      | Mann-Whitney U significance level                                                                                                                                                                                                                       |
-| `minDelta`          | `0.05`                                      | Minimum absolute Hodges-Lehmann relative effect for a verdict; rows whose approximate resolution exceeds it are annotated as limited-resolution                                                                                                         |
-| `snapshotTolerance` | `1e-9`                                      | Relative tolerance for numeric snapshots, with an absolute floor at one; digests of non-numeric snapshots are compared exactly                                                                                                                          |
-| `isolate`           | `true`                                      | Run each bench in its own fresh worker process so benches can't contaminate each other's JIT/heap state (order-dependent results); `false` shares one process per file and disables multi-block sampling, so such saves cannot receive compare verdicts |
-| `blocks`            | `8`                                         | Fresh-process blocks per benchmark for saved runs; `bench run` uses one unless overridden with `--blocks`                                                                                                                                               |
+| Option              | Default                                     | Description                                                                                                                                     |
+| ------------------- | ------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| `benchDir`          | (required)                                  | Directory to search, relative to config file                                                                                                    |
+| `benchMatch`        | `**/*.bench.ts`                             | Glob pattern for discovery                                                                                                                      |
+| `nodeFlags`         | `['--allow-natives-syntax', '--expose-gc']` | Node flags per worker process                                                                                                                   |
+| `resultsDir`        | `.labs`                                     | Directory for saved results, relative to config                                                                                                 |
+| `blockTime`         | `0.5`                                       | Time budget per block in seconds; every block runs at least this long and collects at least `minSamples`                                        |
+| `minSamples`        | `20`                                        | Minimum samples per block                                                                                                                       |
+| `alpha`             | `0.05`                                      | Mann-Whitney U significance level                                                                                                               |
+| `minDelta`          | `0.05`                                      | Minimum absolute Hodges-Lehmann relative effect for a verdict; rows whose approximate resolution exceeds it are annotated as limited-resolution |
+| `snapshotTolerance` | `1e-9`                                      | Relative tolerance for numeric snapshots, with an absolute floor at one; digests of non-numeric snapshots are compared exactly                  |
+| `blocks`            | `8`                                         | Fresh-process blocks per benchmark; override per run with `--blocks`                                                                            |
 
 Sampling behavior:
 
-- `adaptive: false`: fixed stopping (`samples >= minSamples` and measured time `>= minCpuTime`) with `maxSamples` as a cap.
-- `adaptive: true`: adaptive stopping at the default 2.5% relative uncertainty target, but never before `minSamples` and `minCpuTime`.
-- `adaptive: <number>`: the same adaptive behavior with a custom target (`0.01` is stricter than `0.025`).
-- In a single-block adaptive run, `maxCpuTime` is the bailout budget. Hitting it before the uncertainty target or `minSamples` reports the samples as unstable.
-- In multi-block mode, the pilot receives `maxCpuTime / blocks` and later blocks replay its plan without adaptive stopping. The saved result does not retain the pilot's convergence flag. Its limited-resolution annotation is instead derived from between-block spread against the current `minDelta`, so changing `minDelta` re-evaluates existing results.
-
-> [!NOTE]
-> **More info: adaptive statistics**
->
-> Labs uses a Welford update in log-space to track the standard error of the mean log timing. This makes the stopping target relative and multiplicative, which is usually more appropriate for timing data than an absolute linear-space target.
->
-> Stopping in adaptive mode is:
->
-> - Floor: wait until both `minSamples` and `minCpuTime` are reached
-> - Converged: stop once the log-space standard error reaches the relative target (`adaptive: true` => `2.5%`, `adaptive: 0.01` => `1%`)
-> - Bailout: if the target or `minSamples` is not reached before `maxCpuTime`, report the samples as unstable
-> - Safety cap: `maxSamples` still limits pathological runs
+- The first block of each benchmark samples until both `blockTime` and `minSamples` are met. Fast work is batched so each sample lasts about a millisecond, and slow work runs until the sample floor is reached even if that exceeds `blockTime`.
+- Later blocks replay the first block's batching and sample count exactly, so every block does identical work.
+- Two spreads are reported. Between-block spread of medians drives the comparison resolution and the limited-resolution annotation, evaluated against the current `minDelta` so changing it re-evaluates existing results. Within-block spread of samples flags noisy benchmarks whose timed work does not settle inside one process.
