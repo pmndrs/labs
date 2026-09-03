@@ -76,8 +76,8 @@ benchmark                   avg (min … max) p75 / p99    (min … top 1%)
 
 - `avg/iter p75`: Average time per iteration and p75, this is the most useful top metric.
 - `(min … max) p99`: Fastest, slowest, and tail time that 99% of samples finish within. This shows the distribution visualized by the histogram.
-- `gc(min … max) avg`: Time spent in per-sample garbage collection. Higher times usually mean the bench keeps more objects alive.
-- `heap(min … max) avg/iter`: Bytes allocated per iteration before collection. Higher values mean more garbage for the runtime to clean up.
+- `gc(min … max) p50`: Per-sample garbage collection time above the fixed cost of collecting the process's live heap. Near zero means the bench adds nothing for the collector to do. Higher values mean it creates garbage or keeps more objects alive.
+- `heap(min … max) p50/iter`: Bytes allocated per iteration, including typed array stores held outside the JS heap. The median ignores the allocation V8 does while compiling the function, so a bench that stays on integers and reuses its objects reports zero.
 
 </details>
 

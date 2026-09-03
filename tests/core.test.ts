@@ -116,6 +116,69 @@ describe('measuring work', () => {
   });
 });
 
+describe('heap accounting', () => {
+  const heapTune = { min_cpu_time: 1, min_samples: 20 } as const;
+  const heapOf = async (fn: () => any) =>
+    (await new B('heap', fn).run(true, heapTune)).runs[0].stats!.heap!;
+
+  it('reports zero for work that stays on small integers and reused objects', async () => {
+    // Values are masked to stay inside the 31 bit Smi range so nothing boxes
+    const v = { x: 1, y: 2, z: 3 };
+    const heap = await heapOf(() => {
+      let s = 0;
+      for (let i = 0; i < 1000; i++) {
+        v.x = (i * 3) & 0xffff;
+        v.y = (v.x + v.y) & 0xffff;
+        s = (s + v.y) & 0xffff;
+      }
+      return s;
+    });
+
+    expect(heap.p50).toBeLessThan(1);
+  });
+
+  it('reports the bytes each iteration allocates', async () => {
+    const heap = await heapOf(() => {
+      const out: number[][] = [];
+      for (let i = 0; i < 1000; i++) out.push([i, i, i]);
+      return out;
+    });
+
+    // A thousand three-element arrays plus the list holding them, returned
+    // so the optimizer cannot remove them
+    expect(heap.p50).toBeGreaterThan(80_000);
+    expect(heap.p50).toBeLessThan(130_000);
+  });
+
+  it('counts typed array stores held outside the JS heap', async () => {
+    const heap = await heapOf(() => new Uint8Array(4096));
+
+    expect(heap.p50).toBeGreaterThanOrEqual(4096);
+  });
+});
+
+describe('sample lifecycle', () => {
+  it('runs the after hook before any measured sample sees the re-timing batch', async () => {
+    let pending = 0;
+    let maxPending = 0;
+    const stats = await measure(function* () {
+      yield {
+        bench: () => {
+          pending++;
+          maxPending = Math.max(maxPending, pending);
+          return pending;
+        },
+        after: () => {
+          pending = 0;
+        },
+      };
+    }, fast);
+
+    expect(stats.plan?.batch).toBe(true);
+    expect(maxPending).toBeLessThanOrEqual(stats.plan!.batch_samples);
+  });
+});
+
 describe('composing a benchmark suite', () => {
   it('runs grouped and parameterized benchmarks with readable names', async () => {
     void group('arrays', () => {

@@ -24,8 +24,10 @@ export interface Stats {
   p75: number;
   p99: number;
   p999: number;
-  gc?: { avg: number; min: number; max: number; total: number };
-  heap?: { avg: number; min: number; max: number; total: number };
+  /** Per sample forced collection time above the process's fixed collection cost. */
+  gc?: { min: number; max: number; p50: number };
+  /** Bytes allocated per iteration, including external memory such as typed array stores. */
+  heap?: { min: number; max: number; p50: number };
   /** Decisions this measurement made, usable to freeze later blocks. */
   plan?: BlockPlan;
   /** Output compared with the baseline. */

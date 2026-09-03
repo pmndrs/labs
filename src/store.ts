@@ -28,8 +28,8 @@ export interface SavedStats {
   p25: number;
   p75: number;
   p99: number;
-  gc?: { avg: number; min: number; max: number };
-  heap?: { avg: number; min: number; max: number };
+  gc?: { min: number; max: number; p50: number };
+  heap?: { min: number; max: number; p50: number };
   plan?: BlockPlan;
   /** Output compared with the baseline. */
   snapshot?: Snapshot;
@@ -281,6 +281,26 @@ function normalizeSavedResult(result: SavedResult): SavedResult {
   };
 }
 
+/** Older results summarized heap and gc with a mean under `avg`. */
+function normalizeRange(range: any): { min: number; max: number; p50: number } | undefined {
+  if (!range) return undefined;
+  return { min: range.min, max: range.max, p50: range.p50 ?? range.avg };
+}
+
+function normalizeRun(run: SavedBenchmarkRun): SavedBenchmarkRun {
+  if (!run.stats) return run;
+  const heap = normalizeRange(run.stats.heap);
+  const gc = normalizeRange(run.stats.gc);
+  return {
+    ...run,
+    stats: {
+      ...run.stats,
+      ...(heap ? { heap } : {}),
+      ...(gc ? { gc } : {}),
+    },
+  };
+}
+
 function normalizeTrial(
   trial: SavedBenchmarkTrial & { stats?: Stats; error?: unknown }
 ): SavedBenchmarkTrial {
@@ -291,7 +311,7 @@ function normalizeTrial(
       gcMode: (trial as any).gcMode ?? 'once',
       kind: trial.kind ?? 'static',
       style: trial.style ?? { compact: false, highlight: false },
-      runs: (trial as any).runs,
+      runs: ((trial as any).runs as SavedBenchmarkRun[]).map(normalizeRun),
     };
   }
 
@@ -330,20 +350,12 @@ export function trimStats(stats: Stats): SavedStats {
     ...(stats.blocks ? { blocks: stats.blocks } : {}),
     ...(stats.gc
       ? {
-          gc: {
-            avg: stats.gc.avg,
-            min: stats.gc.min,
-            max: stats.gc.max,
-          },
+          gc: { min: stats.gc.min, max: stats.gc.max, p50: stats.gc.p50 },
         }
       : {}),
     ...(stats.heap
       ? {
-          heap: {
-            avg: stats.heap.avg,
-            min: stats.heap.min,
-            max: stats.heap.max,
-          },
+          heap: { min: stats.heap.min, max: stats.heap.max, p50: stats.heap.p50 },
         }
       : {}),
   };

@@ -209,7 +209,7 @@ export function renderMitata(
             l += ' '.repeat(k_legend - 10);
             const gcm = formatNs(r.stats!.gc.min).padStart(9);
             const gcx = formatNs(r.stats!.gc.max).padStart(9);
-            const tail = formatNs(r.stats!.gc.avg).padStart(9);
+            const tail = formatNs(r.stats!.gc.p50).padStart(9);
 
             if (!opts.colors) l += 'gc(' + gcm + ' … ' + gcx + ') ' + tail;
             else
@@ -240,7 +240,7 @@ export function renderMitata(
             l = '';
             prev_run_gap = true;
             l += ' '.repeat(k_legend - 12);
-            const ha = formatBytes(r.stats!.heap.avg).padStart(9);
+            const ha = formatBytes(r.stats!.heap.p50).padStart(9);
             const hm = formatBytes(r.stats!.heap.min).padStart(9);
             const hx = formatBytes(r.stats!.heap.max).padStart(9);
 

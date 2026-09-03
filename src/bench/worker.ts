@@ -3,7 +3,7 @@ import { readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { getBenchRegistry } from '../index.ts';
-import { relativeSpread } from '../stats.ts';
+import { median, relativeSpread } from '../stats.ts';
 import { measure, run } from './index.ts';
 import { runTrialAt } from './main.ts';
 import type { BlockPlan, Stats, Trial } from './types.ts';
@@ -116,16 +116,16 @@ function extractPlans(trial: Trial): BlockPlan[] | null {
 
 const percentile = (sorted: number[], p: number) => sorted[(p * (sorted.length - 1)) | 0];
 
-function mergeRange(
-  list: Array<{ avg: number; min: number; max: number; total: number }>,
-  weights: number[]
-): { avg: number; min: number; max: number; total: number } {
-  const totalWeight = weights.reduce((a, v) => a + v, 0) || 1;
+/** Range across blocks and the median of the block medians. */
+function mergeRange(list: Array<{ min: number; max: number; p50: number }>): {
+  min: number;
+  max: number;
+  p50: number;
+} {
   return {
-    avg: list.reduce((a, v, i) => a + v.avg * weights[i], 0) / totalWeight,
     min: Math.min(...list.map((v) => v.min)),
     max: Math.max(...list.map((v) => v.max)),
-    total: list.reduce((a, v) => a + v.total, 0),
+    p50: median(list.map((v) => v.p50)),
   };
 }
 
@@ -137,7 +137,6 @@ function mergeRange(
  */
 function mergeStats(list: Stats[], calibrationRates: number[]): Stats {
   const samples = list.flatMap((s) => s.samples).sort((a, b) => a - b);
-  const weights = list.map((s) => s.samples.length);
   const heaps = list.map((s) => s.heap).filter(Boolean) as NonNullable<Stats['heap']>[];
   const gcs = list.map((s) => s.gc).filter(Boolean) as NonNullable<Stats['gc']>[];
   const medians = list.map((s) => s.p50);
@@ -154,8 +153,8 @@ function mergeStats(list: Stats[], calibrationRates: number[]): Stats {
     p999: percentile(samples, 0.999),
     avg: samples.reduce((a, v) => a + v, 0) / samples.length,
     ticks: list.reduce((a, s) => a + s.ticks, 0),
-    ...(heaps.length === list.length ? { heap: mergeRange(heaps, weights) } : {}),
-    ...(gcs.length === list.length ? { gc: mergeRange(gcs, weights) } : {}),
+    ...(heaps.length === list.length ? { heap: mergeRange(heaps) } : {}),
+    ...(gcs.length === list.length ? { gc: mergeRange(gcs) } : {}),
     // `freqs` is retained in the saved schema for compatibility. The values
     // are software calibration rates, not literal hardware frequencies.
     blocks: { medians, freqs: calibrationRates, spreads: list.map((s) => relativeSpread(s.samples)) },

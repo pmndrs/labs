@@ -6,5 +6,7 @@ export default defineConfig({
   test: {
     fileParallelism: false,
     testTimeout: 20_000,
+    // Heap and gc accounting need the real collector, as the CLI provides
+    execArgv: ['--expose-gc'],
   },
 });

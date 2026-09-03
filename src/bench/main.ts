@@ -177,7 +177,7 @@ export class B {
           getHeapStatistics();
           return () => {
             const m = getHeapStatistics();
-            return m.used_heap_size + m.malloced_memory;
+            return m.used_heap_size + m.malloced_memory + m.external_memory;
           };
         } catch {}
       })(),
