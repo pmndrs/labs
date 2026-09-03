@@ -23,7 +23,7 @@ import {
   trimStats,
   uniqueResultName,
 } from '../store.ts';
-import { BLUE, CYAN, DIM, GREEN, RED, RESET } from '../utils/ansi.ts';
+import { BLUE, CYAN, DIM, GREEN, RED, RESET, YELLOW } from '../utils/ansi.ts';
 import { runBaselineCommand } from './commands/baseline.ts';
 import { runCompareCommand } from './commands/compare.ts';
 import { runDeleteCommand } from './commands/delete.ts';
@@ -373,6 +373,15 @@ export async function runCLI(args: string[]) {
         })),
       })),
     });
+  }
+
+  // A run that selected no benches has nothing worth keeping and would only
+  // clutter later compares, so it is reported but never saved.
+  const benchCount = files.reduce((n, f) => n + f.benchmarks.length, 0);
+  if (benchCount === 0) {
+    const filterNote = tagEnv ? ` for ${tagEnv.split(',').join(' ')}` : '';
+    console.log(`\n${YELLOW}⚠${RESET} No benches ran${filterNote}, nothing to save`);
+    return;
   }
 
   if (!shouldSave) {
