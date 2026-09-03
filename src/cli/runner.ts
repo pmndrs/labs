@@ -3,11 +3,9 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync
 import { createRequire } from 'node:module';
 import { basename, dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { hasUnstableSamples, isAssertionError } from '../bench/types.ts';
 import { compare, compareFailed, printCompareReport } from '../compare.ts';
 import type { LabsConfig } from '../config.ts';
-import { type StabilityAffectedBenchmark, printReportBox } from '../report.ts';
-import { calibrationExplainedFraction, comparisonResolution, runMedianSpread } from '../stats.ts';
+import { collectDiagnostics, emptyDiagnostics, printReportBox } from '../report.ts';
 import {
   type FreqSample,
   type GitInfo,
@@ -25,7 +23,7 @@ import {
   trimStats,
   uniqueResultName,
 } from '../store.ts';
-import { BLUE, CYAN, DIM, GREEN, RED, RESET, YELLOW } from '../utils/ansi.ts';
+import { BLUE, CYAN, DIM, GREEN, RED, RESET } from '../utils/ansi.ts';
 import { runBaselineCommand } from './commands/baseline.ts';
 import { runCompareCommand } from './commands/compare.ts';
 import { runDeleteCommand } from './commands/delete.ts';
@@ -33,47 +31,9 @@ import { runListCommand } from './commands/list.ts';
 import { runPruneCommand } from './commands/prune.ts';
 import { error, gitHint } from './utils.ts';
 
-function collectReportData(
-  workerResult: WorkerResult,
-  file: string,
-  minDelta: number,
-  envData: FreqSample[],
-  affectedBenchmarks: StabilityAffectedBenchmark[],
-  runMedianSpreads: number[],
-  calibrationExplainedFractions: number[],
-  failedChecks: string[]
-): void {
+function freqSample(workerResult: WorkerResult, file: string): FreqSample {
   const runFreq = workerResult.context.cpu.freq;
-  for (const trial of workerResult.benchmarks) {
-    for (const run of trial.runs) {
-      if (isAssertionError(run.error)) failedChecks.push(run.name || trial.alias);
-      const stats = run.stats;
-      if (!stats) continue;
-      // Fresh runs use comparison resolution; single runs use adaptive
-      // sample stability. These are separate signals with separate causes.
-      const runsInconsistent = stats.blocks
-        ? comparisonResolution(stats.blocks.medians) > minDelta
-        : false;
-      const samplesUnstable = !stats.blocks && hasUnstableSamples(stats);
-      if (runsInconsistent || samplesUnstable) {
-        affectedBenchmarks.push({
-          name: run.name || trial.alias,
-          ...(stats.blocks ? { runMedianSpread: runMedianSpread(stats.blocks.medians) } : {}),
-        });
-      }
-      if (stats.blocks) {
-        runMedianSpreads.push(runMedianSpread(stats.blocks.medians));
-        calibrationExplainedFractions.push(
-          calibrationExplainedFraction(stats.blocks.medians, stats.blocks.freqs)
-        );
-      }
-    }
-  }
-  envData.push({
-    file,
-    runFreq,
-    postFreq: workerResult.environment?.postFreq ?? runFreq,
-  });
+  return { file, runFreq, postFreq: workerResult.environment?.postFreq ?? runFreq };
 }
 
 const WORKER_EXT = import.meta.url.endsWith('.ts') ? 'ts' : 'mjs';
@@ -121,10 +81,7 @@ function runBench(
   file: string,
   nodeFlags: string[],
   label: string,
-  tune: Pick<
-    Partial<LabsConfig>,
-    'minCpuTime' | 'minSamples' | 'maxSamples' | 'adaptive' | 'maxCpuTime' | 'isolate' | 'blocks'
-  >,
+  tune: Pick<Partial<LabsConfig>, 'blockTime' | 'minSamples' | 'blocks'>,
   tagFilter?: string,
   resultFile?: string
 ): void {
@@ -141,13 +98,9 @@ function runBench(
     env: {
       ...env,
       LABS_BENCH_FILE: pathToFileURL(file).href,
-      LABS_ISOLATE: String(tune.isolate !== false),
-      LABS_BLOCKS: String(tune.blocks ?? 1),
-      ...(tune.minCpuTime !== undefined ? { LABS_MIN_CPU_TIME: String(tune.minCpuTime * 1e9) } : {}),
+      LABS_BLOCKS: String(tune.blocks ?? 8),
+      ...(tune.blockTime !== undefined ? { LABS_BLOCK_TIME: String(tune.blockTime * 1e9) } : {}),
       ...(tune.minSamples !== undefined ? { LABS_MIN_SAMPLES: String(tune.minSamples) } : {}),
-      ...(tune.maxSamples !== undefined ? { LABS_MAX_SAMPLES: String(tune.maxSamples) } : {}),
-      ...(tune.adaptive !== undefined ? { LABS_ADAPTIVE: String(tune.adaptive) } : {}),
-      ...(tune.maxCpuTime !== undefined ? { LABS_MAX_CPU_TIME: String(tune.maxCpuTime * 1e9) } : {}),
       ...(tagFilter ? { LABS_GREP_TAGS: tagFilter } : {}),
       ...(resultFile ? { LABS_RESULT_FILE: resultFile } : {}),
     },
@@ -238,8 +191,10 @@ export async function runCLI(args: string[]) {
     return;
   }
 
-  const shouldSave = subcmd !== 'run';
-  const benchArgs = shouldSave ? args : args.slice(1);
+  // `bench` and `bench run` are the same command. Every run saves unless
+  // asked not to.
+  const benchArgs = subcmd === 'run' ? args.slice(1) : args;
+  const shouldSave = !benchArgs.includes('--no-save');
   if (benchArgs.includes('--run') || benchArgs.includes('--runs')) {
     error('`--run`/`--runs` are no longer supported; labs is single-run only');
   }
@@ -318,84 +273,13 @@ export async function runCLI(args: string[]) {
     console.log(`${CYAN}labs${RESET}`);
   }
 
-  const isolate = config.isolate !== false && !benchArgs.includes('--no-isolate');
-
-  // Saves default to blocked sampling so between-block variance is captured.
-  // `bench run` stays single-block for inner-loop speed unless asked.
   const blocksFlag = flagValue(benchArgs, '--blocks');
-  if (blocksFlag !== undefined && (!Number.isInteger(Number(blocksFlag)) || Number(blocksFlag) < 1)) {
-    error(`Invalid --blocks value "${blocksFlag}" — expected an integer ≥ 1`);
+  if (blocksFlag !== undefined && (!Number.isInteger(Number(blocksFlag)) || Number(blocksFlag) < 2)) {
+    error(`Invalid --blocks value "${blocksFlag}" — expected an integer ≥ 2`);
   }
-  const requestedBlocks =
-    blocksFlag !== undefined ? Number(blocksFlag) : shouldSave ? (config.blocks ?? 8) : 1;
-  const blocks = isolate ? requestedBlocks : 1;
-  if (!isolate && requestedBlocks > 1) {
-    console.log(
-      `${YELLOW}⚠ blocked sampling requires isolation — running single-block; ` +
-        `compare verdicts need block replication, so this ${shouldSave ? 'save' : 'run'} cannot receive them${RESET}`
-    );
-  }
+  const blocks = blocksFlag !== undefined ? Number(blocksFlag) : (config.blocks ?? 8);
 
-  const benchTune = {
-    minCpuTime: config.minCpuTime,
-    minSamples: config.minSamples,
-    maxSamples: config.maxSamples,
-    adaptive: config.adaptive,
-    maxCpuTime: config.maxCpuTime,
-    isolate,
-    blocks,
-  };
-
-  if (!shouldSave) {
-    const tmpDir = join(cwd, 'node_modules', '.cache', 'labs-tmp');
-    mkdirSync(tmpDir, { recursive: true });
-    const runOutputs: Array<{ file: string; resultFile: string }> = [];
-    for (const f of selected) {
-      const resultFile = join(tmpDir, `${basename(f, '.ts')}-${Date.now()}.json`);
-      runBench(f, config.nodeFlags, suiteName(f), benchTune, tagEnv, resultFile);
-      runOutputs.push({ file: f, resultFile });
-    }
-    const runEnvData: FreqSample[] = [];
-    const runAffectedBenchmarks: StabilityAffectedBenchmark[] = [];
-    const runMedianSpreads: number[] = [];
-    const runCalibrationExplainedFractions: number[] = [];
-    const runFailedChecks: string[] = [];
-    let runCpu: string | null = null;
-    for (const { file, resultFile } of runOutputs) {
-      if (!existsSync(resultFile)) continue;
-      const workerResult: WorkerResult = JSON.parse(readFileSync(resultFile, 'utf-8'));
-      rmSync(resultFile);
-      runCpu ??= workerResult.context.cpu.name;
-      collectReportData(
-        workerResult,
-        suiteName(file),
-        config.minDelta,
-        runEnvData,
-        runAffectedBenchmarks,
-        runMedianSpreads,
-        runCalibrationExplainedFractions,
-        runFailedChecks
-      );
-    }
-    printReportBox(
-      runEnvData,
-      runAffectedBenchmarks,
-      config.maxCpuTime!,
-      undefined,
-      runCpu,
-      blocks > 1
-        ? {
-            freshRuns: blocks,
-            medianSpreads: runMedianSpreads,
-            minDelta: config.minDelta,
-            calibrationExplainedFractions: runCalibrationExplainedFractions,
-          }
-        : undefined,
-      runFailedChecks
-    );
-    if (runFailedChecks.length > 0) process.exitCode = 1;
-    return;
-  }
+  const benchTune = { blockTime: config.blockTime, minSamples: config.minSamples, blocks };
 
   const git = captureGitInfo(dirname(configPath));
 
@@ -411,7 +295,7 @@ export async function runCLI(args: string[]) {
   const saveName = suppliedName ?? defaultName();
 
   const forceOverwrite = benchArgs.includes('--force') || benchArgs.includes('-f');
-  if (!forceOverwrite && resultExists(labsDir, saveName)) {
+  if (shouldSave && !forceOverwrite && resultExists(labsDir, saveName)) {
     const { confirm, isCancel } = await import('@clack/prompts');
     const overwrite = await confirm({
       message: `A result named "${saveName}" already exists. Overwrite?`,
@@ -445,10 +329,7 @@ export async function runCLI(args: string[]) {
   const files: SavedResult['files'] = [];
   let hardwareSet = false;
   const saveEnvData: FreqSample[] = [];
-  const saveAffectedBenchmarks: StabilityAffectedBenchmark[] = [];
-  const saveRunMedianSpreads: number[] = [];
-  const saveCalibrationExplainedFractions: number[] = [];
-  const saveFailedChecks: string[] = [];
+  const saveDiagnostics = emptyDiagnostics();
   let savedNoop: SavedResult['context'] | undefined;
 
   for (const { file, resultFile } of workerOutputs) {
@@ -475,16 +356,8 @@ export async function runCLI(args: string[]) {
       hardwareSet = true;
     }
 
-    collectReportData(
-      workerResult,
-      suiteName(file),
-      config.minDelta,
-      saveEnvData,
-      saveAffectedBenchmarks,
-      saveRunMedianSpreads,
-      saveCalibrationExplainedFractions,
-      saveFailedChecks
-    );
+    saveEnvData.push(freqSample(workerResult, suiteName(file)));
+    collectDiagnostics(workerResult.benchmarks, config.minDelta, saveDiagnostics);
 
     files.push({
       file: suiteName(file),
@@ -508,13 +381,24 @@ export async function runCLI(args: string[]) {
     });
   }
 
+  if (!shouldSave) {
+    printReportBox({
+      envData: saveEnvData,
+      cpu: hardware.cpu,
+      blocks,
+      minDelta: config.minDelta,
+      diagnostics: saveDiagnostics,
+    });
+    if (saveDiagnostics.failedChecks.length > 0) process.exitCode = 1;
+    return;
+  }
+
   const result: SavedResult = {
     name: saveName,
     ...(description ? { description } : {}),
     timestamp: new Date().toISOString(),
     ...(git ? { git } : {}),
     hardware,
-    isolation: isolate ? 'bench' : 'file',
     blocks,
     context: savedNoop,
     files,
@@ -524,7 +408,7 @@ export async function runCLI(args: string[]) {
   saveResult(labsDir, result);
   const isFirstSave = !getBaseline(labsDir);
   let markedBaseline = false;
-  const checksFailed = saveFailedChecks.length > 0;
+  const checksFailed = saveDiagnostics.failedChecks.length > 0;
 
   // Failed checks cannot establish a baseline.
   if ((setAsBaseline || isFirstSave) && !checksFailed) {
@@ -543,22 +427,14 @@ export async function runCLI(args: string[]) {
     .join(', ');
   const saveMsg = `${GREEN}✔${RESET} Saved "${saveName}"${gitNote} (${details})`;
 
-  printReportBox(
-    saveEnvData,
-    saveAffectedBenchmarks,
-    config.maxCpuTime!,
+  printReportBox({
+    envData: saveEnvData,
+    cpu: hardware.cpu,
     saveMsg,
-    hardware.cpu,
-    blocks > 1
-      ? {
-          freshRuns: blocks,
-          medianSpreads: saveRunMedianSpreads,
-          minDelta: config.minDelta,
-          calibrationExplainedFractions: saveCalibrationExplainedFractions,
-        }
-      : undefined,
-    saveFailedChecks
-  );
+    blocks,
+    minDelta: config.minDelta,
+    diagnostics: saveDiagnostics,
+  });
 
   if (shouldCompare) {
     const baselineName = getBaseline(labsDir);
