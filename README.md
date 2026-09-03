@@ -314,6 +314,8 @@ pnpm bench "@relation"    # runs both benches
 pnpm bench "@slow"        # runs only wildcard
 ```
 
+Tags match as whole tokens at both the file and bench level, so `@rel` selects nothing. A run that ends up with no benches warns and is not saved.
+
 ## Statistical comparison strategy
 
 Every run measures each benchmark in fresh-process blocks, eight by default. The first block of each benchmark runs until both the block time budget and the sample floor are met, then records its batching and sample-count decisions; later blocks replay that plan exactly. Blocks are interleaved across benchmarks so every benchmark spans the run. Inner timing samples remain useful for distributions and p99, but each block's median is treated as one independent experimental unit for comparison verdicts.
