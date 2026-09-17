@@ -1,5 +1,5 @@
 import { snapshotsDiffer } from './bench/lib/snapshot.ts';
-import { type Snapshot, isAssertionError } from './bench/types.ts';
+import { type Snapshot, type Stats, isAssertionError } from './bench/types.ts';
 import type { LabsConfig } from './config.ts';
 import { renderDistributions } from './histogram.ts';
 import {
@@ -13,7 +13,8 @@ import {
 import { type FreqSample, type GitInfo, type SavedResult, isEnvironmentStable } from './store.ts';
 import { gitHint } from './cli/utils.ts';
 import { BOLD, CYAN, DARK_GRAY, DIM, GRAY, GREEN, RED, RESET, WHITE, YELLOW } from './utils/ansi.ts';
-import { formatDelta, formatP, formatTime } from './utils/format.ts';
+import { formatDelta, formatP, formatTime, visibleLength } from './utils/format.ts';
+import { formatAmount, formatBytes } from './utils/units.ts';
 
 // ─── Check infrastructure ────────────────────────────────────────────────────
 
@@ -170,11 +171,22 @@ export interface BenchKey {
   name: string;
 }
 
+/** Secondary metric medians and their relative change. `delta` is null when the baseline is zero. */
+export interface MetricChange {
+  baseline: number;
+  candidate: number;
+  delta: number | null;
+}
+
 export interface EligibleBench {
   kind: 'eligible';
   key: BenchKey;
   baselineP50: number;
   candidateP50: number;
+  baselineP99: number;
+  candidateP99: number;
+  baselineRunMedians: number[];
+  candidateRunMedians: number[];
   baselineSamples: number[];
   candidateSamples: number[];
   deltaP50: number;
@@ -193,6 +205,10 @@ export interface EligibleBench {
    * not tell", not "no change".
    */
   comparisonResolution: number;
+  /** Present only when both runs recorded the metric. Descriptive, no verdict. */
+  gc?: MetricChange;
+  heap?: MetricChange;
+  metrics?: Record<string, MetricChange>;
 }
 
 export interface SkippedBench {
@@ -255,6 +271,9 @@ function trialRuns(trial: ComparableTrial): Array<{
   p99: number;
   runMedians?: number[];
   calibrationRates?: number[];
+  gcP50?: number;
+  heapP50?: number;
+  metrics?: Stats['metrics'];
   snapshot?: Snapshot;
   error?: unknown;
 }> {
@@ -266,6 +285,9 @@ function trialRuns(trial: ComparableTrial): Array<{
     p99: typeof stats?.p99 === 'number' ? stats.p99 : 0,
     ...(Array.isArray(stats?.blocks?.medians) ? { runMedians: stats.blocks.medians } : {}),
     ...(Array.isArray(stats?.blocks?.freqs) ? { calibrationRates: stats.blocks.freqs } : {}),
+    ...(typeof stats?.gc?.p50 === 'number' ? { gcP50: stats.gc.p50 } : {}),
+    ...(typeof stats?.heap?.p50 === 'number' ? { heapP50: stats.heap.p50 } : {}),
+    ...(stats?.metrics ? { metrics: stats.metrics } : {}),
     ...(stats?.snapshot !== undefined ? { snapshot: stats.snapshot } : {}),
     ...(error !== undefined ? { error } : {}),
   });
@@ -291,8 +313,20 @@ interface IndexEntry {
   samples: number[];
   runMedians?: number[];
   calibrationRates?: number[];
+  gcP50?: number;
+  heapP50?: number;
+  metrics?: Stats['metrics'];
   snapshot?: Snapshot;
   error?: unknown;
+}
+
+function metricChange(baseline?: number, candidate?: number): MetricChange | undefined {
+  if (baseline === undefined || candidate === undefined) return undefined;
+  return {
+    baseline,
+    candidate,
+    delta: baseline !== 0 ? (candidate - baseline) / Math.abs(baseline) : null,
+  };
 }
 
 /** Median block time, or pooled median for legacy results. */
@@ -312,6 +346,9 @@ function buildIndex(result: SavedResult): Map<string, IndexEntry> {
           samples: run.samples,
           ...(run.runMedians ? { runMedians: run.runMedians } : {}),
           ...(run.calibrationRates ? { calibrationRates: run.calibrationRates } : {}),
+          ...(run.gcP50 !== undefined ? { gcP50: run.gcP50 } : {}),
+          ...(run.heapP50 !== undefined ? { heapP50: run.heapP50 } : {}),
+          ...(run.metrics ? { metrics: run.metrics } : {}),
           ...(run.snapshot !== undefined ? { snapshot: run.snapshot } : {}),
           ...(run.error !== undefined ? { error: run.error } : {}),
         });
@@ -526,11 +563,24 @@ export function compare(
           continue;
         }
 
+        const gc = metricChange(base.gcP50, run.gcP50);
+        const heap = metricChange(base.heapP50, run.heapP50);
+        const metrics = Object.fromEntries(
+          Object.entries(run.metrics ?? {}).flatMap(([name, value]) => {
+            const change = metricChange(base.metrics?.[name]?.p50, value.p50);
+            return change ? [[name, change]] : [];
+          })
+        );
+
         benches.push({
           kind: 'eligible',
           key: key_,
           baselineP50: baselineMedian,
           candidateP50: candidateMedian,
+          baselineP99: base.p99,
+          candidateP99: run.p99,
+          baselineRunMedians: base.runMedians!,
+          candidateRunMedians: run.runMedians!,
           baselineSamples: base.samples,
           candidateSamples: run.samples,
           deltaP50,
@@ -545,6 +595,9 @@ export function compare(
             comparisonResolution(base.runMedians!),
             comparisonResolution(run.runMedians!)
           ),
+          ...(gc ? { gc } : {}),
+          ...(heap ? { heap } : {}),
+          ...(Object.keys(metrics).length ? { metrics } : {}),
         });
       }
     }
@@ -568,6 +621,13 @@ export function compareFailed(result: CompareResult): boolean {
 }
 
 // ─── Report formatting ───────────────────────────────────────────────────────
+
+/** Percent change with one decimal, dropped past 1000% so it stays inside its column. */
+function formatChange(delta: number): string {
+  const pct = delta * 100;
+  if (Math.abs(pct) >= 1000) return `${pct > 0 ? '+' : ''}${pct.toFixed(0)}%`;
+  return formatDelta(delta);
+}
 
 function deltaColor(delta: number, significant: boolean): string {
   if (!significant) return DIM;
@@ -634,19 +694,37 @@ export function printCompareReport(result: CompareResult, config: LabsConfig): v
 
   // ── Column widths ────────────────────────────────────────────────────────
 
-  const NAME_MAX = 36;
-  const nameCol =
-    rows.length > 0
-      ? Math.min(
-          NAME_MAX,
-          Math.max(16, ...rows.map((b) => (b.key.name || b.key.group || 'anonymous').length))
-        )
-      : 16;
+  const nameCol = Math.max(28, ...rows.map((b) => (b.key.name || b.key.group || 'anonymous').length));
+
+  const metricTag = (label: string, value: string, delta: number | null) => {
+    const change = delta === null ? '—' : formatChange(delta);
+    const changeColor = delta !== null && Math.abs(delta) >= config.minDelta ? WHITE : DIM;
+    return `${GRAY}${label}(${value} ${changeColor}${change}${RESET}${GRAY})${RESET}`;
+  };
+  const metrics = new Map(
+    eligible.map((bench) => [
+      bench,
+      {
+        gc: bench.gc ? metricTag('gc', formatTime(bench.gc.candidate), bench.gc.delta) : '',
+        heap: bench.heap
+          ? metricTag('heap', formatBytes(bench.heap.candidate, false), bench.heap.delta)
+          : '',
+        custom: Object.entries(bench.metrics ?? {}).map(([name, metric]) =>
+          metricTag(name, formatAmount(metric.candidate), metric.delta)
+        ),
+      },
+    ])
+  );
+  const gcCol = Math.max(17, ...Array.from(metrics.values(), (metric) => visibleLength(metric.gc)));
+  const heapCol = Math.max(
+    21,
+    ...Array.from(metrics.values(), (metric) => visibleLength(metric.heap))
+  );
 
   const TIME_COL = 10;
   const DELTA_COL = 7;
   const P_COL = 5;
-  const CI_COL = 14;
+  const CI_COL = Math.max(19, gcCol + heapCol - 2 * DELTA_COL - P_COL);
 
   const truncate = (s: string) =>
     s.length > nameCol ? s.slice(0, nameCol - 1) + '…' : s.padEnd(nameCol);
@@ -744,7 +822,28 @@ export function printCompareReport(result: CompareResult, config: LabsConfig): v
         ? `${' '.repeat(1 + DELTA_COL + 1 + DELTA_COL + 1 + P_COL + 1)}` +
           `${YELLOW}${resolutionLabel.padStart(CI_COL)}${RESET}`
         : '';
-      console.log(`${' '.repeat(4 + nameCol)} ${dist.baseline} ${dist.candidate}${resolutionMark}`);
+
+      const distLine = `${' '.repeat(4 + nameCol)} ${dist.baseline} ${dist.candidate}`;
+      const metric = metrics.get(bench)!;
+      if (metric.gc || metric.heap || metric.custom.length > 0) {
+        const indent = ' '.repeat(visibleLength(distLine));
+        let line = distLine;
+        if (metric.gc || metric.heap) {
+          line += `  ${metric.gc}${' '.repeat(gcCol - visibleLength(metric.gc))}  ${metric.heap}`;
+          line = line.trimEnd();
+        }
+        for (const tag of metric.custom) {
+          if (visibleLength(line) + 2 + visibleLength(tag) > totalWidth && line !== distLine) {
+            console.log(line);
+            line = indent;
+          }
+          line += `  ${tag}`;
+        }
+        console.log(line);
+        if (hasLimitedResolution) console.log(`${indent}${resolutionMark}`);
+      } else {
+        console.log(`${distLine}${resolutionMark}`);
+      }
       console.log('');
     }
 

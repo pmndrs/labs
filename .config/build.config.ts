@@ -24,6 +24,7 @@ export default defineConfig({
   },
   clean: true,
   deps: {
+    alwaysBundle: ['fast-string-width', 'fast-string-truncated-width'],
     neverBundle: ['@mitata/counters', 'bun:jsc'],
   },
 });
