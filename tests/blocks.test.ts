@@ -217,7 +217,7 @@ describe('comparing blocked results', () => {
     }
 
     expect(lines).toContain('  clock-confounded');
-    expect(lines).toContain('  · unit              slower→neutral · 4.00→3.50');
+    expect(lines.some((line) => /^  · unit +slower→neutral · 4\.00→3\.50$/.test(line))).toBe(true);
   });
 
   it('keeps verdicts when clocks are effectively equal despite probe jitter', () => {
@@ -352,6 +352,9 @@ describe('worker blocked sampling', () => {
       expect(stats.samples).toHaveLength(36);
     }
     expect(result.benchmarks[0].runs[0].stats.snapshot).toBe(499500);
+    expect(result.benchmarks[0].runs[0].stats.metrics).toEqual({
+      retainedBytes: { min: 1024, max: 4096, p50: 4096 },
+    });
   });
 
   it('never runs fewer than two blocks', { timeout: 60_000 }, () => {

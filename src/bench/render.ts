@@ -421,6 +421,11 @@ export function renderMitata(
             }
           }
         }
+        for (const [name, metric] of Object.entries(r.stats!.metrics ?? {})) {
+          prev_run_gap = true;
+          const line = `${' '.repeat(k_legend - 12)}${name}(${formatAmount(metric.min)} … ${formatAmount(metric.max)}) ${formatAmount(metric.p50)}`;
+          print(opts.colors ? ansi.gray + line + ansi.reset : line);
+        }
       }
     }
 

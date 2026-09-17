@@ -11,6 +11,9 @@ importers:
       '@clack/prompts':
         specifier: ^1.7.0
         version: 1.7.0
+      fast-string-width:
+        specifier: ^3.0.2
+        version: 3.0.2
       tsx:
         specifier: ^4.23.12
         version: 4.23.12

@@ -22,6 +22,7 @@ export interface SavedStats {
   kind: Stats['kind'];
   samples: number[];
   counters?: any;
+  metrics?: Stats['metrics'];
   min: number;
   max: number;
   avg: number;
@@ -339,6 +340,7 @@ export function trimStats(stats: Stats): SavedStats {
     kind: stats.kind,
     samples: stats.samples,
     ...(stats.counters ? { counters: stats.counters } : {}),
+    ...(stats.metrics ? { metrics: stats.metrics } : {}),
     min: stats.min,
     max: stats.max,
     avg: stats.avg,

@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync
 import { createRequire } from 'node:module';
 import { basename, dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { compare, compareFailed, printCompareReport } from '../compare.ts';
+import { compare, compareFailed } from '../compare.ts';
 import type { LabsConfig } from '../config.ts';
 import { collectDiagnostics, emptyDiagnostics, printReportBox } from '../report.ts';
 import {
@@ -29,6 +29,7 @@ import { runCompareCommand } from './commands/compare.ts';
 import { runDeleteCommand } from './commands/delete.ts';
 import { runListCommand } from './commands/list.ts';
 import { runPruneCommand } from './commands/prune.ts';
+import { showCompareReport } from './compare-screen.ts';
 import { error, fileHasAnyTag, gitHint } from './utils.ts';
 
 function freqSample(workerResult: WorkerResult, file: string): FreqSample {
@@ -449,9 +450,9 @@ export async function runCLI(args: string[]) {
       try {
         const baselineResult = loadResult(labsDir, baselineName);
         const comparison = compare(baselineResult, result, config);
-        printCompareReport(comparison, config);
         setLastComparison(labsDir, baselineName, saveName);
         if (compareFailed(comparison)) process.exitCode = 1;
+        await showCompareReport(comparison, config);
       } catch (e: any) {
         console.log(`\n${RED}✖${RESET} Compare failed: ${e.message}`);
       }

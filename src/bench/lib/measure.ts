@@ -58,6 +58,9 @@ export async function benchGenerator(gen: (...args: any[]) => any, opts: any = {
   const hook = n.value?.snapshot;
   if (hook !== undefined && 'function' !== typeof hook)
     throw new TypeError('expected snapshot to be a function');
+  const metricsHook = n.value?.metrics;
+  if (metricsHook !== undefined && typeof metricsHook !== 'function')
+    throw new TypeError('expected metrics to be a function');
 
   let first: unknown;
   let snapshot: Snapshot | undefined;
@@ -84,6 +87,18 @@ export async function benchGenerator(gen: (...args: any[]) => any, opts: any = {
   }
 
   const stats = await benchFn($fn, opts);
+  if (metricsHook) {
+    const values = await metricsHook();
+    if (values === null || typeof values !== 'object' || Array.isArray(values))
+      throw new TypeError('expected metrics to return an object of finite numbers');
+    stats.metrics = Object.fromEntries(
+      Object.entries(values).map(([name, value]) => {
+        if (typeof value !== 'number' || !Number.isFinite(value))
+          throw new TypeError(`expected metric "${name}" to be a finite number`);
+        return [name, { min: value, max: value, p50: value }];
+      })
+    );
+  }
   const end = await g.next(first);
   if (!end.done) throw new TypeError('expected generator to yield once');
 

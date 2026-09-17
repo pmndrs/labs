@@ -14,7 +14,10 @@ export interface Stats {
   debug: string;
   ticks: number;
   samples: number[];
+  /** Hardware counters supplied by the runtime backend. */
   counters?: any;
+  /** User measurements summarized across blocks, independent of correctness snapshots. */
+  metrics?: Record<string, { min: number; max: number; p50: number }>;
   kind: 'fn' | 'iter' | 'yield';
   min: number;
   max: number;

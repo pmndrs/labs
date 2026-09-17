@@ -33,6 +33,7 @@
   },
   "dependencies": {
     "@clack/prompts": "^1.7.0",
+    "fast-string-width": "^3.0.2",
     "tsx": "^4.23.12"
   },
   "devDependencies": {

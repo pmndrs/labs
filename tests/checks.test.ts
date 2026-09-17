@@ -9,7 +9,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { assert, AssertionError } from '../src/assert.ts';
 import { B, measure } from '../src/bench/index.ts';
 import { serialize, snapshotsDiffer, toSnapshot } from '../src/bench/lib/snapshot.ts';
-import { type Snapshot, isAssertionError } from '../src/bench/types.ts';
+import { type Snapshot, type Stats, isAssertionError } from '../src/bench/types.ts';
 import { compare, printCompareReport } from '../src/compare.ts';
 import { defineConfig } from '../src/config.ts';
 import type { SavedResult } from '../src/store.ts';
@@ -204,7 +204,13 @@ describe('checking results', () => {
 
 function syntheticResult(
   name: string,
-  opts: { snapshot?: Snapshot; error?: unknown } = {}
+  opts: {
+    snapshot?: Snapshot;
+    error?: unknown;
+    gc?: number;
+    heap?: number;
+    metrics?: Stats['metrics'];
+  } = {}
 ): SavedResult {
   const medians = [100, 100.4, 99.7, 100.2, 99.9, 100.1, 99.8, 100.3];
   const samples = medians.flatMap((m) => [m - 0.01, m, m + 0.01]).sort((a, b) => a - b);
@@ -218,6 +224,9 @@ function syntheticResult(
     p75: 100.2,
     p99: 100.4,
     ...(opts.snapshot !== undefined ? { snapshot: opts.snapshot } : {}),
+    ...(opts.gc !== undefined ? { gc: { min: opts.gc, max: opts.gc, p50: opts.gc } } : {}),
+    ...(opts.heap !== undefined ? { heap: { min: opts.heap, max: opts.heap, p50: opts.heap } } : {}),
+    ...(opts.metrics ? { metrics: opts.metrics } : {}),
     blocks: { medians, freqs: medians.map(() => 4) },
   };
   return {
@@ -364,5 +373,133 @@ describe('worker checks', () => {
     expect(fails.runs[0].error.name).toBe('AssertionError');
     expect(fails.runs[0].error.message).toBe('expected 3 but got 2');
     expect(mutates.runs[0].stats.snapshot).toBe(1);
+  });
+});
+
+describe('comparing memory', () => {
+  const eligible = (result: ReturnType<typeof compare>) => {
+    const bench = result.benches[0];
+    if (bench.kind !== 'eligible') throw new Error(`expected eligible, got ${bench.kind}`);
+    return bench;
+  };
+
+  it('reports custom metrics without changing the correctness or timing verdict', () => {
+    const result = compare(
+      syntheticResult('a', {
+        snapshot: 1,
+        metrics: {
+          retainedBytes: { min: 100, max: 100, p50: 100 },
+          zero: { min: 0, max: 0, p50: 0 },
+          baselineOnly: { min: 1, max: 1, p50: 1 },
+        },
+      }),
+      syntheticResult('b', {
+        snapshot: 1,
+        metrics: {
+          retainedBytes: { min: 200, max: 200, p50: 200 },
+          zero: { min: 1, max: 1, p50: 1 },
+          candidateOnly: { min: 1, max: 1, p50: 1 },
+        },
+      }),
+      CONFIG
+    );
+    const bench = eligible(result);
+    expect(bench.verdict).toBe('neutral');
+    expect(bench.metrics).toEqual({
+      retainedBytes: { baseline: 100, candidate: 200, delta: 1 },
+      zero: { baseline: 0, candidate: 1, delta: null },
+    });
+    const lines = captureReport(result);
+    expect(lines.some((line) => line.includes('retainedBytes(200.00 +100.0%)'))).toBe(true);
+    const metricLines = lines.filter((line) => /retainedBytes\(|zero\(/.test(line));
+    expect(metricLines.some((line) => line.includes('zero(1.00 —)'))).toBe(true);
+    expect(metricLines.every((line) => line.length <= 96)).toBe(true);
+  });
+
+  it('reports candidate gc and heap medians with their change from the baseline', () => {
+    const result = compare(
+      syntheticResult('a', { gc: 0, heap: 100 }),
+      syntheticResult('b', { gc: 0, heap: 250 }),
+      CONFIG
+    );
+    const bench = eligible(result);
+
+    expect(bench.gc).toEqual({ baseline: 0, candidate: 0, delta: null });
+    expect(bench.heap).toEqual({ baseline: 100, candidate: 250, delta: 1.5 });
+    const lines = captureReport(result);
+    expect(lines.some((line) => /gc\(0\.00ns —\) +heap\(250\.00 b \+150\.0%\)/.test(line))).toBe(
+      true
+    );
+  });
+
+  it('omits a metric either run did not record', () => {
+    const result = compare(
+      syntheticResult('a', { heap: 100 }),
+      syntheticResult('b', { heap: 100, gc: 5 }),
+      CONFIG
+    );
+    const bench = eligible(result);
+
+    expect(bench.gc).toBeUndefined();
+    expect(bench.heap).toEqual({ baseline: 100, candidate: 100, delta: 0 });
+    const lines = captureReport(result);
+    expect(lines.some((line) => line.includes('heap(100.00 b 0.0%)') && !line.includes('gc('))).toBe(
+      true
+    );
+  });
+
+  it('aligns graphs, gc, and heap across a 96-column table', () => {
+    const result = compare(
+      syntheticResult('a', { gc: 1_580_000, heap: 47_620_000 }),
+      syntheticResult('b', { gc: 1_410_000, heap: 42_100_000 }),
+      CONFIG
+    );
+    const bench = eligible(result);
+    bench.key.name = 'rebuild entity relationships';
+    bench.comparisonResolution = 0.1;
+    const heapOnly = { ...bench, key: { ...bench.key, name: 'reuse existing entities' } };
+    delete heapOnly.gc;
+    result.benches.push(
+      {
+        ...bench,
+        key: { ...bench.key, name: 'empty world' },
+        gc: { baseline: 0, candidate: 0, delta: null },
+      },
+      heapOnly
+    );
+
+    const lines = captureReport(result);
+    const header = lines.find((line) => line.includes('Δ 95% CI'))!;
+    const rows = lines.filter((line) => /^  [▲▼■] /.test(line));
+    const details = rows.map((row) => lines[lines.indexOf(row) + 1]);
+    expect(header).toHaveLength(96);
+    expect(rows).toHaveLength(3);
+    expect(rows[0]).toContain('rebuild entity relationships');
+    expect(rows.every((line) => line.length === 96)).toBe(true);
+    expect(details.every((line) => line.length <= 96)).toBe(true);
+    for (const line of details) {
+      const graphs = [...line.matchAll(/[▁▂▃▄▅▆▇█]{10}/g)];
+      expect(graphs).toHaveLength(2);
+      expect(graphs[0].index + 10).toBe(header.indexOf('baseline') + 'baseline'.length);
+      expect(graphs[1].index + 10).toBe(header.indexOf('candidate') + 'candidate'.length);
+      expect(line.indexOf('heap(')).toBe(details[0].indexOf('heap('));
+    }
+    expect(details[1].indexOf('gc(')).toBe(details[0].indexOf('gc('));
+    expect(details[2]).not.toContain('gc(');
+    const warnings = lines.filter((line) => line.includes('⚠ ~±'));
+    expect(warnings).toHaveLength(3);
+    expect(warnings.every((line) => line.length === 96)).toBe(true);
+  });
+
+  it('expands the table for longer benchmark titles', () => {
+    const result = compare(syntheticResult('a'), syntheticResult('b'), CONFIG);
+    const bench = eligible(result);
+    bench.key.name = 'rebuild entity relationships after removal';
+    const lines = captureReport(result);
+
+    expect(lines.find((line) => line.includes('Δ 95% CI'))).toHaveLength(
+      96 + bench.key.name.length - 28
+    );
+    expect(lines.some((line) => line.includes(bench.key.name))).toBe(true);
   });
 });
