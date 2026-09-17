@@ -30,6 +30,8 @@ import { runDeleteCommand } from './commands/delete.ts';
 import { runListCommand } from './commands/list.ts';
 import { runPruneCommand } from './commands/prune.ts';
 import { showCompareReport } from './compare-screen.ts';
+import { showRunReport } from './run-screen.ts';
+import { isInteractiveTerminal } from './screen.ts';
 import { error, fileHasAnyTag, gitHint } from './utils.ts';
 
 function freqSample(workerResult: WorkerResult, file: string): FreqSample {
@@ -385,18 +387,6 @@ export async function runCLI(args: string[]) {
     return;
   }
 
-  if (!shouldSave) {
-    printReportBox({
-      envData: saveEnvData,
-      cpu: hardware.cpu,
-      blocks,
-      minDelta: config.minDelta,
-      diagnostics: saveDiagnostics,
-    });
-    if (saveDiagnostics.failedChecks.length > 0) process.exitCode = 1;
-    return;
-  }
-
   const result: SavedResult = {
     name: saveName,
     ...(description ? { description } : {}),
@@ -408,6 +398,19 @@ export async function runCLI(args: string[]) {
     files,
     environment: { freqs: saveEnvData },
   };
+
+  if (!shouldSave) {
+    printReportBox({
+      envData: saveEnvData,
+      cpu: hardware.cpu,
+      blocks,
+      minDelta: config.minDelta,
+      diagnostics: saveDiagnostics,
+    });
+    if (saveDiagnostics.failedChecks.length > 0) process.exitCode = 1;
+    if (isInteractiveTerminal()) await showRunReport(result, config, false);
+    return;
+  }
 
   saveResult(labsDir, result);
   const isFirstSave = !getBaseline(labsDir);
@@ -439,6 +442,8 @@ export async function runCLI(args: string[]) {
     minDelta: config.minDelta,
     diagnostics: saveDiagnostics,
   });
+
+  if (!shouldCompare && isInteractiveTerminal()) await showRunReport(result, config);
 
   if (shouldCompare) {
     const baselineName = getBaseline(labsDir);

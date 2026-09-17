@@ -1,5 +1,4 @@
 import { isCancel, select } from '@clack/prompts';
-import { replayReport } from '../../report.ts';
 import {
   getBaseline,
   isEnvironmentStable,
@@ -8,6 +7,7 @@ import {
   resultMedianFreq,
 } from '../../store.ts';
 import { DIM, RESET } from '../../utils/ansi.ts';
+import { showRunReport } from '../run-screen.ts';
 import type { CLIContext } from '../types.ts';
 import { dateHint, gitHint } from '../utils.ts';
 
@@ -45,5 +45,5 @@ export async function runListCommand(ctx: CLIContext): Promise<void> {
   }
 
   const result = loadResult(ctx.labsDir, chosen as string);
-  replayReport(result, ctx.config);
+  await showRunReport(result, ctx.config);
 }

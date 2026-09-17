@@ -6,6 +6,7 @@ import * as boxplotFmt from './format/boxplot.ts';
 import * as barplotFmt from './format/barplot.ts';
 import * as lineplotFmt from './format/lineplot.ts';
 import { isAssertionError, type Context, type GcMode, type Trial } from './types.ts';
+import { isLikelyOptimizedOut } from './diagnostics.ts';
 
 export interface RenderedTrial {
   highlight: false | string | null;
@@ -112,13 +113,7 @@ export function renderMitata(
         }
 
         const compact = trial.compact;
-        const noop =
-          'iter' === r.stats!.kind
-            ? ctx.noop.iter
-            : trial.gcMode !== true && trial.gcMode !== 'inner'
-              ? ctx.noop.fn
-              : ctx.noop.fn_gc;
-        const optimized_out = r.stats!.avg < 1.42 * noop.avg;
+        const optimized_out = isLikelyOptimizedOut(r.stats!, trial.gcMode, ctx.noop);
         optimized_out_warning = optimized_out_warning || optimized_out;
 
         if (compact) {
