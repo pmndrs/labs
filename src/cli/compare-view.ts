@@ -445,7 +445,7 @@ export function renderCompareView(
     namesWidth - baselineWidth - 3
   );
   if (warning) canvas.put(0, width - textWidth(warning) - 1, warning, YELLOW);
-  const listColumns = innerWidth >= 71 ? [innerWidth - 43, 11, 11, 9, 8] : [innerWidth - 23, 11, 10];
+  const listColumns = innerWidth >= 71 ? [innerWidth - 41, 11, 11, 7, 8] : [innerWidth - 23, 11, 10];
   const listRow = (row: number, values: string[], styles: string[]) => {
     let x = 1;
     values.forEach((value, index) => {
