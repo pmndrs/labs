@@ -89,21 +89,9 @@ Compare against a baseline.
 bench compare
 ```
 
-In interactive terminals, this opens the full-screen comparison browser. Redirected output uses a printable report:
+Browse the results in a full-screen comparison view. Select a benchmark to see its timings, memory use, run consistency, and confidence interval.
 
-```bash
-━━ compare 2026-03-20_16-25-36 -> 2026-03-20_16-36-12
-Apple M4 Pro
-Mann-Whitney U on block medians  α=0.05  minΔ=5%
-
-relation-churn.bench.ts
-  bench                            baseline  candidate    Δp50    Δp99     p            Δ 95% CI
-------------------------------------------------------------------------------------------------
-  • relation churn
-  ----------------------------------------------------------------------------------------------
-  ▲ big test                        17.97ms    16.16ms  -10.1%  -10.1% <.001        -10.3..-9.8%
-                                 ▁▁▁▁▁▁▁▁▂█ █▃▁▁▁▁▁▁▁▁  gc(1.41ms -10.8%)  heap(40.15 mb -11.6%)
-```
+<img src="docs/images/compare.png" width="760" alt="Labs comparison view with a benchmark list, baseline and candidate measurements, run consistency, and a 95% confidence interval" />
 
 ## Guarantees
 
@@ -270,7 +258,7 @@ pnpm bench compare -l                 # shorthand for --last
 
 In an interactive terminal, comparison opens a full-screen view with a scrolling benchmark list and a fixed inspector below it. Use `↑` / `↓`, `Page Up` / `Page Down`, or `Home` / `End` to select a result. Press `q` or `Esc` to return to the previous terminal screen. `Ctrl+C` exits with code 130. The layout follows terminal resizing, and `[` / `]` scroll inspector details when the screen is short or a result has extra metrics or warnings.
 
-The inspector shows baseline and candidate medians, pooled-sample histograms on a shared scale, p99, GC, and heap per iteration. A shaded row shows the changes. The `p` badge sits beside the benchmark name. Below the measurements:
+The inspector shows baseline and candidate medians, pooled-sample histograms on a shared scale, p99, GC, and heap per iteration. A shaded row shows the percentage changes. The `p` badge sits beside the benchmark name, and the footer summarizes faster, slower, and neutral results alongside the controls. Below the measurements:
 
 - **consistency ✦ N runs** plots the actual fresh-process block medians in two adjacent rows, baseline in cyan above candidate in magenta. Single runs use dim dots, and grouped runs use a stronger intensity within each row. Endpoint labels describe the shared time scale.
 - **spread ✦ 95% ci** shows the Hodges-Lehmann effect and its confidence interval, with the bounds below the end caps. The shaded band is `±minDelta`, and the central mark is zero. The confidence level follows `alpha`, and all benchmarks share the same effect scale.
