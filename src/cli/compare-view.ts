@@ -176,7 +176,7 @@ function measurements(canvas: TerminalCanvas, bench: EligibleBench, y: number): 
       delta: change(bench.gc?.delta),
     },
     {
-      label: 'heap / iter',
+      label: 'heap',
       base: bench.heap ? bytes(bench.heap.baseline) : '—',
       cand: bench.heap ? bytes(bench.heap.candidate) : '—',
       delta: change(bench.heap?.delta),

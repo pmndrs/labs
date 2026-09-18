@@ -145,12 +145,11 @@ describe('run report', () => {
     expect(text).toContain('1.00–2.00 KiB');
     expect(text).toContain('1 warning');
     expect(text).not.toContain('min–max');
-    const avg = frame.lines.find(
-      (line) => line.includes('avg / iter') && line.includes('575.00 ns')
-    )!;
+    const avg = frame.lines.find((line) => line.includes('avg') && line.includes('575.00 ns'))!;
     const p75 = frame.lines.find((line) => line.includes('p75') && line.includes('650.00 ns'))!;
+    expect(avg).toContain('avg  575.00 ns');
     expect(avg).toContain('gc');
-    expect(avg).toContain('heap / iter');
+    expect(avg).toContain('heap');
     expect(p75).toContain('15.00 ns');
     expect(p75).toContain('1.50 KiB');
     const consistency = frame.lines.find((line) => line.includes('consistency'))!;
@@ -162,10 +161,10 @@ describe('run report', () => {
     const dots = frame.lines[frame.lines.indexOf(consistency) + 2];
     expect(dots.indexOf('╞')).toBe(1);
     expect(dots.indexOf('╡')).toBe(47);
-    expect(avg.indexOf('gc') + 2).toBe(header.indexOf('avg / iter') + 10);
-    expect(avg.indexOf('heap / iter') + 11).toBe(header.indexOf('heap / iter') + 11);
+    expect(avg.indexOf('gc') + 2).toBe(header.indexOf('avg') + 3);
+    expect(avg.indexOf('heap') + 4).toBe(header.indexOf('heap') + 4);
     expect(avg.indexOf('gc') + 2).toBe(p75.indexOf('15.00 ns') + 8);
-    expect(avg.indexOf('heap / iter') + 11).toBe(p75.indexOf('1.50 KiB') + 8);
+    expect(avg.indexOf('heap') + 4).toBe(p75.indexOf('1.50 KiB') + 8);
     expect(avg.indexOf('575.00 ns')).toBe(p75.indexOf('650.00 ns'));
     expect(p99.indexOf('400.00 ns')).toBeLessThan(avg.indexOf('gc'));
     const colored = renderRunView(result, defineConfig({ benchDir: '.' }), {
@@ -185,13 +184,12 @@ describe('run report', () => {
       stats.gc = { min: 1.58e6, max: 1.58e6, p50: 1.58e6 };
       stats.heap = { min: 45.39 * 1024 ** 2, max: 45.39 * 1024 ** 2, p50: 45.39 * 1024 ** 2 };
       const frame = render(result, columns);
-      const avg = frame.lines.find(
-        (line) => line.includes('avg / iter') && line.includes('575.00 ns')
-      )!;
+      const avg = frame.lines.find((line) => line.includes('avg') && line.includes('575.00 ns'))!;
       const p75 = frame.lines.find((line) => line.includes('p75') && line.includes('650.00 ns'))!;
       const p99 = frame.lines.find((line) => line.includes('p99') && line.includes('750.00 ns'))!;
+      expect(avg).toContain('avg  575.00 ns');
       expect(avg).toContain('gc');
-      expect(avg).toContain('heap / iter');
+      expect(avg).toContain('heap');
       expect(p75).toMatch(/[▁▂▃▄▅▆▇█]/);
       expect(p75).toContain('1.58 ms');
       expect(p75).toContain('45.39 MiB');
@@ -214,14 +212,12 @@ describe('run report', () => {
     (columns) => {
       const frame = render(fixture(), columns);
       const text = frame.lines.join('\n');
-      expect(frame.lines[1]).toContain('avg / iter');
+      expect(frame.lines[1]).toContain('avg');
       expect(frame.lines[1]).toContain('p99');
       const selected = frame.lines.find((line) => line.includes('›') && line.includes('575.00 ns'))!;
       expect(selected).toContain('750.00 ns');
-      const avg = frame.lines.find(
-        (line) => line.includes('avg / iter') && line.includes('575.00 ns')
-      )!;
-      expect(avg.indexOf('575.00 ns') - avg.indexOf('avg / iter')).toBe(11);
+      const avg = frame.lines.find((line) => line.includes('avg') && line.includes('575.00 ns'))!;
+      expect(avg).toContain('avg  575.00 ns');
       const gc = frame.lines.findIndex((line) => line.includes('gc') && line.includes('15.00 ns'));
       expect(gc).toBeGreaterThan(0);
       expect(frame.lines[gc + 1]).toContain('heap');
