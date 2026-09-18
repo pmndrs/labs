@@ -137,34 +137,6 @@ bench('append', function* () {
 })
 ```
 
-When you compare runs, Labs replaces the speed verdict with `output changed` if the candidate no longer matches the baseline, and exits with code 1. Numeric outputs are compared with `snapshotTolerance` so float refactors do not trip it, non-finite numbers are spelled out and compared exactly, and anything else is digested. Assertions and snapshots run outside the timed work, so checking an answer does not affect its result.
-
-### Record footprint and other metrics
-
-Yield a `metrics` hook to report measurements that may legitimately differ between implementations. Labs calls it once per block after timing finishes and before the generator resumes for teardown. It can be async and must return an object of finite numbers. Put units in the names, such as `retainedBytes` or `entityCount`.
-
-For a footprint scenario, force a collection inside the hook while the world is still alive:
-
-```ts
-bench('world footprint', function* () {
-  const world = createWorld(100_000)
-  yield {
-    bench: () => queryWorld(world),
-    snapshot: () => world.entityCount,
-    metrics: () => {
-      global.gc!()
-      const { heapUsed, external } = process.memoryUsage()
-      return { retainedBytes: heapUsed + external }
-    },
-  }
-  world.dispose()
-})
-```
-
-Labs workers expose `global.gc` by default. `heapUsed + external` measures process-wide retained JS and external memory, including typed array backing stores. It includes the runtime and harness as well as the world. It is distinct from OS resident set size (`rss`) and from Labs' existing `heap` allocation-per-iteration metric. For a world-only estimate, subtract a separately collected pre-creation reading and account for harness allocations. Keep the intended world state alive until the hook runs, including when using an `after` hook to reset each sample.
-
-Saved `stats.metrics` contains `{ min, max, p50 }` for each name. With multiple blocks, Labs reports the range and median across blocks, keeping only names recorded in every block. Reports abbreviate numeric values with SI suffixes (`k`, `M`, etc.). Compare shows matching metrics' candidate medians and percentage changes, with `—` for a zero baseline. Changes in metric values do not affect snapshots, timing verdicts, or the exit code. `Stats.counters` remains reserved for hardware counters such as cycles and instructions.
-
 ## How to control my CPU
 
 One of the largest sources of noise when running benchmarks is an unstable environment, and the usual culprit is the CPU. The CPU boosts or thermal throttles, or a process gets put on a P-core (performance) instead of an E-core (efficiency). Labs checks the CPU clocks before and after each benchmark file and before each block, and tracks whether they vary across the runs. If it detects too much variance, you will get warned and the run will be flagged. But what can you do about it?
@@ -254,14 +226,14 @@ pnpm bench compare --last             # replay the last compared pair
 pnpm bench compare -l                 # shorthand for --last
 ```
 
-In an interactive terminal, comparison opens a full-screen view with a scrolling benchmark list and a fixed inspector below it. Use `↑` / `↓`, `Page Up` / `Page Down`, or `Home` / `End` to select a result. Press `q` or `Esc` to return to the previous terminal screen. `Ctrl+C` exits with code 130. The layout follows terminal resizing, and `[` / `]` scroll inspector details when the screen is short or a result has extra metrics or warnings.
+In an interactive terminal, comparison opens a full-screen view with a scrolling benchmark list and a fixed inspector below it. Use `↑` / `↓`, `Page Up` / `Page Down`, or `Home` / `End` to select a result. Press `q` or `Esc` to return to the previous terminal screen. `Ctrl+C` exits with code 130. The layout follows terminal resizing, and `[` / `]` scroll inspector details when the screen is short or a result has long warnings.
 
 The inspector shows baseline and candidate medians, pooled-sample histograms on a shared scale, p99, GC, and heap per iteration. A shaded row shows the percentage changes. The `p` badge sits beside the benchmark name, and the footer summarizes faster, slower, and neutral results alongside the controls. Below the measurements:
 
 - **consistency ✦ N runs** plots the actual fresh-process block medians in two adjacent rows, baseline in cyan above candidate in magenta. Single runs use regular dots, and multiple runs at the same plotted position use larger dots. Endpoint labels describe the shared time scale.
 - **spread ✦ 95% ci** shows the Hodges-Lehmann effect and its confidence interval, with the bounds below the end caps. The shaded band is `±minDelta`, and the central mark is zero. The confidence level follows `alpha`, and all benchmarks share the same effect scale.
 
-Custom metrics and warnings remain available in the inspector. GC, heap, p99, and custom metric changes are descriptive, not independent statistical verdicts. `NO_COLOR` removes color while retaining the layout and verdict symbols.
+Warnings remain available in the inspector. GC, heap, and p99 changes are descriptive, not independent statistical verdicts. `NO_COLOR` removes color while retaining the layout and verdict symbols.
 
 Redirected output, CI, and `TERM=dumb` use the printable report. Its table starts at 96 columns with 28 columns for benchmark titles, and grows to fit longer titles or wider metric values:
 
@@ -274,7 +246,7 @@ Redirected output, CI, and `TERM=dumb` use the printable report. Its table start
 | p         | Two-sided Mann-Whitney U p-value on block medians; at or below `alpha` passes the statistical-significance gate        |
 | Δ CI      | Nominal `1 − alpha` interval for the Hodges-Lehmann relative effect used by the verdict; not an interval around `Δp50` |
 
-Each row is prefixed with a verdict icon: green `▲` (faster), red `▼` (slower), or gray `■` (neutral). A red `✗` marks a bench whose snapshot differs from the baseline and shows `output changed` in place of a verdict. Candidate runs that failed a check or threw are listed under `failed` and receive no verdict. The verdict uses the Mann-Whitney p-value and the Hodges-Lehmann relative effect, not `Δp50`. In the printable report, below each row, two distribution sparklines sit under their respective columns — baseline (cyan) and candidate (magenta) — on a shared axis. The sparklines use pooled inner samples and are descriptive only. When both runs recorded gc or heap, the sparkline row ends with `gc(…)` and `heap(…)`: the candidate's median value and its percent change from the baseline's median. The tags keep the same positions across rows, including when one metric is absent. Custom metric tags continue on additional lines when needed. These metrics carry no verdict and show `—` when the baseline is zero.
+Each row is prefixed with a verdict icon: green `▲` (faster), red `▼` (slower), or gray `■` (neutral). A red `✗` marks a bench whose snapshot differs from the baseline and shows `output changed` in place of a verdict. Candidate runs that failed a check or threw are listed under `failed` and receive no verdict. The verdict uses the Mann-Whitney p-value and the Hodges-Lehmann relative effect, not `Δp50`. In the printable report, below each row, two distribution sparklines sit under their respective columns — baseline (cyan) and candidate (magenta) — on a shared axis. The sparklines use pooled inner samples and are descriptive only. When both runs recorded gc or heap, the sparkline row ends with `gc(…)` and `heap(…)`: the candidate's median value and its percent change from the baseline's median. The tags keep the same positions across rows, including when one metric is absent. These metrics carry no verdict and show `—` when the baseline is zero.
 
 Comparison is gated. Two runs must pass environment checks before results are shown.
 

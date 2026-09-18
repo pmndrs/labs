@@ -9,7 +9,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { assert, AssertionError } from '../src/assert.ts';
 import { B, measure } from '../src/bench/index.ts';
 import { serialize, snapshotsDiffer, toSnapshot } from '../src/bench/lib/snapshot.ts';
-import { type Snapshot, type Stats, isAssertionError } from '../src/bench/types.ts';
+import { type Snapshot, isAssertionError } from '../src/bench/types.ts';
 import { compare, printCompareReport } from '../src/compare.ts';
 import { defineConfig } from '../src/config.ts';
 import type { SavedResult } from '../src/store.ts';
@@ -209,7 +209,6 @@ function syntheticResult(
     error?: unknown;
     gc?: number;
     heap?: number;
-    metrics?: Stats['metrics'];
   } = {}
 ): SavedResult {
   const medians = [100, 100.4, 99.7, 100.2, 99.9, 100.1, 99.8, 100.3];
@@ -226,7 +225,6 @@ function syntheticResult(
     ...(opts.snapshot !== undefined ? { snapshot: opts.snapshot } : {}),
     ...(opts.gc !== undefined ? { gc: { min: opts.gc, max: opts.gc, p50: opts.gc } } : {}),
     ...(opts.heap !== undefined ? { heap: { min: opts.heap, max: opts.heap, p50: opts.heap } } : {}),
-    ...(opts.metrics ? { metrics: opts.metrics } : {}),
     blocks: { medians, freqs: medians.map(() => 4) },
   };
   return {
@@ -382,39 +380,6 @@ describe('comparing memory', () => {
     if (bench.kind !== 'eligible') throw new Error(`expected eligible, got ${bench.kind}`);
     return bench;
   };
-
-  it('reports custom metrics without changing the correctness or timing verdict', () => {
-    const result = compare(
-      syntheticResult('a', {
-        snapshot: 1,
-        metrics: {
-          retainedBytes: { min: 100, max: 100, p50: 100 },
-          zero: { min: 0, max: 0, p50: 0 },
-          baselineOnly: { min: 1, max: 1, p50: 1 },
-        },
-      }),
-      syntheticResult('b', {
-        snapshot: 1,
-        metrics: {
-          retainedBytes: { min: 200, max: 200, p50: 200 },
-          zero: { min: 1, max: 1, p50: 1 },
-          candidateOnly: { min: 1, max: 1, p50: 1 },
-        },
-      }),
-      CONFIG
-    );
-    const bench = eligible(result);
-    expect(bench.verdict).toBe('neutral');
-    expect(bench.metrics).toEqual({
-      retainedBytes: { baseline: 100, candidate: 200, delta: 1 },
-      zero: { baseline: 0, candidate: 1, delta: null },
-    });
-    const lines = captureReport(result);
-    expect(lines.some((line) => line.includes('retainedBytes(200.00 +100.0%)'))).toBe(true);
-    const metricLines = lines.filter((line) => /retainedBytes\(|zero\(/.test(line));
-    expect(metricLines.some((line) => line.includes('zero(1.00 —)'))).toBe(true);
-    expect(metricLines.every((line) => line.length <= 96)).toBe(true);
-  });
 
   it('reports candidate gc and heap medians with their change from the baseline', () => {
     const result = compare(

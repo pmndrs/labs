@@ -58,10 +58,10 @@ function fixture(): SavedResult {
   };
 }
 
-function render(result = fixture(), columns = 100, detailOffset = 0) {
+function render(result = fixture(), columns = 100, detailOffset = 0, rows = 30) {
   return renderRunView(result, defineConfig({ benchDir: '.' }), {
     columns,
-    rows: 30,
+    rows,
     selected: 0,
     detailOffset,
     colors: false,
@@ -261,17 +261,14 @@ describe('run report', () => {
   it.each([40, 55, 75, 100])('fits %i columns and exposes details by scrolling', (columns) => {
     const result = fixture();
     result.files[0].benchmarks[0].runs[0].name = '世界 🏆 é '.repeat(12);
-    const stats = result.files[0].benchmarks[0].runs[0].stats!;
-    stats.metrics = { retainedObjects: { min: 10, max: 20, p50: 15 } };
-    const first = render(result, columns);
-    const last = render(result, columns, 999);
+    const first = render(result, columns, 0, 16);
+    const last = render(result, columns, 999, 16);
     for (const frame of [first, last]) {
-      expect(frame.lines).toHaveLength(30);
+      expect(frame.lines).toHaveLength(16);
       expect(frame.lines.every((line) => stringWidth(line) < columns)).toBe(true);
       expect(frame.lines.at(-1)).toContain('q exit');
       expect(frame.lines.join('\n')).not.toContain('\x1b');
     }
-    expect(last.lines.join('\n')).toContain('retainedObjects');
     expect(last.lines.join('\n')).toContain('consistency ✦ 8 runs');
   });
 

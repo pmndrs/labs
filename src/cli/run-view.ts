@@ -20,7 +20,7 @@ import {
   WHITE,
   YELLOW,
 } from '../utils/ansi.ts';
-import { formatAmount, formatBytes, formatNs } from '../utils/units.ts';
+import { formatBytes, formatNs } from '../utils/units.ts';
 import type { TerminalFrame, TerminalViewState } from './screen.ts';
 import { TerminalCanvas, textWidth, wrapText } from './terminal.ts';
 
@@ -239,15 +239,6 @@ function details(
   canvas.put(y++, 0, '─'.repeat(width), DARK_GRAY);
   consistency(canvas, entry, 0, y, width >= 53 ? Math.floor((width - 3) / 2) : width);
   y += 4;
-  for (const [name, metric] of Object.entries(stats.metrics ?? {})) {
-    y++;
-    for (const line of wrapText(
-      `${name}  ${formatAmount(metric.p50)} (${formatAmount(metric.min)} … ${formatAmount(metric.max)})`,
-      width
-    )) {
-      canvas.put(y++, 0, line);
-    }
-  }
   return canvas.lines(colors);
 }
 
