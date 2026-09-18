@@ -51,33 +51,18 @@ bench "@mytag"
 bench "@mytag" -n 'v1.0.0'
 ```
 
-And get the pretty results.
+In an interactive terminal, completed runs open a full-screen results view. Select a benchmark to inspect its timings, sample distribution, memory use, and run consistency. Reopen saved results with `bench list`.
 
-```bash
-labs
-
-▶ relation-churn.bench.ts
-clk: ~4.32 GHz
-cpu: Apple M4 Pro
-runtime: node 25.8.0 (arm64-darwin)
-
-benchmark                   avg (min … max) p75 / p99    (min … top 1%)
-------------------------------------------- -------------------------------
-• relation churn
-------------------------------------------- -------------------------------
-■ big test                    17.80 ms/iter  18.02 ms      ▃▃██▃ ▃ ▃▆▃
-                      (17.25 ms … 19.10 ms)  18.45 ms ▄███████████████▁▄▄▄▄
-                  gc(  1.09 ms …   3.12 ms)   1.58 ms
-                heap( 41.19 mb …  50.10 mb)  47.63 mb/iter
-```
+<img src="docs/images/bench.png" width="760" alt="Labs run view with a benchmark list, timing measurements, sample histogram, garbage collection, heap per iteration, and run consistency" />
 
 <details>
 <summary>How to read the results</summary>
 
-- `avg/iter p75`: Average time per iteration and p75, this is the most useful top metric.
-- `(min … max) p99`: Fastest, slowest, and tail time that 99% of samples finish within. This shows the distribution visualized by the histogram.
-- `gc(min … max) p50`: Per-sample garbage collection time above the fixed cost of collecting the process's live heap. Near zero means the bench adds nothing for the collector to do. Higher values mean it creates garbage or keeps more objects alive.
-- `heap(min … max) p50/iter`: Bytes allocated per iteration, including typed array stores held outside the JS heap. The median ignores the allocation V8 does while compiling the function, so a bench that stays on integers and reuses its objects reports zero.
+- **avg / iter, p75, p99**: Average time per iteration and the times that 75% and 99% of samples finish within.
+- **Histogram**: The distribution of timing samples, with the fastest and slowest times below it. Cyan marks samples below the average, yellow marks the average bin, and magenta marks samples above it.
+- **gc**: Median and range of per-sample garbage collection time above the fixed cost of collecting the process's live heap. Near zero means the bench adds nothing for the collector to do. Higher values mean it creates garbage or keeps more objects alive.
+- **heap / iter**: Median and range of bytes allocated per iteration, including typed array stores held outside the JS heap. The median ignores the allocation V8 does while compiling the function, so a bench that stays on integers and reuses its objects reports zero.
+- **consistency**: Each dot represents a fresh process's median time. Larger dots represent multiple runs at the same plotted position. Tight clusters show agreement between runs, while a wider spread shows more variation.
 
 </details>
 
@@ -260,7 +245,7 @@ In an interactive terminal, comparison opens a full-screen view with a scrolling
 
 The inspector shows baseline and candidate medians, pooled-sample histograms on a shared scale, p99, GC, and heap per iteration. A shaded row shows the percentage changes. The `p` badge sits beside the benchmark name, and the footer summarizes faster, slower, and neutral results alongside the controls. Below the measurements:
 
-- **consistency ✦ N runs** plots the actual fresh-process block medians in two adjacent rows, baseline in cyan above candidate in magenta. Single runs use dim dots, and grouped runs use a stronger intensity within each row. Endpoint labels describe the shared time scale.
+- **consistency ✦ N runs** plots the actual fresh-process block medians in two adjacent rows, baseline in cyan above candidate in magenta. Single runs use regular dots, and multiple runs at the same plotted position use larger dots. Endpoint labels describe the shared time scale.
 - **spread ✦ 95% ci** shows the Hodges-Lehmann effect and its confidence interval, with the bounds below the end caps. The shaded band is `±minDelta`, and the central mark is zero. The confidence level follows `alpha`, and all benchmarks share the same effect scale.
 
 Custom metrics and warnings remain available in the inspector. GC, heap, p99, and custom metric changes are descriptive, not independent statistical verdicts. `NO_COLOR` removes color while retaining the layout and verdict symbols.

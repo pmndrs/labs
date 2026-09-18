@@ -7,7 +7,6 @@ import {
   BLACK,
   CYAN,
   DARK_GRAY,
-  DIM,
   GRAY,
   GREEN,
   MAGENTA,
@@ -17,6 +16,10 @@ import {
 } from '../utils/ansi.ts';
 import { formatDelta } from '../utils/format.ts';
 import { formatAmount, formatBytes, formatNs } from '../utils/units.ts';
+import type {
+  TerminalViewState as CompareViewState,
+  TerminalFrame as CompareFrame,
+} from './screen.ts';
 import { TerminalCanvas, terminalText, textWidth, wrapText } from './terminal.ts';
 
 const { version } = createRequire(import.meta.url)('../../package.json') as { version: string };
@@ -88,12 +91,7 @@ function consistency(
     }
     bins.forEach((runs, column) => {
       if (runs)
-        canvas.put(
-          y + 1 + side,
-          x + 1 + column,
-          '●',
-          (side ? MAGENTA : CYAN) + (runs === 1 ? DIM : runs > 2 ? BOLD : '')
-        );
+        canvas.put(y + 1 + side, x + 1 + column, runs === 1 ? '●' : '⬤', side ? MAGENTA : CYAN);
     });
   });
   canvas.put(y + 2, x, '╞', DARK_GRAY);
@@ -354,23 +352,10 @@ function detailLines(
   return canvas.lines(colors);
 }
 
-export interface CompareViewState {
-  columns: number;
-  rows: number;
-  selected: number;
-  listOffset?: number;
-  detailOffset?: number;
-  colors?: boolean;
-}
-
-export interface CompareFrame {
-  lines: string[];
-  selected: number;
-  listOffset: number;
-  detailOffset: number;
-  maxDetailOffset: number;
-  pageSize: number;
-}
+export type {
+  TerminalViewState as CompareViewState,
+  TerminalFrame as CompareFrame,
+} from './screen.ts';
 
 function summaryItems(result: CompareResult) {
   const counts = new Map<string, { label: string; symbol: string; color: string; count: number }>();

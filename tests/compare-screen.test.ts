@@ -5,6 +5,7 @@ import stringWidth from 'fast-string-width';
 import { describe, expect, it, vi } from 'vitest';
 import { compare, type CompareResult, type EligibleBench } from '../src/compare.ts';
 import { defineConfig } from '../src/config.ts';
+import { CYAN, MAGENTA } from '../src/utils/ansi.ts';
 import type { SavedResult } from '../src/store.ts';
 import { openCompareScreen, showCompareReport } from '../src/cli/compare-screen.ts';
 import { renderCompareView } from '../src/cli/compare-view.ts';
@@ -108,6 +109,22 @@ describe('comparison screen', () => {
     expect(view.lines).toHaveLength(30);
   });
 
+  it('uses dot size for overlap while keeping each series in its own color', () => {
+    const { result, config } = fixture();
+    const bench = result.benches[0] as EligibleBench;
+    bench.baselineRunMedians = [100, 100, 105, 110, 110, 110, 115, 120];
+    bench.candidateRunMedians = [80, 80, 85, 90, 90, 90, 95, 97];
+    const frame = renderCompareView(result, config, { columns: 110, rows: 30, selected: 0 });
+    const y = frame.lines.findIndex((line) => line.includes('consistency'));
+    [CYAN, MAGENTA].forEach((color, side) => {
+      const dots = frame.lines[y + 1 + side];
+      expect(dots).toContain(color);
+      expect(dots).toContain('●');
+      expect(dots).toContain('⬤');
+      expect(dots).not.toContain('\x1b[2m');
+    });
+  });
+
   it.each([40, 60, 75, 80, 110])(
     'keeps a fixed inspector and bounded rows at %i columns',
     (columns) => {
@@ -130,9 +147,9 @@ describe('comparison screen', () => {
         expect(frame.lines.every((line) => stringWidth(line) < columns)).toBe(true);
         expect(frame.lines.at(-1)).toContain('q exit');
         const graphRow = frame.lines.findIndex((line) => line.includes('consistency'));
-        expect(frame.lines[graphRow + 1]).toContain('●');
-        expect(frame.lines[graphRow + 2]).toContain('●');
-        expect(frame.lines[graphRow + 3]).not.toContain('●');
+        expect(frame.lines[graphRow + 1]).toMatch(/[●⬤]/);
+        expect(frame.lines[graphRow + 2]).toMatch(/[●⬤]/);
+        expect(frame.lines[graphRow + 3]).not.toMatch(/[●⬤]/);
       }
     }
   );
