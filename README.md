@@ -58,10 +58,10 @@ In an interactive terminal, completed runs open a full-screen results view. Sele
 <details>
 <summary>How to read the results</summary>
 
-- **avg / iter, p75, p99**: Average time per iteration and the times that 75% and 99% of samples finish within.
+- **avg, p75, p99**: Average time per iteration and the times that 75% and 99% of samples finish within.
 - **Histogram**: The distribution of timing samples, with the fastest and slowest times below it. Cyan marks samples below the average, yellow marks the average bin, and magenta marks samples above it.
 - **gc**: Median and range of per-sample garbage collection time above the fixed cost of collecting the process's live heap. Near zero means the bench adds nothing for the collector to do. Higher values mean it creates garbage or keeps more objects alive.
-- **heap / iter**: Median and range of bytes allocated per iteration, including typed array stores held outside the JS heap. The median ignores the allocation V8 does while compiling the function, so a bench that stays on integers and reuses its objects reports zero.
+- **heap**: Median and range of bytes allocated per iteration, including typed array stores held outside the JS heap. The median ignores the allocation V8 does while compiling the function, so a bench that stays on integers and reuses its objects reports zero.
 - **consistency**: Each dot represents a fresh process's median time. Larger dots represent multiple runs at the same plotted position. Tight clusters show agreement between runs, while a wider spread shows more variation.
 
 </details>
@@ -77,6 +77,19 @@ bench compare
 Browse the results in a full-screen comparison view. Select a benchmark to see its timings, memory use, run consistency, and confidence interval.
 
 <img src="docs/images/compare.png" width="760" alt="Labs comparison view with a benchmark list, baseline and candidate measurements, run consistency, and a 95% confidence interval" />
+
+<details>
+<summary>How to read the results</summary>
+
+- **baseline, candidate, Δp50**: Median timings for the reference run and the new run. Δp50 is the percentage change. Negative means faster, positive means slower.
+- **▲ faster, ▼ slower, ■ neutral**: Faster or slower requires a statistically significant change of at least 5% by default. Neutral means no clear change was found, not that the runs are identical.
+- **p**: Smaller values give stronger evidence of a timing difference. The default cutoff is 0.05. This does not measure the size of the change.
+- **Histograms**: Baseline is cyan and candidate is magenta, both on the same time scale. Further left means faster. A wider shape means more variation.
+- **p99, gc, heap**: Tail timing, garbage collection time, and bytes allocated per iteration. The shaded row shows their percentage changes.
+- **consistency**: Each dot is a fresh process's median time, with baseline above candidate. Larger dots show overlapping runs. Tight clusters mean the runs agree.
+- **spread**: The dot shows the estimated change and the line shows its confidence interval. Left of zero means faster, right means slower. A wider interval means more uncertainty. The shaded band marks changes below the configured minimum.
+
+</details>
 
 ## Guarantees
 

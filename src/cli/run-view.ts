@@ -185,15 +185,14 @@ function details(
   const gcLabel = range(stats.gc, duration);
   const heapLabel = range(stats.heap, bytes);
   const compactGcWidth = Math.max(2, textWidth(gcValue), textWidth(gcLabel));
-  const compactHeapWidth = Math.max(11, textWidth(heapValue), textWidth(heapLabel));
+  const compactHeapWidth = Math.max(4, textWidth(heapValue), textWidth(heapLabel));
   const compact = width < 96 && width >= 49 + compactGcWidth + compactHeapWidth;
   const narrow = width < 96 && !compact;
-  const valueX = narrow ? 11 : compact ? 12 : 16;
-  ['avg / iter', 'p75', 'p99'].forEach((label, index) => {
-    canvas.put(y + index, 0, label, GRAY, valueX - 1);
+  ['avg', 'p75', 'p99'].forEach((label, index) => {
+    canvas.put(y + index, 0, label, GRAY, 3);
     canvas.put(
       y + index,
-      valueX,
+      5,
       duration([stats.avg, stats.p75, stats.p99][index]),
       index === 0 ? YELLOW + BOLD : GRAY,
       11
@@ -204,7 +203,7 @@ function details(
       16,
       textWidth(duration(stats.min)) + textWidth(duration(stats.max)) + 2
     );
-    const graphX = width >= 24 + graphWidth ? 24 : 0;
+    const graphX = width >= 18 + graphWidth ? 18 : 0;
     const graphY = graphX ? y : y + 4;
     distribution(canvas, entry, graphX, graphY, graphWidth);
     const memoryWidth = 5 + Math.max(textWidth(gcValue), textWidth(heapValue));
@@ -224,7 +223,7 @@ function details(
     const gcX = compact ? width - compactHeapWidth - 2 - gcWidth : width - 41;
     const heapX = gcX + gcWidth + 2;
     const heapWidth = width - heapX;
-    const graphX = compact ? 25 : 29;
+    const graphX = 18;
     const graphWidth = compact ? Math.min(24, gcX - graphX - 2) : 24;
     distribution(canvas, entry, graphX, y, graphWidth);
     canvas.put(y, gcX, 'gc', GRAY, gcWidth, true);
@@ -232,7 +231,7 @@ function details(
     const gcRange = wrapText(gcLabel, gcWidth);
     const heapRange = wrapText(heapLabel, heapWidth);
     gcRange.forEach((line, index) => canvas.put(y + 2 + index, gcX, line, GRAY, gcWidth, true));
-    canvas.put(y, heapX, 'heap / iter', GRAY, heapWidth, true);
+    canvas.put(y, heapX, 'heap', GRAY, heapWidth, true);
     canvas.put(y + 1, heapX, heapValue, '', heapWidth, true);
     heapRange.forEach((line, index) => canvas.put(y + 2 + index, heapX, line, GRAY, heapWidth, true));
     y += 2 + Math.max(gcRange.length, heapRange.length);
@@ -302,14 +301,7 @@ export function renderRunView(
   const listRow = (y: number, label: string, bench?: RunEntry) => {
     const stats = bench?.run.error === undefined ? bench?.run.stats : undefined;
     canvas.put(y, 1, label, bench ? '' : GRAY, nameWidth);
-    canvas.put(
-      y,
-      nameWidth + 3,
-      bench ? (stats ? duration(stats.avg) : '—') : 'avg / iter',
-      GRAY,
-      11,
-      true
-    );
+    canvas.put(y, nameWidth + 3, bench ? (stats ? duration(stats.avg) : '—') : 'avg', GRAY, 11, true);
     canvas.put(
       y,
       nameWidth + 16,
@@ -322,7 +314,7 @@ export function renderRunView(
       canvas.put(
         y,
         nameWidth + 29,
-        bench ? (stats?.heap ? bytes(stats.heap.p50) : '—') : 'heap / iter',
+        bench ? (stats?.heap ? bytes(stats.heap.p50) : '—') : 'heap',
         GRAY,
         12,
         true
