@@ -1,5 +1,5 @@
 import { snapshotsDiffer } from './bench/lib/snapshot.ts';
-import { type Snapshot, type Stats, isAssertionError } from './bench/types.ts';
+import { type Snapshot, isAssertionError } from './bench/types.ts';
 import type { LabsConfig } from './config.ts';
 import { renderDistributions } from './histogram.ts';
 import {
@@ -14,7 +14,7 @@ import { type FreqSample, type GitInfo, type SavedResult, isEnvironmentStable } 
 import { gitHint } from './cli/utils.ts';
 import { BOLD, CYAN, DARK_GRAY, DIM, GRAY, GREEN, RED, RESET, WHITE, YELLOW } from './utils/ansi.ts';
 import { formatDelta, formatP, formatTime, visibleLength } from './utils/format.ts';
-import { formatAmount, formatBytes } from './utils/units.ts';
+import { formatBytes } from './utils/units.ts';
 
 // ─── Check infrastructure ────────────────────────────────────────────────────
 
@@ -208,7 +208,6 @@ export interface EligibleBench {
   /** Present only when both runs recorded the metric. Descriptive, no verdict. */
   gc?: MetricChange;
   heap?: MetricChange;
-  metrics?: Record<string, MetricChange>;
 }
 
 export interface SkippedBench {
@@ -273,7 +272,6 @@ function trialRuns(trial: ComparableTrial): Array<{
   calibrationRates?: number[];
   gcP50?: number;
   heapP50?: number;
-  metrics?: Stats['metrics'];
   snapshot?: Snapshot;
   error?: unknown;
 }> {
@@ -287,7 +285,6 @@ function trialRuns(trial: ComparableTrial): Array<{
     ...(Array.isArray(stats?.blocks?.freqs) ? { calibrationRates: stats.blocks.freqs } : {}),
     ...(typeof stats?.gc?.p50 === 'number' ? { gcP50: stats.gc.p50 } : {}),
     ...(typeof stats?.heap?.p50 === 'number' ? { heapP50: stats.heap.p50 } : {}),
-    ...(stats?.metrics ? { metrics: stats.metrics } : {}),
     ...(stats?.snapshot !== undefined ? { snapshot: stats.snapshot } : {}),
     ...(error !== undefined ? { error } : {}),
   });
@@ -315,7 +312,6 @@ interface IndexEntry {
   calibrationRates?: number[];
   gcP50?: number;
   heapP50?: number;
-  metrics?: Stats['metrics'];
   snapshot?: Snapshot;
   error?: unknown;
 }
@@ -348,7 +344,6 @@ function buildIndex(result: SavedResult): Map<string, IndexEntry> {
           ...(run.calibrationRates ? { calibrationRates: run.calibrationRates } : {}),
           ...(run.gcP50 !== undefined ? { gcP50: run.gcP50 } : {}),
           ...(run.heapP50 !== undefined ? { heapP50: run.heapP50 } : {}),
-          ...(run.metrics ? { metrics: run.metrics } : {}),
           ...(run.snapshot !== undefined ? { snapshot: run.snapshot } : {}),
           ...(run.error !== undefined ? { error: run.error } : {}),
         });
@@ -565,13 +560,6 @@ export function compare(
 
         const gc = metricChange(base.gcP50, run.gcP50);
         const heap = metricChange(base.heapP50, run.heapP50);
-        const metrics = Object.fromEntries(
-          Object.entries(run.metrics ?? {}).flatMap(([name, value]) => {
-            const change = metricChange(base.metrics?.[name]?.p50, value.p50);
-            return change ? [[name, change]] : [];
-          })
-        );
-
         benches.push({
           kind: 'eligible',
           key: key_,
@@ -597,7 +585,6 @@ export function compare(
           ),
           ...(gc ? { gc } : {}),
           ...(heap ? { heap } : {}),
-          ...(Object.keys(metrics).length ? { metrics } : {}),
         });
       }
     }
@@ -709,9 +696,6 @@ export function printCompareReport(result: CompareResult, config: LabsConfig): v
         heap: bench.heap
           ? metricTag('heap', formatBytes(bench.heap.candidate, false), bench.heap.delta)
           : '',
-        custom: Object.entries(bench.metrics ?? {}).map(([name, metric]) =>
-          metricTag(name, formatAmount(metric.candidate), metric.delta)
-        ),
       },
     ])
   );
@@ -825,21 +809,11 @@ export function printCompareReport(result: CompareResult, config: LabsConfig): v
 
       const distLine = `${' '.repeat(4 + nameCol)} ${dist.baseline} ${dist.candidate}`;
       const metric = metrics.get(bench)!;
-      if (metric.gc || metric.heap || metric.custom.length > 0) {
+      if (metric.gc || metric.heap) {
         const indent = ' '.repeat(visibleLength(distLine));
-        let line = distLine;
-        if (metric.gc || metric.heap) {
-          line += `  ${metric.gc}${' '.repeat(gcCol - visibleLength(metric.gc))}  ${metric.heap}`;
-          line = line.trimEnd();
-        }
-        for (const tag of metric.custom) {
-          if (visibleLength(line) + 2 + visibleLength(tag) > totalWidth && line !== distLine) {
-            console.log(line);
-            line = indent;
-          }
-          line += `  ${tag}`;
-        }
-        console.log(line);
+        console.log(
+          `${distLine}  ${metric.gc}${' '.repeat(gcCol - visibleLength(metric.gc))}  ${metric.heap}`.trimEnd()
+        );
         if (hasLimitedResolution) console.log(`${indent}${resolutionMark}`);
       } else {
         console.log(`${distLine}${resolutionMark}`);

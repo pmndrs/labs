@@ -15,7 +15,7 @@ import {
   YELLOW,
 } from '../utils/ansi.ts';
 import { formatDelta } from '../utils/format.ts';
-import { formatAmount, formatBytes, formatNs } from '../utils/units.ts';
+import { formatBytes, formatNs } from '../utils/units.ts';
 import type {
   TerminalViewState as CompareViewState,
   TerminalFrame as CompareFrame,
@@ -279,46 +279,6 @@ function detailLines(
       y += 5;
       spread(canvas, bench, result, config, y, 0, width);
       y += 4;
-    }
-    if (Object.keys(bench.metrics ?? {}).length) {
-      y++;
-      if (width >= 71) {
-        const metricWidth = 13;
-        const labelWidth = width - 3 * metricWidth;
-        canvas.put(y, labelWidth, 'baseline', CYAN, metricWidth, true);
-        canvas.put(y++, labelWidth + metricWidth, 'candidate', MAGENTA, metricWidth, true);
-        for (const [label, metric] of Object.entries(bench.metrics!)) {
-          const labelLines = wrapText(label, labelWidth - 1);
-          labelLines.forEach((line, index) => canvas.put(y + index, 0, line, GRAY, labelWidth - 1));
-          canvas.put(y, labelWidth, formatAmount(metric.baseline), '', metricWidth, true);
-          canvas.put(
-            y,
-            labelWidth + metricWidth,
-            formatAmount(metric.candidate),
-            '',
-            metricWidth,
-            true
-          );
-          canvas.put(
-            y,
-            labelWidth + 2 * metricWidth,
-            metric.delta === null ? '—' : formatDelta(metric.delta),
-            '',
-            metricWidth,
-            true
-          );
-          y += Math.max(1, labelLines.length);
-        }
-      } else {
-        for (const [label, metric] of Object.entries(bench.metrics!)) {
-          note(label);
-          note(`baseline ${formatAmount(metric.baseline)}`, CYAN);
-          note(
-            `candidate ${formatAmount(metric.candidate)}  ${metric.delta === null ? '—' : formatDelta(metric.delta)}`,
-            MAGENTA
-          );
-        }
-      }
     }
     if (bench.comparisonResolution > config.minDelta) {
       y++;

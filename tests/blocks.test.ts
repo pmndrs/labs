@@ -352,9 +352,6 @@ describe('worker blocked sampling', () => {
       expect(stats.samples).toHaveLength(36);
     }
     expect(result.benchmarks[0].runs[0].stats.snapshot).toBe(499500);
-    expect(result.benchmarks[0].runs[0].stats.metrics).toEqual({
-      retainedBytes: { min: 1024, max: 4096, p50: 4096 },
-    });
   });
 
   it('never runs fewer than two blocks', { timeout: 60_000 }, () => {

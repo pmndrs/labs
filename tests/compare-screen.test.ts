@@ -178,11 +178,9 @@ describe('comparison screen', () => {
     }
   });
 
-  it('exposes custom metrics and full warnings through inspector scrolling', () => {
+  it('exposes full warnings through inspector scrolling', () => {
     const { result, config } = fixture();
-    const bench = result.benches[0] as EligibleBench;
-    bench.metrics = { retainedBytes: { baseline: 100, candidate: 200, delta: 1 } };
-    result.environmentWarnings = ['different block counts, verify the session'];
+    result.environmentWarnings = ['different block counts, verify the session. '.repeat(8)];
     const first = renderCompareView(result, config, {
       columns: 100,
       rows: 24,
@@ -197,7 +195,6 @@ describe('comparison screen', () => {
       detailOffset: 999,
       colors: false,
     });
-    expect(last.lines.join('\n')).toContain('retainedBytes');
     expect(last.lines.join('\n')).toContain('different block counts');
     expect(last.lines.join('\n')).toContain('[ ] details');
   });
