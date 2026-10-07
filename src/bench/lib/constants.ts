@@ -10,8 +10,14 @@ export const tuning = {
   batch_unroll: 4,
   /** Hard ceiling on sample count. */
   max_samples: 1e9,
-  /** Warm-up iterations before timing begins. */
-  warmup_samples: 2,
+  /** Consecutive timing windows required for warm-up stability. */
+  warmup_samples: 5,
+  /** Maximum wall time (ns) spent warming up, including setup and cleanup. */
+  warmup_time: 100 * 1e6,
+  /** Target measured duration (ns) of a warm-up window. */
+  warmup_window: 50_000,
+  /** Maximum relative range of recent per-call window timings. */
+  warmup_tolerance: 0.05,
   /** Target duration (ns) of one batched sample. Batch size is derived from it. */
   batch_duration: 1e6,
   /** Upper bound on iterations per batched sample. */
@@ -22,8 +28,6 @@ export const tuning = {
   batch_threshold: 65536,
   /** Time budget (ns) a run must reach before it may stop. */
   min_cpu_time: 500 * 1e6,
-  /** Single-iteration ns threshold below which warm-up is skipped. */
-  warmup_threshold: 500_000,
 } as const;
 
 /**
@@ -47,8 +51,10 @@ export function defaults(opts: any): void {
   opts.batch_duration ??= tuning.batch_duration;
   opts.batch_max ??= tuning.batch_max;
   opts.warmup_samples ??= tuning.warmup_samples;
+  opts.warmup_time ??= tuning.warmup_time;
+  opts.warmup_window ??= tuning.warmup_window;
+  opts.warmup_tolerance ??= tuning.warmup_tolerance;
   opts.batch_threshold ??= tuning.batch_threshold;
-  opts.warmup_threshold ??= tuning.warmup_threshold;
   opts.samples_threshold ??= tuning.samples_threshold;
 }
 

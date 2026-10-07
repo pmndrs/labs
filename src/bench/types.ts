@@ -73,9 +73,15 @@ export interface MeasureOptions {
   batch_max?: number;
   /** Forces the batching decision instead of probing for it. */
   batch?: boolean;
+  /** Consecutive stable warm-up windows. Zero disables warm-up after the first call. */
   warmup_samples?: number;
+  /** Wall-time budget in ns for warm-up, including parameter and after hooks. */
+  warmup_time?: number;
+  /** Target measured duration in ns of each warm-up window. */
+  warmup_window?: number;
+  /** Maximum relative range of the recent per-call window timings. */
+  warmup_tolerance?: number;
   batch_threshold?: number;
-  warmup_threshold?: number;
   samples_threshold?: number;
   gc?: boolean | ((() => void) & { fallback?: boolean });
   $counters?: any;
