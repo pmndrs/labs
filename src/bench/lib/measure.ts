@@ -1,7 +1,8 @@
 import type { GeneratorBench, MeasureOptions, Snapshot, Stats } from '../types.ts';
-import { AsyncFunction, do_not_optimize, GeneratorFunction, kind, now } from './runtime.ts';
+import { AsyncFunction, do_not_optimize, GeneratorFunction, kind } from './runtime.ts';
 import { toSnapshot } from './snapshot.ts';
 import { batchSize, defaults } from './constants.ts';
+import { createWarmup, isWarmupDone, recordWarmup } from './warmup.ts';
 
 /** Range and median of the first `count` per-sample values. */
 function summarize(values: number[], count: number): { min: number; max: number; p50: number } {
@@ -103,14 +104,16 @@ export async function benchGenerator(gen: (...args: any[]) => any, opts: any = {
 /**
  * Core benchmark engine for zero-arg and parameterised functions.
  *
- * Generates an {@link AsyncFunction} loop at runtime that handles warm-up,
+ * Warms the workload, then generates an {@link AsyncFunction} loop that handles
  * batching, parameter injection, heap tracking, inner GC, and hardware
  * counters. Sampling stops once both `min_samples` and `min_cpu_time` are
  * met. The generated source is attached as `debug` on the returned stats.
  */
 export async function benchFn(fn: (...args: any[]) => any, opts: any = {}): Promise<Stats> {
   defaults(opts);
+  const now: () => number = opts.now;
   const consume = opts.$consume ?? do_not_optimize;
+  let warmup = createWarmup(now() + opts.warmup_time);
   let async = false;
   let batch = false;
   let single = 0;
@@ -143,22 +146,26 @@ export async function benchFn(fn: (...args: any[]) => any, opts: any = {}): Prom
 
     if (opts.after) await opts.after();
 
-    single = t1 - t0;
-    if (single <= opts.warmup_threshold) {
-      for (let o = 0; o < opts.warmup_samples; o++) {
+    warmup = recordWarmup(warmup, t1 - t0, 1, opts);
+    while (!isWarmupDone(warmup, opts, now())) {
+      let duration = 0;
+      let iterations = 0;
+      while (iterations < warmup.iterations && now() < warmup.deadline) {
         for (let oo = 0; oo < params.length; oo++) {
           $p[oo] = await opts.params[oo]();
         }
 
         const t0 = now();
-        const value = await fn(...$p);
+        const value = async ? await fn(...$p) : fn(...$p);
         if (!opts.manual && value !== void 0) consume(value);
-        const t1 = now();
+        duration += now() - t0;
         if (opts.after) await opts.after();
-        single = t1 - t0;
-        if ((batch = single <= opts.batch_threshold)) break;
+        iterations++;
       }
+      if (iterations) warmup = recordWarmup(warmup, duration, iterations, opts);
     }
+    single = warmup.single;
+    batch = single <= opts.batch_threshold;
   }
 
   if (opts.batch !== undefined) batch = !!opts.batch;
@@ -170,9 +177,8 @@ export async function benchFn(fn: (...args: any[]) => any, opts: any = {}): Prom
 
   let batchSamples: number = opts.batch_samples ?? (batch ? batchSize(opts, single) : 0);
 
-  // The warm-up call runs before the function is optimized and can read many
-  // times slower than steady state. When the batch can be re-timed without
-  // regenerating parameters, size it again from a warm loop.
+  // Size the final batch from a continuous loop without per-call clock reads.
+  // Parameter generation requires separate timing.
   if (opts.batch_samples === undefined && batch && !params.length && !opts.manual) {
     const t0 = now();
     for (let o = 0; o < batchSamples; o++) {
@@ -439,6 +445,7 @@ export async function benchFn(fn: (...args: any[]) => any, opts: any = {}): Prom
 export async function benchIter(iter: (...args: any[]) => any, opts: any = {}): Promise<Stats> {
   const _: any = {};
   defaults(opts);
+  const now: () => number = opts.now;
   let batchSamples = 0;
   let samples = Array.from({ length: 2 ** 20 }, () => 0);
   const _i = {
@@ -461,24 +468,19 @@ export async function benchIter(iter: (...args: any[]) => any, opts: any = {}): 
 
   const gen: Generator = (function* () {
     let batch = false;
-    let single = 0;
-
-    {
+    let warmup = createWarmup(now() + opts.warmup_time);
+    do {
+      let iterations = 0;
       const t0 = now();
-      yield void 0;
-      const t1 = now();
+      do {
+        yield void 0;
+        iterations++;
+      } while (iterations < warmup.iterations && now() < warmup.deadline);
+      warmup = recordWarmup(warmup, now() - t0, iterations, opts);
+    } while (!isWarmupDone(warmup, opts, now()));
 
-      single = t1 - t0;
-      if (single <= opts.warmup_threshold) {
-        for (let o = 0; o < opts.warmup_samples; o++) {
-          const t0 = now();
-          yield void 0;
-          const t1 = now();
-          single = t1 - t0;
-          if ((batch = single <= opts.batch_threshold)) break;
-        }
-      }
-    }
+    const single = warmup.single;
+    batch = single <= opts.batch_threshold;
 
     if (opts.batch !== undefined) batch = !!opts.batch;
     batchSamples = opts.batch_samples ?? (batch ? batchSize(opts, single) : 0);

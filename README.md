@@ -96,6 +96,7 @@ Browse the results in a full-screen comparison view. Select a benchmark to see i
 Labs promises to give results you can trust. To do this a number of guarantees are made when running benches.
 
 - Each bench block runs in its own isolated worker process, preventing benches in the same file from contaminating each other's JIT state, heap layout, or GC history. Reordering benches can otherwise skew results by 2x or more.
+- Every block warms the workload before measurement. Warmup exits when consecutive timing windows agree, with a 100 ms budget for slow or unstable work. The pilot chooses batching from the warmed timings.
 - GC influence is mitigated. By default, each sample starts with a garbage collection (GC) reset so previous samples don't affect it.
 - Every bench is run in isolated blocks that are interleaved: `A₁ B₁ C₁ → A₂ B₂ C₂ → … → A₈ B₈ C₈`. This reduces bias from gradual changes such as CPU throttling or even boosting.
 - Timing overhead is controlled. If a sample's measurement time is so fast that the overhead of the timing itself would bias the results, then it is run in a batch sized so each sample lasts about a millisecond.
