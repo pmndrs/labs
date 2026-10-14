@@ -1,5 +1,6 @@
 import { snapshotsDiffer } from './bench/lib/snapshot.ts';
-import { type Snapshot, isAssertionError } from './bench/types.ts';
+import { formatGcCost, formatGcEvents, formatGcSpike, observedGcCost } from './bench/format/gc.ts';
+import { type GcStats, type Snapshot, isAssertionError } from './bench/types.ts';
 import type { LabsConfig } from './config.ts';
 import { renderDistributions } from './histogram.ts';
 import {
@@ -206,7 +207,7 @@ export interface EligibleBench {
    */
   comparisonResolution: number;
   /** Present only when both runs recorded the metric. Descriptive, no verdict. */
-  gc?: MetricChange;
+  gc?: MetricChange & { observed?: boolean; baselineStats?: GcStats; candidateStats?: GcStats };
   heap?: MetricChange;
 }
 
@@ -270,7 +271,9 @@ function trialRuns(trial: ComparableTrial): Array<{
   p99: number;
   runMedians?: number[];
   calibrationRates?: number[];
-  gcP50?: number;
+  gcValue?: number;
+  gcObserved?: boolean;
+  gcStats?: GcStats;
   heapP50?: number;
   snapshot?: Snapshot;
   error?: unknown;
@@ -283,7 +286,15 @@ function trialRuns(trial: ComparableTrial): Array<{
     p99: typeof stats?.p99 === 'number' ? stats.p99 : 0,
     ...(Array.isArray(stats?.blocks?.medians) ? { runMedians: stats.blocks.medians } : {}),
     ...(Array.isArray(stats?.blocks?.freqs) ? { calibrationRates: stats.blocks.freqs } : {}),
-    ...(typeof stats?.gc?.p50 === 'number' ? { gcP50: stats.gc.p50 } : {}),
+    ...(stats?.gc && 'total' in stats.gc
+      ? {
+          gcValue: observedGcCost(stats.gc),
+          gcObserved: true,
+          gcStats: stats.gc as GcStats,
+        }
+      : typeof stats?.gc?.p50 === 'number'
+        ? { gcValue: stats.gc.p50, gcObserved: false }
+        : {}),
     ...(typeof stats?.heap?.p50 === 'number' ? { heapP50: stats.heap.p50 } : {}),
     ...(stats?.snapshot !== undefined ? { snapshot: stats.snapshot } : {}),
     ...(error !== undefined ? { error } : {}),
@@ -310,7 +321,9 @@ interface IndexEntry {
   samples: number[];
   runMedians?: number[];
   calibrationRates?: number[];
-  gcP50?: number;
+  gcValue?: number;
+  gcObserved?: boolean;
+  gcStats?: GcStats;
   heapP50?: number;
   snapshot?: Snapshot;
   error?: unknown;
@@ -342,7 +355,9 @@ function buildIndex(result: SavedResult): Map<string, IndexEntry> {
           samples: run.samples,
           ...(run.runMedians ? { runMedians: run.runMedians } : {}),
           ...(run.calibrationRates ? { calibrationRates: run.calibrationRates } : {}),
-          ...(run.gcP50 !== undefined ? { gcP50: run.gcP50 } : {}),
+          ...(run.gcValue !== undefined ? { gcValue: run.gcValue } : {}),
+          ...(run.gcObserved !== undefined ? { gcObserved: run.gcObserved } : {}),
+          ...(run.gcStats ? { gcStats: run.gcStats } : {}),
           ...(run.heapP50 !== undefined ? { heapP50: run.heapP50 } : {}),
           ...(run.snapshot !== undefined ? { snapshot: run.snapshot } : {}),
           ...(run.error !== undefined ? { error: run.error } : {}),
@@ -558,7 +573,8 @@ export function compare(
           continue;
         }
 
-        const gc = metricChange(base.gcP50, run.gcP50);
+        const gc =
+          base.gcObserved === run.gcObserved ? metricChange(base.gcValue, run.gcValue) : undefined;
         const heap = metricChange(base.heapP50, run.heapP50);
         benches.push({
           kind: 'eligible',
@@ -583,7 +599,18 @@ export function compare(
             comparisonResolution(base.runMedians!),
             comparisonResolution(run.runMedians!)
           ),
-          ...(gc ? { gc } : {}),
+          ...(gc
+            ? {
+                gc: run.gcObserved
+                  ? {
+                      ...gc,
+                      observed: true,
+                      baselineStats: base.gcStats,
+                      candidateStats: run.gcStats,
+                    }
+                  : gc,
+              }
+            : {}),
           ...(heap ? { heap } : {}),
         });
       }
@@ -692,7 +719,13 @@ export function printCompareReport(result: CompareResult, config: LabsConfig): v
     eligible.map((bench) => [
       bench,
       {
-        gc: bench.gc ? metricTag('gc', formatTime(bench.gc.candidate), bench.gc.delta) : '',
+        gc: bench.gc
+          ? metricTag(
+              bench.gc.observed ? 'gc/iter' : 'gc',
+              formatTime(bench.gc.candidate),
+              bench.gc.delta
+            )
+          : '',
         heap: bench.heap
           ? metricTag('heap', formatBytes(bench.heap.candidate, false), bench.heap.delta)
           : '',
@@ -817,6 +850,25 @@ export function printCompareReport(result: CompareResult, config: LabsConfig): v
         if (hasLimitedResolution) console.log(`${indent}${resolutionMark}`);
       } else {
         console.log(`${distLine}${resolutionMark}`);
+      }
+      if (bench.gc?.observed) {
+        for (const [side, stats] of [
+          ['baseline', bench.gc.baselineStats],
+          ['candidate', bench.gc.candidateStats],
+        ] as const) {
+          if (!stats) continue;
+          const share = formatGcCost(stats)?.share ?? '—';
+          const spike = formatGcSpike(stats);
+          const events = formatGcEvents(stats);
+          const colored =
+            stats.count && stats.maxKind
+              ? events.replace(
+                  spike,
+                  spike.slice(0, -stats.maxKind.length) + DARK_GRAY + stats.maxKind + GRAY
+                )
+              : events;
+          console.log(`${GRAY}    ${side} GC: ${share} ✦ ${colored}${RESET}`);
+        }
       }
       console.log('');
     }

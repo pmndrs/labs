@@ -1,5 +1,7 @@
 import { createRequire } from 'node:module';
 import { isLikelyOptimizedOut } from '../bench/diagnostics.ts';
+import * as histogramFmt from '../bench/format/histogram.ts';
+import { formatGcColumns } from '../bench/format/gc.ts';
 import type { LabsConfig } from '../config.ts';
 import { collectDiagnostics } from '../report.ts';
 import {
@@ -90,33 +92,20 @@ function distribution(
   width: number
 ): void {
   const stats = entry.run.stats!;
-  const bins = Array<number>(width).fill(0);
-  const column = (value: number) =>
-    stats.max === stats.min
-      ? Math.floor(width / 2)
-      : Math.max(
-          0,
-          Math.min(
-            width - 1,
-            Math.round(((value - stats.min) / (stats.max - stats.min)) * (width - 1))
-          )
-        );
-  for (const value of stats.samples) if (Number.isFinite(value)) bins[column(value)]++;
-  const peak = Math.max(1, ...bins);
-  const average = column(stats.avg);
-  bins.forEach((count, index) => {
-    const height = count ? Math.max(1, Math.round((count / peak) * 16)) : 0;
-    for (let row = 0; row < 2; row++)
+  const binned = histogramFmt.bins(stats, width, 0.99);
+  const histogram = histogramFmt.ascii(binned, 2, { colors: false });
+  histogram.forEach((line, row) => {
+    for (let index = 0; index < line.length; index++)
       canvas.put(
         y + row,
         x + index,
-        ' ▁▂▃▄▅▆▇█'[Math.max(0, Math.min(8, height - (1 - row) * 8))],
-        index < average ? CYAN : index === average ? YELLOW : MAGENTA
+        line[index],
+        index < binned.avg ? CYAN : index === binned.avg ? YELLOW : MAGENTA
       );
   });
   const half = Math.floor(width / 2);
   canvas.put(y + 2, x, duration(stats.min), CYAN, half);
-  canvas.put(y + 2, x + half, duration(stats.max), MAGENTA, width - half, true);
+  canvas.put(y + 2, x + half, duration(binned.max), MAGENTA, width - half, true);
 }
 
 function consistency(
@@ -126,14 +115,15 @@ function consistency(
   y: number,
   width: number
 ): void {
+  width = Math.min(width, 48);
   const values = entry.run.stats?.blocks?.medians.filter(Number.isFinite) ?? [];
   canvas.put(y, x, `consistency ✦ ${values.length} runs`, GRAY, width);
   if (!values.length) {
     canvas.put(y + 2, x, 'Run medians unavailable', GRAY, width);
     return;
   }
-  const min = Math.min(entry.run.stats!.min, ...values);
-  const max = Math.max(entry.run.stats!.max, ...values);
+  const min = Math.min(...values);
+  const max = Math.max(...values);
   const padding = (max - min || Math.abs(max) * 0.1 || 1) * 0.08;
   const low = Math.max(0, min - padding);
   const high = max + padding;
@@ -180,14 +170,57 @@ function details(
       ? `${min.slice(0, min.lastIndexOf(' '))}–${max}`
       : `${min}–${max}`;
   };
-  const gcValue = stats.gc ? duration(stats.gc.p50) : entry.gcMode === false ? 'disabled' : '—';
-  const heapValue = stats.heap ? bytes(stats.heap.p50) : '—';
-  const gcLabel = range(stats.gc, duration);
-  const heapLabel = range(stats.heap, bytes);
-  const compactGcWidth = Math.max(2, textWidth(gcValue), textWidth(gcLabel));
-  const compactHeapWidth = Math.max(4, textWidth(heapValue), textWidth(heapLabel));
-  const compact = width < 96 && width >= 49 + compactGcWidth + compactHeapWidth;
-  const narrow = width < 96 && !compact;
+  const gc = stats.gc;
+  const columns: Array<{ heading: string; qualifier?: string; value: string; detail: string }> = [
+    ...(gc && 'total' in gc
+      ? formatGcColumns(gc).map((column) => ({
+          ...column,
+          value: column.qualifier ? `${column.qualifier} ${column.value}` : column.value,
+        }))
+      : [
+          {
+            heading: 'gc',
+            value: gc ? duration(gc.p50) : entry.gcMode === false ? 'disabled' : '—',
+            detail: range(gc, duration),
+          },
+        ]),
+    {
+      heading: 'heap',
+      value: stats.heap ? bytes(stats.heap.p50) : '—',
+      detail: range(stats.heap, bytes),
+    },
+  ];
+  const columnWidths = columns.map((column) =>
+    Math.max(textWidth(column.heading), textWidth(column.value), textWidth(column.detail))
+  );
+  // Right align a row of columns with an even gap between them
+  const place = (row: number[]) => {
+    const xs = new Map<number, number>();
+    let right = width;
+    for (const index of row.toReversed()) {
+      xs.set(index, right - columnWidths[index]);
+      right -= columnWidths[index] + 3;
+    }
+    return xs;
+  };
+  // Each column stacks heading, value, and detail so its rows line up with avg, p75, and p99
+  const putColumns = (y: number, xs: Map<number, number>) => {
+    for (const [index, x] of xs) {
+      const { heading, qualifier, value, detail } = columns[index];
+      canvas.put(y, x, heading, GRAY, columnWidths[index], true);
+      canvas.put(y + 1, x, value, '', columnWidths[index], true);
+      // Qualifiers sit darker than the heading so the value stands out
+      if (qualifier)
+        canvas.put(
+          y + 1,
+          x + columnWidths[index] - textWidth(value),
+          qualifier,
+          DARK_GRAY,
+          textWidth(qualifier)
+        );
+      canvas.put(y + 2, x, detail, GRAY, columnWidths[index], true);
+    }
+  };
   ['avg', 'p75', 'p99'].forEach((label, index) => {
     canvas.put(y + index, 0, label, GRAY, 3);
     canvas.put(
@@ -198,47 +231,36 @@ function details(
       11
     );
   });
-  if (narrow) {
-    const graphWidth = Math.max(
-      16,
-      textWidth(duration(stats.min)) + textWidth(duration(stats.max)) + 2
-    );
+  const graphWidth = Math.max(
+    16,
+    textWidth(duration(stats.min)) + textWidth(duration(stats.max)) + 2
+  );
+  const all = columns.map((_, index) => index);
+  const inline = place(all);
+  if (inline.get(0)! >= 18 + graphWidth + 3) {
+    distribution(canvas, entry, 18, y, Math.min(21, inline.get(0)! - 3 - 18));
+    putColumns(y, inline);
+    y += 3;
+  } else {
     const graphX = width >= 18 + graphWidth ? 18 : 0;
     const graphY = graphX ? y : y + 4;
     distribution(canvas, entry, graphX, graphY, graphWidth);
-    const memoryWidth = 5 + Math.max(textWidth(gcValue), textWidth(heapValue));
-    const memoryX =
-      graphX && width >= graphX + graphWidth + 2 + memoryWidth ? width - memoryWidth : 0;
-    const memoryY = memoryX ? y : graphY + 3;
-    [
-      ['gc', gcValue],
-      ['heap', heapValue],
-    ].forEach(([label, value], index) => {
-      canvas.put(memoryY + index, memoryX, label, GRAY, 4);
-      canvas.put(memoryY + index, memoryX + 5, value, '', memoryWidth - 5, true);
-    });
-    y = Math.max(graphY + 3, memoryY + 2);
-  } else {
-    const gcWidth = compact ? compactGcWidth : 14;
-    const gcX = compact ? width - compactHeapWidth - 2 - gcWidth : width - 41;
-    const heapX = gcX + gcWidth + 2;
-    const heapWidth = width - heapX;
-    const graphX = 18;
-    const graphWidth = compact ? Math.min(24, gcX - graphX - 2) : 24;
-    distribution(canvas, entry, graphX, y, graphWidth);
-    canvas.put(y, gcX, 'gc', GRAY, gcWidth, true);
-    canvas.put(y + 1, gcX, gcValue, '', gcWidth, true);
-    const gcRange = wrapText(gcLabel, gcWidth);
-    const heapRange = wrapText(heapLabel, heapWidth);
-    gcRange.forEach((line, index) => canvas.put(y + 2 + index, gcX, line, GRAY, gcWidth, true));
-    canvas.put(y, heapX, 'heap', GRAY, heapWidth, true);
-    canvas.put(y + 1, heapX, heapValue, '', heapWidth, true);
-    heapRange.forEach((line, index) => canvas.put(y + 2 + index, heapX, line, GRAY, heapWidth, true));
-    y += 2 + Math.max(gcRange.length, heapRange.length);
+    y = graphY + 3;
+    // Wrap columns onto as few rows as fit below the graph
+    const rows: number[][] = [];
+    let used = width;
+    for (const index of all) {
+      if (used + 3 + columnWidths[index] > width) rows.push([]);
+      used = rows.at(-1)!.length ? used + 3 + columnWidths[index] : columnWidths[index];
+      rows.at(-1)!.push(index);
+    }
+    for (const row of rows) {
+      putColumns(y, place(row));
+      y += 3;
+    }
   }
   canvas.put(y++, 0, '─'.repeat(width), DARK_GRAY);
   consistency(canvas, entry, 0, y, width >= 53 ? Math.floor((width - 3) / 2) : width);
-  y += 4;
   return canvas.lines(colors);
 }
 
@@ -276,7 +298,7 @@ export function renderRunView(
     clockWarning = `⚠ Unstable clock: ${min.toFixed(2)}–${max.toFixed(2)} GHz (${(drift * 100).toFixed(1)}% drift)`;
   }
   const detailLines = details(benches[selected], innerWidth, state, clockWarning);
-  const detailHeight = Math.min(detailLines.length + 1, innerWidth >= 71 ? 13 : 21, height - 8);
+  const detailHeight = Math.min(detailLines.length + 1, innerWidth >= 71 ? 17 : 24, height - 8);
   const detailTop = height - detailHeight - 1;
   const pageSize = detailTop - 3;
   const maxDetailOffset = Math.max(0, detailLines.length - detailHeight + 1);
@@ -313,7 +335,7 @@ export function renderRunView(
     }
   };
   listRow(1, 'benchmark');
-  const rows: Array<{ text: string; index?: number }> = [];
+  const rows: Array<{ text: string; index?: number; style?: string }> = [];
   let previousFile = '';
   let previousGroup = '';
   benches.forEach((bench, index) => {
@@ -322,7 +344,8 @@ export function renderRunView(
       previousFile = bench.file;
       previousGroup = '';
     }
-    if (bench.group && bench.group !== previousGroup) rows.push({ text: `  ${bench.group}` });
+    if (bench.group && bench.group !== previousGroup)
+      rows.push({ text: `  ${bench.group}`, style: BOLD + DARK_GRAY });
     previousGroup = bench.group;
     rows.push({ text: bench.name, index });
   });
@@ -335,7 +358,7 @@ export function renderRunView(
   if (activeRow >= listOffset + pageSize) listOffset = activeRow - pageSize + 1;
   rows.slice(listOffset, listOffset + pageSize).forEach((row, index) => {
     const y = index + 2;
-    if (row.index === undefined) canvas.put(y, 1, row.text, BOLD, innerWidth);
+    if (row.index === undefined) canvas.put(y, 1, row.text, row.style ?? BOLD, innerWidth);
     else {
       const bench = benches[row.index];
       const active = selected === row.index;

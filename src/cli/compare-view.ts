@@ -1,4 +1,5 @@
 import { createRequire } from 'node:module';
+import { formatGcCost, formatGcEvents, formatGcSpike } from '../bench/format/gc.ts';
 import type { BenchResult, CompareResult, EligibleBench } from '../compare.ts';
 import type { LabsConfig } from '../config.ts';
 import { renderDistributions } from '../histogram.ts';
@@ -20,7 +21,7 @@ import type {
   TerminalViewState as CompareViewState,
   TerminalFrame as CompareFrame,
 } from './screen.ts';
-import { TerminalCanvas, terminalText, textWidth, wrapText } from './terminal.ts';
+import { TerminalCanvas, terminalText, textWidth, wrapMetrics, wrapText } from './terminal.ts';
 
 const { version } = createRequire(import.meta.url)('../../package.json') as { version: string };
 
@@ -63,6 +64,7 @@ function consistency(
   x: number,
   width: number
 ): void {
+  width = Math.min(width, 48);
   const base = bench.baselineRunMedians;
   const cand = bench.candidateRunMedians;
   const count =
@@ -170,7 +172,7 @@ function measurements(canvas: TerminalCanvas, bench: EligibleBench, y: number): 
       delta: change(bench.deltaP99),
     },
     {
-      label: 'gc',
+      label: bench.gc?.observed ? 'gc/iter' : 'gc',
       base: bench.gc ? formatNs(bench.gc.baseline) : '—',
       cand: bench.gc ? formatNs(bench.gc.candidate) : '—',
       delta: change(bench.gc?.delta),
@@ -267,6 +269,29 @@ function detailLines(
   };
   if (bench.kind === 'eligible') {
     y = measurements(canvas, bench, y);
+    if (bench.gc?.observed) {
+      for (const [side, stats] of [
+        ['baseline', bench.gc.baselineStats],
+        ['candidate', bench.gc.candidateStats],
+      ] as const) {
+        if (!stats) continue;
+        const share = formatGcCost(stats)?.share ?? '—';
+        for (const line of wrapMetrics(`${side} GC: ${share} ✦ ${formatGcEvents(stats)}`, width)) {
+          canvas.put(y, 0, line, GRAY);
+          const spike = formatGcSpike(stats);
+          const start = line.indexOf(spike);
+          if (start >= 0 && stats.count && stats.maxKind)
+            canvas.put(
+              y,
+              start + textWidth(spike) - textWidth(stats.maxKind),
+              stats.maxKind,
+              DARK_GRAY,
+              textWidth(stats.maxKind)
+            );
+          y++;
+        }
+      }
+    }
     canvas.put(y, 0, '─'.repeat(width), DARK_GRAY);
     y++;
     if (width >= 71) {
@@ -360,7 +385,12 @@ export function renderCompareView(
     };
   }
   const innerWidth = width - 2;
-  const detailHeight = Math.min(innerWidth >= 71 ? 12 : 21, height - 8);
+  const active = result.benches[selected];
+  const observed = active?.kind === 'eligible' && active.gc?.observed;
+  const detailHeight = Math.min(
+    innerWidth >= 71 ? (observed ? 16 : 12) : observed ? 27 : 21,
+    height - 8
+  );
   const detailTop = height - detailHeight - 1;
   const pageSize = detailTop - 3;
   const details = detailLines(result, config, selected, innerWidth, colors);

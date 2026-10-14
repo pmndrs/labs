@@ -6,7 +6,8 @@ import { getBenchRegistry } from '../index.ts';
 import { median, relativeSpread } from '../stats.ts';
 import { measure, run } from './index.ts';
 import { runTrialAt } from './main.ts';
-import type { BlockPlan, Stats, Trial } from './types.ts';
+import type { BlockPlan, GcStats, Stats, Trial } from './types.ts';
+import { mergeGc } from './lib/gc.ts';
 
 type TuneOptions = {
   min_cpu_time?: number;
@@ -138,7 +139,7 @@ function mergeRange(list: Array<{ min: number; max: number; p50: number }>): {
 function mergeStats(list: Stats[], calibrationRates: number[]): Stats {
   const samples = list.flatMap((s) => s.samples).sort((a, b) => a - b);
   const heaps = list.map((s) => s.heap).filter(Boolean) as NonNullable<Stats['heap']>[];
-  const gcs = list.map((s) => s.gc).filter(Boolean) as NonNullable<Stats['gc']>[];
+  const gcs = list.map((s) => s.gc).filter((gc) => gc && 'total' in gc) as GcStats[];
   const medians = list.map((s) => s.p50);
 
   return {
@@ -154,7 +155,7 @@ function mergeStats(list: Stats[], calibrationRates: number[]): Stats {
     avg: samples.reduce((a, v) => a + v, 0) / samples.length,
     ticks: list.reduce((a, s) => a + s.ticks, 0),
     ...(heaps.length === list.length ? { heap: mergeRange(heaps) } : {}),
-    ...(gcs.length === list.length ? { gc: mergeRange(gcs) } : {}),
+    ...(gcs.length === list.length ? { gc: mergeGc(gcs) } : {}),
     // `freqs` is retained in the saved schema for compatibility. The values
     // are software calibration rates, not literal hardware frequencies.
     blocks: { medians, freqs: calibrationRates, spreads: list.map((s) => relativeSpread(s.samples)) },

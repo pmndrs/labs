@@ -22,11 +22,9 @@ export const tuning = {
   batch_duration: 1e6,
   /** Upper bound on iterations per batched sample. */
   batch_max: 1 << 20,
-  /** Sample count above which outlier trimming kicks in. */
-  samples_threshold: 12,
   /** Single-iteration ns threshold below which batching activates. */
   batch_threshold: 65536,
-  /** Time budget (ns) a run must reach before it may stop. */
+  /** Timed work budget (ns), excluding warmup and memory diagnostics. */
   min_cpu_time: 500 * 1e6,
 } as const;
 
@@ -55,7 +53,13 @@ export function defaults(opts: any): void {
   opts.warmup_window ??= tuning.warmup_window;
   opts.warmup_tolerance ??= tuning.warmup_tolerance;
   opts.batch_threshold ??= tuning.batch_threshold;
-  opts.samples_threshold ??= tuning.samples_threshold;
+  if (!Number.isSafeInteger(opts.batch_unroll) || opts.batch_unroll < 1)
+    throw new TypeError('expected batch_unroll to be a positive integer');
+  if (
+    opts.batch_samples !== undefined &&
+    (!Number.isSafeInteger(opts.batch_samples) || opts.batch_samples < 0)
+  )
+    throw new TypeError('expected batch_samples to be a nonnegative integer');
 }
 
 /**

@@ -91,8 +91,7 @@ describe('measurement plans', () => {
     });
 
     expect(stats.plan).toMatchObject({ batch: false, samples: 20 });
-    // 20 raw samples exceed the trim threshold so 2 are dropped from each tail
-    expect(stats.samples.length).toBe(16);
+    expect(stats.samples.length).toBe(20);
   });
 
   it('forces batching on when the plan says so', async () => {

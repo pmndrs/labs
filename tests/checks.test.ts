@@ -397,6 +397,48 @@ describe('comparing memory', () => {
     );
   });
 
+  it('compares observed sampling GC costs and keeps legacy estimates separate', () => {
+    const baseline = syntheticResult('a', { gc: 1 });
+    const candidate = syntheticResult('b', { gc: 2 });
+    const stats = candidate.files[0].benchmarks[0].runs[0].stats!;
+    stats.gc = {
+      total: 2000,
+      max: 1000,
+      count: 2,
+      minor: 2,
+      major: 0,
+      incremental: 0,
+      weak: 0,
+      other: 0,
+      elapsed: 1e6,
+      timed: 9e5,
+      iterations: 400,
+      overlap: { min: 1600, max: 2000 },
+    };
+    expect(eligible(compare(baseline, candidate, CONFIG)).gc).toBeUndefined();
+    baseline.files[0].benchmarks[0].runs[0].stats!.gc = {
+      ...stats.gc,
+      total: 1000,
+      iterations: 100,
+      overlap: { min: 800, max: 1000 },
+    };
+    const result = compare(baseline, candidate, CONFIG);
+    expect(eligible(result).gc).toMatchObject({
+      baseline: 10,
+      candidate: 5,
+      delta: -0.5,
+      observed: true,
+    });
+    expect(captureReport(result).some((line) => line.includes('gc/iter(5.00ns'))).toBe(true);
+    delete baseline.files[0].benchmarks[0].runs[0].stats!.gc!.overlap;
+    expect(eligible(compare(baseline, candidate, CONFIG)).gc).toMatchObject({
+      baseline: 10,
+      candidate: 5,
+    });
+    expect(captureReport(result).join('\n')).toContain('baseline GC: 0.10%');
+    expect(captureReport(result).join('\n')).toContain('max 1.00 µs');
+  });
+
   it('omits a metric either run did not record', () => {
     const result = compare(
       syntheticResult('a', { heap: 100 }),

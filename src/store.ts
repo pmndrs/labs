@@ -28,7 +28,7 @@ export interface SavedStats {
   p25: number;
   p75: number;
   p99: number;
-  gc?: { min: number; max: number; p50: number };
+  gc?: Stats['gc'];
   heap?: { min: number; max: number; p50: number };
   plan?: BlockPlan;
   /** Output compared with the baseline. */
@@ -98,7 +98,7 @@ export interface WorkerResult {
   };
   layout?: Array<{ name: string | null; types: string[] }>;
   benchmarks: WorkerBenchmarkTrial[];
-  environment?: { preFreq?: number; postFreq: number };
+  environment?: { postFreq: number };
 }
 
 export interface SavedContext {
@@ -122,8 +122,6 @@ export interface SavedFile {
 
 export interface FreqSample {
   file: string;
-  /** @deprecated Use `runFreq` or `postFreq`. */
-  preFreq?: number;
   runFreq: number;
   postFreq: number;
 }
@@ -350,7 +348,7 @@ export function trimStats(stats: Stats): SavedStats {
     ...(stats.blocks ? { blocks: stats.blocks } : {}),
     ...(stats.gc
       ? {
-          gc: { min: stats.gc.min, max: stats.gc.max, p50: stats.gc.p50 },
+          gc: stats.gc,
         }
       : {}),
     ...(stats.heap

@@ -6,7 +6,6 @@ import { describe, expect, it, vi } from 'vitest';
 import { defineConfig } from '../src/config.ts';
 import { replayReport } from '../src/report.ts';
 import type { SavedResult } from '../src/store.ts';
-import { CYAN, MAGENTA, YELLOW } from '../src/utils/ansi.ts';
 import { showRunReport } from '../src/cli/run-screen.ts';
 import { renderRunView } from '../src/cli/run-view.ts';
 import { openReportScreen } from '../src/cli/screen.ts';
@@ -135,127 +134,96 @@ describe('run report', () => {
     expect(stable).not.toContain('warning');
   });
 
-  it('shows real measurements with timings, distribution, and memory in aligned columns', () => {
+  it('shows measured values and labels the plotted percentile range', () => {
     const result = fixture();
-    const frame = render(result);
-    const text = frame.lines.join('\n');
-    expect(text).toContain('noisy samples ✦ runs agree');
-    expect(text).toContain('consistency ✦ 8 runs');
-    expect(text).toContain('10.00–20.00 ns');
-    expect(text).toContain('1.00–2.00 KiB');
-    expect(text).toContain('1 warning');
-    expect(text).not.toContain('min–max');
-    const avg = frame.lines.find((line) => line.includes('avg') && line.includes('575.00 ns'))!;
-    const p75 = frame.lines.find((line) => line.includes('p75') && line.includes('650.00 ns'))!;
-    expect(avg).toContain('avg  575.00 ns');
-    expect(avg).toContain('gc');
-    expect(avg).toContain('heap');
-    expect(p75).toContain('15.00 ns');
-    expect(p75).toContain('1.50 KiB');
-    const consistency = frame.lines.find((line) => line.includes('consistency'))!;
-    const p99 = frame.lines.find((line) => line.includes('p99') && line.includes('750.00 ns'))!;
-    expect(p75).toMatch(/[▁▂▃▄▅▆▇█]/);
-    const header = frame.lines[1];
-    expect(consistency.indexOf('consistency')).toBe(1);
-    expect(frame.lines[frame.lines.indexOf(consistency) + 1].trim()).toBe('');
-    const dots = frame.lines[frame.lines.indexOf(consistency) + 2];
-    expect(dots.indexOf('╞')).toBe(1);
-    expect(dots.indexOf('╡')).toBe(47);
-    expect(avg.indexOf('gc') + 2).toBe(header.indexOf('avg') + 3);
-    expect(avg.indexOf('heap') + 4).toBe(header.indexOf('heap') + 4);
-    expect(avg.indexOf('gc') + 2).toBe(p75.indexOf('15.00 ns') + 8);
-    expect(avg.indexOf('heap') + 4).toBe(p75.indexOf('1.50 KiB') + 8);
-    expect(avg.indexOf('575.00 ns')).toBe(p75.indexOf('650.00 ns'));
-    expect(p99.indexOf('400.00 ns')).toBeLessThan(avg.indexOf('gc'));
-    const colored = renderRunView(result, defineConfig({ benchDir: '.' }), {
-      columns: 100,
-      rows: 30,
-      selected: 0,
-    }).lines.join('\n');
-    for (const color of [CYAN, MAGENTA, YELLOW]) expect(colored).toContain(color);
-    expect(stripVTControlCharacters(colored)).toBe(text);
+    const stats = result.files[0].benchmarks[0].runs[0].stats!;
+    let text = render(result).lines.join('\n');
+    for (const value of ['575.00 ns', '650.00 ns', '750.00 ns', '15.00 ns', '10.00–20.00 ns'])
+      expect(text).toContain(value);
+    for (const value of ['1.50 KiB', '1.00–2.00 KiB', 'consistency ✦ 8 runs'])
+      expect(text).toContain(value);
+
+    // The histogram trims outliers above p99, so its range must not show the raw max
+    stats.samples = [
+      ...Array<number>(10).fill(0),
+      ...Array<number>(1000).fill(100),
+      ...Array<number>(100).fill(200),
+      1000,
+      1100,
+      2000,
+      2300,
+    ];
+    stats.min = 0;
+    stats.max = 2300;
+    stats.p99 = 200;
+    text = render(result).lines.join('\n');
+    expect(text).toContain('0.00 ns');
+    expect(text).toContain('200.00 ns');
+    expect(text).not.toContain('2.30 µs');
   });
 
-  it.each([80, 90, 100])(
-    'keeps measurements together and consistency visible at %i columns',
-    (columns) => {
-      const result = fixture();
-      const stats = result.files[0].benchmarks[0].runs[0].stats!;
-      stats.gc = { min: 1.58e6, max: 1.58e6, p50: 1.58e6 };
-      stats.heap = { min: 45.39 * 1024 ** 2, max: 45.39 * 1024 ** 2, p50: 45.39 * 1024 ** 2 };
-      const frame = render(result, columns);
-      const avg = frame.lines.find((line) => line.includes('avg') && line.includes('575.00 ns'))!;
-      const p75 = frame.lines.find((line) => line.includes('p75') && line.includes('650.00 ns'))!;
-      const p99 = frame.lines.find((line) => line.includes('p99') && line.includes('750.00 ns'))!;
-      expect(avg).toContain('avg  575.00 ns');
-      expect(avg).toContain('gc');
-      expect(avg).toContain('heap');
-      expect(p75).toMatch(/[▁▂▃▄▅▆▇█]/);
-      expect(p75).toContain('1.58 ms');
-      expect(p75).toContain('45.39 MiB');
-      expect(p99).toContain('400.00 ns');
-      expect(p99).toContain('750.00 ns');
-      expect(p99).toContain('1.58–1.58 ms');
-      expect(p99).toContain('45.39–45.39 MiB');
-      expect(p99.indexOf('1.58–1.58 ms')).toBeGreaterThan(p99.lastIndexOf('750.00 ns') + 9);
-      const graph = frame.lines.findIndex((line) => line.includes('consistency'));
-      expect(frame.lines[graph + 2]).toMatch(/╞.*[●⬤].*╡/);
-      expect(frame.lines[graph + 3]).toContain('372.00 ns');
-      expect(frame.lines[graph + 3]).toContain('778.00 ns');
-      expect(frame.maxDetailOffset).toBe(0);
-      expect(frame.lines.every((line) => stringWidth(line) < columns)).toBe(true);
-    }
-  );
-
-  it.each([40, 55, 70, 75])(
-    'stacks memory values without ranges in the narrow %i-column layout',
-    (columns) => {
-      const frame = render(fixture(), columns);
-      const text = frame.lines.join('\n');
-      expect(frame.lines[1]).toContain('avg');
-      expect(frame.lines[1]).toContain('p99');
-      const selected = frame.lines.find((line) => line.includes('›') && line.includes('575.00 ns'))!;
-      expect(selected).toContain('750.00 ns');
-      const avg = frame.lines.find((line) => line.includes('avg') && line.includes('575.00 ns'))!;
-      expect(avg).toContain('avg  575.00 ns');
-      const gc = frame.lines.findIndex((line) => line.includes('gc') && line.includes('15.00 ns'));
-      expect(gc).toBeGreaterThan(0);
-      expect(frame.lines[gc + 1]).toContain('heap');
-      expect(frame.lines[gc + 1]).not.toContain('heap / iter');
-      expect(frame.lines[gc + 1]).toContain('1.50 KiB');
-      if (columns >= 70) expect(frame.lines[gc]).toBe(avg);
-      expect(text).not.toContain('10.00–20.00 ns');
-      expect(text).not.toContain('1.00–2.00 KiB');
-      expect(text).toContain('400.00 ns');
-      expect(text).toContain('750.00 ns');
-      const graph = frame.lines.findIndex((line) => line.includes('consistency'));
-      expect(frame.lines[graph + 2]).toMatch(/╞.*[●⬤].*╡/);
-      expect(frame.lines[graph + 3]).toContain('372.00 ns');
-      expect(frame.lines[graph + 3]).toContain('778.00 ns');
-      expect(frame.maxDetailOffset).toBe(0);
-      expect(frame.lines.every((line) => stringWidth(line) < columns)).toBe(true);
-    }
-  );
-
-  it('uses regular and large cyan dots for single runs and overlaps', () => {
+  it.each([
+    { name: 'minor spike' },
+    { name: 'major spike', maxKind: 'major' as const },
+    { name: 'no events', zero: true },
+    { name: 'short timed windows', timed: 100e6 },
+  ])('reports observed GC values for $name', ({ zero, maxKind, timed }) => {
     const result = fixture();
-    result.files[0].benchmarks[0].runs[0].stats!.blocks!.medians = [
-      420, 480, 480, 550, 550, 550, 700, 700,
-    ];
-    const frame = renderRunView(result, defineConfig({ benchDir: '.' }), {
-      columns: 100,
-      rows: 30,
-      selected: 0,
-    });
-    const dots = frame.lines[frame.lines.findIndex((line) => line.includes('consistency')) + 2];
-    expect(dots).toContain(`${CYAN}●`);
-    expect(dots).toContain(`${CYAN}⬤`);
-    expect(dots.split('⬤')).toHaveLength(4);
-    expect(dots.split('●')).toHaveLength(2);
-    expect(dots).not.toContain(YELLOW);
-    expect(dots).not.toContain('\x1b[2m');
-    expect(dots).not.toContain('\x1b[1m');
-    expect(dots).not.toContain('38;2;');
+    result.files[0].benchmarks[0].runs[0].stats!.gc = {
+      total: zero ? 0 : 16.8e6,
+      max: zero ? 0 : 900e3,
+      maxKind: maxKind ?? 'minor',
+      count: zero ? 0 : 280,
+      minor: zero ? 0 : 272,
+      major: zero ? 0 : 8,
+      incremental: 0,
+      weak: 0,
+      other: 0,
+      elapsed: 4.1e9,
+      timed: timed ?? 4e9,
+      iterations: 1e7,
+    };
+    // Share is measured against sampling wall time, so timed windows do not change it
+    const cost = zero ? '0% 0 ns' : '0.41% 1.68 ns';
+    const spike = zero ? '0 ns' : `${maxKind === 'major' ? 'major ' : ''}900.00 µs`;
+    const frequency = zero ? '—' : '1 gc / 35,714 iter';
+    const major = `${zero ? 0 : 8} major`;
+    const text = render(result, 100, 0, 40).lines.join('\n');
+    for (const value of [cost, spike, frequency, major]) expect(text).toContain(value);
+    if (maxKind !== 'major') expect(text).not.toMatch(/\bminor \d/);
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      replayReport(result, defineConfig({ benchDir: '.' }));
+      const printed = stripVTControlCharacters(log.mock.calls.flat().join('\n'));
+      expect(printed).toContain(`gc(${frequency}) ${cost}`);
+      expect(printed).toContain(`gc max(${major}) ${spike}`);
+    } finally {
+      log.mockRestore();
+    }
+  });
+
+  it.each([
+    [41, 1440, '1 gc / 35 iter'],
+    [6, 3, '2 gc / iter'],
+  ] as const)('normalizes %i events across %i iterations clearly', (count, iterations, frequency) => {
+    const result = fixture();
+    result.files[0].benchmarks[0].runs[0].stats!.gc = {
+      total: count * 1000,
+      max: 1000,
+      maxKind: 'minor',
+      count,
+      minor: count,
+      major: 0,
+      incremental: 0,
+      weak: 0,
+      other: 0,
+      elapsed: 10e6,
+      timed: 9e6,
+      iterations,
+    };
+    const frame = render(result);
+    expect(frame.lines.some((line) => line.includes(frequency))).toBe(true);
+    expect(frame.lines.join('\n')).not.toContain('/M iter');
   });
 
   it.each([40, 55, 75, 100])('fits %i columns and exposes details by scrolling', (columns) => {
