@@ -10,6 +10,7 @@ import { assert, AssertionError } from '../src/assert.ts';
 import { B, measure } from '../src/bench/index.ts';
 import { serialize, snapshotsDiffer, toSnapshot } from '../src/bench/lib/snapshot.ts';
 import { type Snapshot, isAssertionError } from '../src/bench/types.ts';
+import { renderCompareView } from '../src/cli/compare-view.ts';
 import { compare, printCompareReport } from '../src/compare.ts';
 import { defineConfig } from '../src/config.ts';
 import type { SavedResult } from '../src/store.ts';
@@ -336,6 +337,32 @@ describe('comparing outputs', () => {
     expect(baseline.benches[0]).toMatchObject({ kind: 'skipped' });
     if (baseline.benches[0].kind === 'skipped') {
       expect(baseline.benches[0].reason).toContain('baseline run failed its check');
+    }
+  });
+  it('shows no stale statistics for benchmarks that cannot be compared', () => {
+    const result = compare(syntheticResult('a'), syntheticResult('b'), CONFIG);
+    const key = result.benches[0].key;
+    result.benches.push(
+      { kind: 'changed', key, baselineP50: 100, candidateP50: 80 },
+      { kind: 'failed', key, check: true, message: 'wrong output' },
+      { kind: 'skipped', key, reason: 'insufficient block replication' },
+      { kind: 'missing', key, presentIn: 'candidate' },
+      { kind: 'missing', key, presentIn: 'baseline' }
+    );
+    const view = (selected: number) =>
+      renderCompareView(result, CONFIG, {
+        columns: 100,
+        rows: 30,
+        selected,
+        colors: false,
+      }).lines.join('\n');
+    expect(view(0)).toContain('consistency');
+    for (let selected = 1; selected < result.benches.length; selected++) {
+      const text = view(selected);
+      expect(text).not.toContain('consistency');
+      expect(text).not.toContain('spread ✦');
+      expect(text).not.toContain('p <');
+      expect(text).toContain(`${selected + 1}/6`);
     }
   });
 });
