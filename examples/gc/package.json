@@ -1,0 +1,8 @@
+{
+  "name": "labs-gc-example",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "bench": "../../node_modules/.bin/tsx ../../src/cli/cli.ts --no-save"
+  }
+}
