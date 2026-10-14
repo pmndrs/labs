@@ -58,11 +58,14 @@ In an interactive terminal, completed runs open a full-screen results view. Sele
 <details>
 <summary>How to read the results</summary>
 
-- **avg, p75, p99**: Average time per iteration and the times that 75% and 99% of samples finish within.
-- **Histogram**: The distribution of timing samples, with the fastest and slowest times below it. Cyan marks samples below the average, yellow marks the average bin, and magenta marks samples above it.
-- **gc**: Median and range of per-sample garbage collection time above the fixed cost of collecting the process's live heap. Near zero means the bench adds nothing for the collector to do. Higher values mean it creates garbage or keeps more objects alive.
-- **heap**: Median and range of bytes allocated per iteration, including typed array stores held outside the JS heap. The median ignores the allocation V8 does while compiling the function, so a bench that stays on integers and reuses its objects reports zero.
+- **avg, p75, p99**: Average time per iteration and the 75th and 99th percentiles. For batched work, percentiles describe batch averages rather than individual calls.
+- **Histogram**: The fastest 99% of timing samples, with the minimum and upper cutoff below. Cyan marks samples below the average, yellow the average bin, and magenta samples above it.
+- **gc**: Observed GC time per iteration and its share of sampling time, including gaps between calls. Below is average GC event frequency. The share is not an exact GC contribution to `avg`.
+- **gc max**: Longest observed GC event, marked `major` when applicable. Below is the number of major GC events observed.
+- **heap**: Median and range of estimated bytes allocated per iteration, including typed array storage. Measured after timing; collections during diagnostics can lower the estimate.
 - **consistency**: Each dot represents a fresh process's median time. Larger dots represent multiple runs at the same plotted position. Tight clusters show agreement between runs, while a wider spread shows more variation.
+
+GC figures exclude warmup and heap diagnostics and do not capture all GC overhead. Disable observation with `.gc(false)`. Older forced-GC estimates are kept separate.
 
 </details>
 
@@ -85,7 +88,7 @@ Browse the results in a full-screen comparison view. Select a benchmark to see i
 - **▲ faster, ▼ slower, ■ neutral**: Faster or slower requires a statistically significant change of at least 5% by default. Neutral means no clear change was found, not that the runs are identical.
 - **p**: Smaller values give stronger evidence of a timing difference. The default cutoff is 0.05. This does not measure the size of the change.
 - **Histograms**: Baseline is cyan and candidate is magenta, both on the same time scale. Further left means faster. A wider shape means more variation.
-- **p99, gc, heap**: Tail timing, garbage collection time, and bytes allocated per iteration. The shaded row shows their percentage changes.
+- **p99, gc/iter, heap**: Tail timing, observed GC time per iteration, and estimated bytes allocated per iteration. The shaded row shows descriptive percentage changes, not statistical verdicts.
 - **consistency**: Each dot is a fresh process's median time, with baseline above candidate. Larger dots show overlapping runs. Tight clusters mean the runs agree.
 - **spread**: The dot shows the estimated change and the line shows its confidence interval. Left of zero means faster, right means slower. A wider interval means more uncertainty. The shaded band marks changes below the configured minimum.
 
@@ -97,7 +100,7 @@ Labs promises to give results you can trust. To do this a number of guarantees a
 
 - Each bench block runs in its own isolated worker process, preventing benches in the same file from contaminating each other's JIT state, heap layout, or GC history. Reordering benches can otherwise skew results by 2x or more.
 - Every block warms the workload before measurement. Warmup exits when consecutive timing windows agree, with a 100 ms budget for slow or unstable work. The pilot chooses batching from the warmed timings.
-- GC influence is mitigated. By default, each sample starts with a garbage collection (GC) reset so previous samples don't affect it.
+- Samples run consecutively after one initial GC. Natural GC remains in timing, all samples are retained, and heap diagnostics run separately afterward.
 - Every bench is run in isolated blocks that are interleaved: `A₁ B₁ C₁ → A₂ B₂ C₂ → … → A₈ B₈ C₈`. This reduces bias from gradual changes such as CPU throttling or even boosting.
 - Timing overhead is controlled. If a sample's measurement time is so fast that the overhead of the timing itself would bias the results, then it is run in a batch sized so each sample lasts about a millisecond.
 - Detect dead code elimination (DCE). If the samples measure the same as an empty function call, then we detect DCE and report it. This can be mitigated by returning a result from the yielded function.
@@ -355,7 +358,7 @@ export default defineConfig({
 | `benchMatch`        | `**/*.bench.ts`                             | Glob pattern for discovery                                                                                                                      |
 | `nodeFlags`         | `['--allow-natives-syntax', '--expose-gc']` | Node flags per worker process                                                                                                                   |
 | `resultsDir`        | `.labs`                                     | Directory for saved results, relative to config                                                                                                 |
-| `blockTime`         | `0.5`                                       | Time budget per block in seconds; every block runs at least this long and collects at least `minSamples`                                        |
+| `blockTime`         | `0.5`                                       | Pilot block's timed work budget in seconds, excluding warmup and heap diagnostics. Later blocks replay its sample count                         |
 | `minSamples`        | `20`                                        | Minimum samples per block                                                                                                                       |
 | `alpha`             | `0.05`                                      | Mann-Whitney U significance level                                                                                                               |
 | `minDelta`          | `0.05`                                      | Minimum absolute Hodges-Lehmann relative effect for a verdict; rows whose approximate resolution exceeds it are annotated as limited-resolution |
@@ -364,6 +367,6 @@ export default defineConfig({
 
 Sampling behavior:
 
-- The first block of each benchmark samples until both `blockTime` and `minSamples` are met. Fast work is batched so each sample lasts about a millisecond, and slow work runs until the sample floor is reached even if that exceeds `blockTime`.
+- The first block of each benchmark samples until both `blockTime` and `minSamples` are met. Only measured work counts toward `blockTime`. Fast work is batched so each sample lasts about a millisecond, and slow work runs until the sample floor is reached even if that exceeds `blockTime`.
 - Later blocks replay the first block's batching and sample count exactly, so every block does identical work.
 - Two spreads are reported. Between-block spread of medians drives the comparison resolution and the limited-resolution annotation, evaluated against the current `minDelta` so changing it re-evaluates existing results. Within-block spread of samples flags noisy benchmarks whose timed work does not settle inside one process.

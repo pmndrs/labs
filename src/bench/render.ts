@@ -2,6 +2,7 @@ import { ansi } from '../utils/ansi.ts';
 import { min as arrMin, max as arrMax } from '../utils/math.ts';
 import { truncate, formatNs, formatBytes, formatAmount } from '../utils/units.ts';
 import * as histogramFmt from './format/histogram.ts';
+import { formatGcColumns } from './format/gc.ts';
 import * as boxplotFmt from './format/boxplot.ts';
 import * as barplotFmt from './format/barplot.ts';
 import * as lineplotFmt from './format/lineplot.ts';
@@ -199,36 +200,59 @@ export function renderMitata(
           print(l);
 
           if (r.stats!.gc) {
-            l = '';
-            prev_run_gap = true;
-            l += ' '.repeat(k_legend - 10);
-            const gcm = formatNs(r.stats!.gc.min).padStart(9);
-            const gcx = formatNs(r.stats!.gc.max).padStart(9);
-            const tail = formatNs(r.stats!.gc.p50).padStart(9);
+            const gc = r.stats!.gc;
+            if ('total' in gc) {
+              // Right align so values end in the same column as the heap value
+              for (const column of formatGcColumns(gc)) {
+                const head = column.heading + '(' + column.detail + ') ';
+                const value = (column.qualifier ? column.qualifier + ' ' : '') + column.value;
+                const indent = ' '.repeat(Math.max(0, k_legend + 26 - head.length - value.length));
+                if (!opts.colors) print(indent + head + value);
+                else
+                  print(
+                    indent +
+                      ansi.gray +
+                      head +
+                      (column.qualifier ? column.qualifier + ' ' : '') +
+                      ansi.reset +
+                      ansi.blue +
+                      column.value +
+                      ansi.reset
+                  );
+              }
+              prev_run_gap = true;
+            } else {
+              l = '';
+              prev_run_gap = true;
+              l += ' '.repeat(k_legend - 10);
+              const gcm = formatNs(gc.min).padStart(9);
+              const gcx = formatNs(gc.max).padStart(9);
+              const tail = formatNs(gc.p50).padStart(9);
 
-            if (!opts.colors) l += 'gc(' + gcm + ' … ' + gcx + ') ' + tail;
-            else
-              l +=
-                ansi.gray +
-                'gc(' +
-                ansi.reset +
-                ansi.blue +
-                gcm +
-                ansi.reset +
-                ansi.gray +
-                ' … ' +
-                ansi.reset +
-                ansi.blue +
-                gcx +
-                ansi.reset +
-                ansi.gray +
-                ') ' +
-                ansi.reset +
-                ansi.blue +
-                tail +
-                ansi.reset;
+              if (!opts.colors) l += 'gc(' + gcm + ' … ' + gcx + ') ' + tail;
+              else
+                l +=
+                  ansi.gray +
+                  'gc(' +
+                  ansi.reset +
+                  ansi.blue +
+                  gcm +
+                  ansi.reset +
+                  ansi.gray +
+                  ' … ' +
+                  ansi.reset +
+                  ansi.blue +
+                  gcx +
+                  ansi.reset +
+                  ansi.gray +
+                  ') ' +
+                  ansi.reset +
+                  ansi.blue +
+                  tail +
+                  ansi.reset;
 
-            print(l);
+              print(l);
+            }
           }
 
           if (r.stats!.heap) {

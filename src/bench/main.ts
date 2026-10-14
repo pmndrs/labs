@@ -63,6 +63,7 @@ export class B {
     return ((this._name = name), this.highlight(color), this);
   }
 
+  /** Observe GC during sampling. Heap estimation runs separately afterward. */
   gc(gc = true): this {
     if ('boolean' !== typeof gc) throw new TypeError('expected gc to be a boolean');
     return ((this._gc = gc), this);
@@ -384,7 +385,6 @@ export async function run(
   const cal = opts.calibrate ?? {};
   const noop = await measure(() => {}, cal);
   const _cpu = await measure(() => {}, { ...cal, batch_unroll: 1 });
-  const noop_sample_gc = await measure(() => {}, { ...cal, sample_gc: true });
   const noop_iter = await measure((state: any) => {
     for (const _ of state);
   }, cal);
@@ -403,7 +403,8 @@ export async function run(
     noop: {
       fn: noop,
       iter: noop_iter,
-      fn_gc: noop_sample_gc,
+      // Retain the field used by saved results with separate GC calibration.
+      fn_gc: noop,
     },
   };
 

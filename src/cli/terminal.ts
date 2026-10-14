@@ -45,6 +45,25 @@ export function wrapText(value: string, width: number): string[] {
   return lines;
 }
 
+/** Keep short metrics together when wrapping a separated report summary. */
+export function wrapMetrics(value: string, width: number): string[] {
+  const lines: string[] = [];
+  let line = '';
+  for (const part of value.split(' ✦ ')) {
+    const joined = line ? `${line} ✦ ${part}` : part;
+    if (textWidth(joined) <= width) {
+      line = joined;
+    } else {
+      if (line) lines.push(line);
+      const wrapped = wrapText(part, width);
+      lines.push(...wrapped.slice(0, -1));
+      line = wrapped.at(-1) ?? '';
+    }
+  }
+  if (line) lines.push(line);
+  return lines;
+}
+
 type Cell = { text: string; style: string };
 
 /** A terminal-cell grid keeps wide names and ANSI styles inside their columns. */

@@ -34,7 +34,7 @@ pnpm lint
 
 ## Comments
 
-Comments should be concise and relavant to explaining the algorithm or feature. It should not explain changes or a history of the codebase. Comments should serve as documentation. Use simple punctuation. Do not use semicolons or em dashes, for example.
+Comments should be concise and relavant to explaining the algorithm or feature. It should not explain changes or a history of the codebase. Comments should serve as documentation. Use simple punctuation. Do not use semicolons or em dashes, for example. Do not add inline comments for properties in types or interfaces.
 
 # Const Policy
 

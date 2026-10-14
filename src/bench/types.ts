@@ -10,6 +10,30 @@ export interface BlockPlan {
   samples: number;
 }
 
+/** Observed GC during sampling, with all durations in nanoseconds. */
+export interface GcStats {
+  total: number;
+  max: number;
+  maxKind?: 'minor' | 'major' | 'incremental' | 'weak' | 'other';
+  count: number;
+  minor: number;
+  major: number;
+  incremental: number;
+  weak: number;
+  other: number;
+  elapsed: number;
+  timed: number;
+  iterations: number;
+  overlap?: { min: number; max: number };
+}
+
+/** Forced collection estimates stored by older releases. */
+export interface LegacyGcStats {
+  min: number;
+  max: number;
+  p50: number;
+}
+
 export interface Stats {
   debug: string;
   ticks: number;
@@ -25,9 +49,7 @@ export interface Stats {
   p75: number;
   p99: number;
   p999: number;
-  /** Per sample forced collection time above the process's fixed collection cost. */
-  gc?: { min: number; max: number; p50: number };
-  /** Bytes allocated per iteration, including external memory such as typed array stores. */
+  gc?: GcStats | LegacyGcStats;
   heap?: { min: number; max: number; p50: number };
   /** Decisions this measurement made, usable to freeze later blocks. */
   plan?: BlockPlan;
@@ -63,7 +85,6 @@ export interface MeasureOptions {
   concurrency?: number;
   min_samples?: number;
   max_samples?: number;
-  /** Time budget in ns a run must reach, together with `min_samples`, before it stops. */
   min_cpu_time?: number;
   batch_unroll?: number;
   /** Iterations per batched sample. Derived from `batch_duration` when omitted. */
@@ -82,7 +103,6 @@ export interface MeasureOptions {
   /** Maximum relative range of the recent per-call window timings. */
   warmup_tolerance?: number;
   batch_threshold?: number;
-  samples_threshold?: number;
   gc?: boolean | ((() => void) & { fallback?: boolean });
   $counters?: any;
   params?: Record<string | number, (...args: any[]) => any>;

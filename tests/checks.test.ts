@@ -10,6 +10,7 @@ import { assert, AssertionError } from '../src/assert.ts';
 import { B, measure } from '../src/bench/index.ts';
 import { serialize, snapshotsDiffer, toSnapshot } from '../src/bench/lib/snapshot.ts';
 import { type Snapshot, isAssertionError } from '../src/bench/types.ts';
+import { renderCompareView } from '../src/cli/compare-view.ts';
 import { compare, printCompareReport } from '../src/compare.ts';
 import { defineConfig } from '../src/config.ts';
 import type { SavedResult } from '../src/store.ts';
@@ -338,6 +339,32 @@ describe('comparing outputs', () => {
       expect(baseline.benches[0].reason).toContain('baseline run failed its check');
     }
   });
+  it('shows no stale statistics for benchmarks that cannot be compared', () => {
+    const result = compare(syntheticResult('a'), syntheticResult('b'), CONFIG);
+    const key = result.benches[0].key;
+    result.benches.push(
+      { kind: 'changed', key, baselineP50: 100, candidateP50: 80 },
+      { kind: 'failed', key, check: true, message: 'wrong output' },
+      { kind: 'skipped', key, reason: 'insufficient block replication' },
+      { kind: 'missing', key, presentIn: 'candidate' },
+      { kind: 'missing', key, presentIn: 'baseline' }
+    );
+    const view = (selected: number) =>
+      renderCompareView(result, CONFIG, {
+        columns: 100,
+        rows: 30,
+        selected,
+        colors: false,
+      }).lines.join('\n');
+    expect(view(0)).toContain('consistency');
+    for (let selected = 1; selected < result.benches.length; selected++) {
+      const text = view(selected);
+      expect(text).not.toContain('consistency');
+      expect(text).not.toContain('spread ✦');
+      expect(text).not.toContain('p <');
+      expect(text).toContain(`${selected + 1}/6`);
+    }
+  });
 });
 
 describe('worker checks', () => {
@@ -395,6 +422,48 @@ describe('comparing memory', () => {
     expect(lines.some((line) => /gc\(0\.00ns —\) +heap\(250\.00 b \+150\.0%\)/.test(line))).toBe(
       true
     );
+  });
+
+  it('compares observed sampling GC costs and keeps legacy estimates separate', () => {
+    const baseline = syntheticResult('a', { gc: 1 });
+    const candidate = syntheticResult('b', { gc: 2 });
+    const stats = candidate.files[0].benchmarks[0].runs[0].stats!;
+    stats.gc = {
+      total: 2000,
+      max: 1000,
+      count: 2,
+      minor: 2,
+      major: 0,
+      incremental: 0,
+      weak: 0,
+      other: 0,
+      elapsed: 1e6,
+      timed: 9e5,
+      iterations: 400,
+      overlap: { min: 1600, max: 2000 },
+    };
+    expect(eligible(compare(baseline, candidate, CONFIG)).gc).toBeUndefined();
+    baseline.files[0].benchmarks[0].runs[0].stats!.gc = {
+      ...stats.gc,
+      total: 1000,
+      iterations: 100,
+      overlap: { min: 800, max: 1000 },
+    };
+    const result = compare(baseline, candidate, CONFIG);
+    expect(eligible(result).gc).toMatchObject({
+      baseline: 10,
+      candidate: 5,
+      delta: -0.5,
+      observed: true,
+    });
+    expect(captureReport(result).some((line) => line.includes('gc/iter(5.00ns'))).toBe(true);
+    delete baseline.files[0].benchmarks[0].runs[0].stats!.gc!.overlap;
+    expect(eligible(compare(baseline, candidate, CONFIG)).gc).toMatchObject({
+      baseline: 10,
+      candidate: 5,
+    });
+    expect(captureReport(result).join('\n')).toContain('baseline GC: 0.10%');
+    expect(captureReport(result).join('\n')).toContain('max 1.00 µs');
   });
 
   it('omits a metric either run did not record', () => {

@@ -76,7 +76,10 @@ describe('measuring work', () => {
     const stats = await measure(busy(100), { min_cpu_time: 20e6, min_samples: 12 });
 
     expect(stats.plan?.batch).toBe(false);
-    expect(stats.plan!.samples).toBeGreaterThanOrEqual(200);
+    expect(stats.plan!.samples).toBeGreaterThanOrEqual(12);
+    expect(stats.samples.reduce((total, duration) => total + duration, 0)).toBeGreaterThanOrEqual(
+      20e6
+    );
   });
 
   it('protects returned benchmark results from dead-code elimination', async () => {
@@ -113,6 +116,62 @@ describe('measuring work', () => {
     );
 
     expect(stats.samples).toEqual([1, 1]);
+  });
+
+  it.each([1, 3, 5])('measures every call in a batch of %i iterations', async (batchSamples) => {
+    const factories = [
+      (work: () => void) => work,
+      (work: () => void) => async () => work(),
+      (work: () => void) =>
+        function* () {
+          yield {
+            bench: (value: number) => {
+              expect(value).toBe(42);
+              work();
+            },
+            0: () => 42,
+          };
+        },
+      (work: () => void) => (state: any) => {
+        for (const _ of state) work();
+      },
+      (work: () => void) => async (state: any) => {
+        for await (const _ of state) work();
+      },
+    ];
+    for (const [index, create] of factories.entries()) {
+      let clock = 0;
+      let calls = 0;
+      const stats = await measure(
+        create(() => {
+          calls++;
+          clock += 10;
+        }),
+        {
+          now: () => clock,
+          gc: false,
+          heap: false,
+          warmup_time: 0,
+          batch: true,
+          batch_samples: batchSamples,
+          min_samples: 3,
+          max_samples: 3,
+          min_cpu_time: 0,
+        }
+      );
+      expect(calls).toBe((index >= 3 ? 2 : 1) + 3 * batchSamples);
+      expect(stats.ticks).toBe(3 * batchSamples);
+      expect(stats.samples).toEqual([10, 10, 10]);
+      expect(stats.avg).toBe(10);
+    }
+  });
+
+  it('rejects an iterator that stops before completing measurement', async () => {
+    await expect(
+      measure((state: any) => {
+        for (const _ of state) break;
+      }, fast)
+    ).rejects.toThrow('expected iterator to consume all measurement iterations');
   });
 });
 
@@ -232,7 +291,7 @@ describe('composing a benchmark suite', () => {
 });
 
 describe('run policy', () => {
-  it('collects before every run and between samples unless disabled', async () => {
+  it('observes GC by default and keeps forced collection in the heap pass', async () => {
     let collections = 0;
     const tune = {
       gc: () => collections++,
@@ -241,12 +300,14 @@ describe('run policy', () => {
       max_samples: 1,
     } as const;
 
-    await new B('sample collection', () => {}).run(true, tune);
-    expect(collections).toBeGreaterThan(1);
+    const observed = await new B('sample collection', () => {}).run(true, tune);
+    expect(collections).toBe(4);
+    expect(observed.runs[0].stats!.gc).toHaveProperty('total');
 
     collections = 0;
-    await new B('initial collection', () => {}).gc(false).run(true, tune);
-    expect(collections).toBe(1);
+    const disabled = await new B('initial collection', () => {}).gc(false).run(true, tune);
+    expect(collections).toBe(4);
+    expect(disabled.runs[0].stats!.gc).toBeUndefined();
   });
 
   it('captures benchmark failures by default and can surface them to callers', async () => {
