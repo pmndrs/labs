@@ -55,6 +55,8 @@ export interface Stats {
   plan?: BlockPlan;
   /** Output compared with the baseline. */
   snapshot?: Snapshot;
+  unsettled?: boolean;
+  varyingOutput?: boolean;
   /** Per-block summaries when the benchmark ran in multiple fresh processes. */
   blocks?: {
     medians: number[];

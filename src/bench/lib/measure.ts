@@ -8,7 +8,7 @@ import {
 } from './runtime.ts';
 import { toSnapshot } from './snapshot.ts';
 import { batchSize, defaults } from './constants.ts';
-import { createWarmup, isWarmupDone, recordWarmup } from './warmup.ts';
+import { createWarmup, isWarmupDone, isWarmupUnsettled, recordWarmup } from './warmup.ts';
 import { memoryPass } from './memory.ts';
 import { GcObservation } from './gc.ts';
 
@@ -366,6 +366,7 @@ export async function benchFn(fn: (...args: any[]) => any, opts: any = {}): Prom
     return {
       kind: 'fn' as const,
       debug: loop.toString(),
+      ...(isWarmupUnsettled(warmup, opts) ? { unsettled: true } : {}),
       ...(await loop(
         fn,
         opts.gc,
@@ -431,6 +432,7 @@ export async function benchIter(iter: (...args: any[]) => any, opts: any = {}): 
     } while (!isWarmupDone(warmup, opts, now()));
 
     const single = warmup.single;
+    _.unsettled = isWarmupUnsettled(warmup, opts);
     batch = single <= opts.batch_threshold;
 
     if (opts.batch !== undefined) batch = !!opts.batch;
@@ -502,6 +504,7 @@ export async function benchIter(iter: (...args: any[]) => any, opts: any = {}): 
       samples: rawCount,
     },
     debug: _.debug,
+    ...(_.unsettled ? { unsettled: true } : {}),
     min: samples[0],
     max: samples[samples.length - 1],
     p25: samples[(0.25 * (samples.length - 1)) | 0],

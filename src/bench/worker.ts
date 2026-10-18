@@ -189,12 +189,18 @@ function mergeBlocks(parts: Array<{ trial: Trial; calibrationRate: number }>): T
             `blocks; make its output deterministic or compare will report it as changed`
         );
       }
+      const stats = survivors.map((p) => p.trial.runs[j]!.stats!) as Stats[];
       return {
         ...run,
-        stats: mergeStats(
-          survivors.map((p) => p.trial.runs[j]!.stats!) as Stats[],
-          survivors.map((p) => p.calibrationRate)
-        ),
+        stats: {
+          ...mergeStats(
+            stats,
+            survivors.map((p) => p.calibrationRate)
+          ),
+          // A majority keeps one disturbed block from marking the bench
+          unsettled: stats.filter((s) => s.unsettled).length > stats.length / 2,
+          varyingOutput: snapshots.size > 1,
+        },
       };
     }),
   };
