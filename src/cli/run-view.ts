@@ -47,19 +47,42 @@ export function runStatus(
   run: SavedBenchmarkRun,
   noop: SavedContext['noop'],
   minDelta: number
-): { symbol: string; message: string; advice: string } {
+): {
+  symbol: string;
+  problem?: 'failed' | 'unmeasured' | 'optimized-out' | 'nondeterministic' | 'imprecise';
+  message: string;
+  advice: string;
+  minDetectableChange?: number;
+} {
   const failed = run.error !== undefined;
   if (failed) {
     const error = run.error as { message?: unknown } | null;
-    return { symbol: '✗', message: String(error?.message ?? run.error), advice: '' };
+    return {
+      symbol: '✗',
+      problem: 'failed',
+      message: String(error?.message ?? run.error),
+      advice: '',
+    };
   }
   const stats = run.stats;
-  if (!stats) return { symbol: '·', message: 'No measurements available', advice: '' };
+  if (!stats)
+    return {
+      symbol: '·',
+      problem: 'unmeasured',
+      message: 'No measurements available',
+      advice: '',
+    };
   if (isLikelyOptimizedOut(stats, trial.gcMode, noop))
-    return { symbol: '⚠', message: 'likely optimized out', advice: 'return the result' };
+    return {
+      symbol: '⚠',
+      problem: 'optimized-out',
+      message: 'likely optimized out',
+      advice: 'return the result',
+    };
   if (stats.unsettled || stats.varyingOutput)
     return {
       symbol: '⚠',
+      problem: 'nondeterministic',
       message: 'results change between runs',
       advice: 'make the work deterministic',
     };
@@ -70,11 +93,18 @@ export function runStatus(
     const machine = calibrationExplainedFraction(medians, stats.blocks!.freqs) >= 0.5;
     return {
       symbol: '⚠',
+      problem: 'imprecise',
+      minDetectableChange: resolution,
       message: `min detectable change ±${Math.round(resolution * 100)}%`,
       advice: machine ? 'rerun on an idle machine' : 'add blocks',
     };
   }
-  return { symbol: '✓', message: '', advice: '' };
+  return {
+    symbol: '✓',
+    message: '',
+    advice: '',
+    ...(medians.length >= 2 ? { minDetectableChange: resolution } : {}),
+  };
 }
 
 function entries(result: SavedResult, config: LabsConfig): RunEntry[] {
