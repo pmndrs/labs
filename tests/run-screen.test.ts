@@ -106,32 +106,43 @@ describe('run report', () => {
     expect(calibrated).not.toContain('warning');
   });
 
-  it('keeps unstable clock readings visible across selections and counts the run warning once', () => {
+  it('flags an unstable machine in the header', () => {
     const result = fixture();
-    const trial = result.files[0].benchmarks[0];
-    trial.runs[0].stats!.blocks!.spreads = Array(8).fill(0);
-    trial.runs.push({ ...trial.runs[0], name: 'remove entities' });
     result.environment = { freqs: [{ file: 'entities.bench.ts', runFreq: 4, postFreq: 2 }] };
-    for (const selected of [0, 1]) {
-      const frame = renderRunView(result, defineConfig({ benchDir: '.' }), {
-        columns: 100,
-        rows: 30,
-        selected,
-        colors: false,
-      });
-      const text = frame.lines.join('\n');
-      expect(text).toContain('⚠ Unstable clock: 2.00–4.00 GHz (66.7% drift)');
-      expect(text).toContain('1 warning');
-      expect(frame.lines).toHaveLength(30);
-    }
-    const narrow = render(result, 40);
-    expect(narrow.lines.join('\n')).toContain('Unstable clock');
-    expect(narrow.lines.every((line) => stringWidth(line) < 40)).toBe(true);
-
+    expect(render(result).lines[0]).toContain('UNSTABLE');
     result.environment.freqs[0].postFreq = 3.99;
-    const stable = render(result).lines.join('\n');
-    expect(stable).not.toContain('Unstable clock');
-    expect(stable).not.toContain('warning');
+    expect(render(result).lines[0]).not.toContain('UNSTABLE');
+  });
+
+  it.each([
+    { name: 'precise', change: {}, line: '' },
+    {
+      name: 'noisy on its own',
+      change: { medians: [400, 700, 500, 800, 450, 750, 600, 650] },
+      line: /min detectable change ±\d+% ✦ add blocks/,
+    },
+    {
+      name: 'noisy with the machine',
+      change: {
+        medians: [400, 700, 500, 800, 450, 750, 600, 650],
+        freqs: [5, 2.9, 4, 2.5, 4.4, 2.7, 3.3, 3.1],
+      },
+      line: /min detectable change ±\d+% ✦ rerun on an idle machine/,
+    },
+    {
+      name: 'unsettled',
+      change: { unsettled: true },
+      line: 'results change between runs ✦ make the work deterministic',
+    },
+  ])('gives one line of feedback for a $name bench', ({ change, line }) => {
+    const result = fixture();
+    const stats = result.files[0].benchmarks[0].runs[0].stats!;
+    const { unsettled, ...blocks } = change as { unsettled?: boolean };
+    Object.assign(stats, { unsettled, blocks: { ...stats.blocks!, spreads: [0], ...blocks } });
+    const text = render(result).lines.join('\n');
+
+    expect(text).toContain(line ? '⚠ create entities' : '✓ create entities');
+    if (line) expect(text).toMatch(line);
   });
 
   it('shows measured values and labels the plotted percentile range', () => {
