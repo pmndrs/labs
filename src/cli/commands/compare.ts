@@ -1,5 +1,5 @@
 import { isCancel, select } from '@clack/prompts';
-import { compare, compareFailed } from '../../compare.ts';
+import { compare } from '../../compare.ts';
 import {
   getBaseline,
   getLastComparison,
@@ -11,17 +11,23 @@ import {
 } from '../../store.ts';
 import { CYAN, DIM, RESET } from '../../utils/ansi.ts';
 import { showCompareReport } from '../compare-screen.ts';
+import { compareJson, comparisonExitCode } from '../json.ts';
+import { isInteractiveTerminal } from '../screen.ts';
 import type { CLIContext } from '../types.ts';
 import { dateHint, error, gitHint } from '../utils.ts';
 
-export async function runCompareCommand(ctx: CLIContext, candidateArg?: string): Promise<void> {
+export async function runCompareCommand(ctx: CLIContext, args: string[]): Promise<void> {
+  const candidateArg = args.find((arg) => !arg.startsWith('--') || arg === '--last');
+  const json = args.includes('--json');
+  // In JSON mode stdout carries only the JSON document, so messages go to stderr
+  if (json) console.log = console.error;
   const baselineName = getBaseline(ctx.labsDir);
   if (!baselineName) error('No baseline set. Run: bench baseline <name>');
 
   let compareBaselineName = baselineName;
   let candidateName: string;
 
-  if (candidateArg === '--last' || candidateArg === '-l') {
+  if (candidateArg === '--last' || args.includes('-l')) {
     const last = getLastComparison(ctx.labsDir);
     if (!last) error('No previous comparison found');
     compareBaselineName = last.baselineName;
@@ -37,6 +43,10 @@ export async function runCompareCommand(ctx: CLIContext, candidateArg?: string):
     if (candidates.length === 0) error('No saved result to compare. Save a result first with -s.');
 
     const latestCandidate = candidates[candidates.length - 1]!;
+    if (json || !isInteractiveTerminal())
+      error(
+        `No result given to compare. Run: bench compare <name> (latest: ${latestCandidate.name})`
+      );
     const baselineResult = all.find((r) => r.name === baselineName);
     const baselineFreq = baselineResult ? resultMedianFreq(baselineResult) : 0;
     const chosen = await select({
@@ -74,8 +84,10 @@ export async function runCompareCommand(ctx: CLIContext, candidateArg?: string):
     const candidate = loadResult(ctx.labsDir, candidateName);
     const result = compare(baseline, candidate, ctx.config);
     setLastComparison(ctx.labsDir, compareBaselineName, candidateName);
-    if (compareFailed(result)) process.exitCode = 1;
-    await showCompareReport(result, ctx.config);
+    const code = comparisonExitCode(result, ctx.config, candidate, args.includes('--fail-on-slower'));
+    if (code) process.exitCode = code;
+    if (json) process.stdout.write(JSON.stringify(compareJson(result, ctx.config), null, 2) + '\n');
+    else await showCompareReport(result, ctx.config);
   } catch (e: any) {
     error(e.message);
   }

@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync
 import { createRequire } from 'node:module';
 import { basename, dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { compare, compareFailed } from '../compare.ts';
+import { compare } from '../compare.ts';
 import type { LabsConfig } from '../config.ts';
 import { collectDiagnostics, emptyDiagnostics, printReportBox, printRunSummary } from '../report.ts';
 import {
@@ -41,6 +41,7 @@ import {
   renderProgress,
   startFile,
 } from './progress.ts';
+import { compareJson, comparisonExitCode, runJson } from './json.ts';
 import { showRunReport } from './run-screen.ts';
 import { runStatus } from './run-view.ts';
 import { isInteractiveTerminal } from './screen.ts';
@@ -252,7 +253,7 @@ export async function runCLI(args: string[]) {
   }
 
   if (subcmd === 'compare') {
-    await runCompareCommand(ctx, subcmdArg);
+    await runCompareCommand(ctx, args.slice(1));
     return;
   }
 
@@ -260,6 +261,11 @@ export async function runCLI(args: string[]) {
   // asked not to.
   const benchArgs = subcmd === 'run' ? args.slice(1) : args;
   const shouldSave = !benchArgs.includes('--no-save');
+  const json = benchArgs.includes('--json');
+  const failOnSlower = benchArgs.includes('--fail-on-slower');
+  // In JSON mode stdout carries only the JSON document, so messages go to stderr
+  if (json) console.log = console.error;
+  const interactive = !json && isInteractiveTerminal();
   if (benchArgs.includes('--run') || benchArgs.includes('--runs')) {
     error('`--run`/`--runs` are no longer supported; labs is single-run only');
   }
@@ -335,7 +341,7 @@ export async function runCLI(args: string[]) {
     }
 
     saveSelection(selected);
-    if (!isInteractiveTerminal()) console.log(`${CYAN}labs${RESET}`);
+    if (!interactive) console.log(`${CYAN}labs${RESET}`);
   }
 
   const blocksFlag = flagValue(benchArgs, '--blocks');
@@ -361,6 +367,10 @@ export async function runCLI(args: string[]) {
 
   const forceOverwrite = benchArgs.includes('--force') || benchArgs.includes('-f');
   if (shouldSave && !forceOverwrite && resultExists(labsDir, saveName)) {
+    if (!interactive)
+      error(
+        `A result named "${saveName}" already exists. Pass --force to overwrite it or -n to pick a name`
+      );
     const { confirm, isCancel } = await import('@clack/prompts');
     const overwrite = await confirm({
       message: `A result named "${saveName}" already exists. Overwrite?`,
@@ -440,9 +450,9 @@ export async function runCLI(args: string[]) {
     return files.at(-1);
   };
 
-  const live = isInteractiveTerminal();
+  const crashes: Array<{ file: string; error: string }> = [];
   const progress = createProgress(saveName, selected.map(suiteName), Date.now());
-  const view = live
+  const view = interactive
     ? new LiveView(process.stdout, (columns, rows) =>
         renderProgress(progress, { columns, rows, now: Date.now() })
       )
@@ -450,27 +460,29 @@ export async function runCLI(args: string[]) {
   view?.start();
   for (const [index, f] of selected.entries()) {
     const resultFile = join(tmpDir, `${basename(f, '.ts')}-${Date.now()}.json`);
-    if (!view) {
+    if (!view && !json) {
       runBench(f, config.nodeFlags, suiteName(f), benchTune, tagEnv, resultFile);
       collect(f, resultFile);
       continue;
     }
-    startFile(progress, index, Date.now());
+    if (view) startFile(progress, index, Date.now());
     try {
       await runBenchLive(
         f,
         config.nodeFlags,
         benchTune,
-        (event) => applyEvent(progress, index, event),
-        (line) => view.log(line),
+        (event) => view && applyEvent(progress, index, event),
+        (line) => (view ? view.log(line) : process.stderr.write(line + '\n')),
         tagEnv,
         resultFile
       );
     } catch (err) {
-      finishFile(progress, index, Date.now(), { error: (err as Error).message });
+      crashes.push({ file: suiteName(f), error: (err as Error).message });
+      if (view) finishFile(progress, index, Date.now(), { error: (err as Error).message });
       continue;
     }
     const saved = collect(f, resultFile);
+    if (!view) continue;
     const noop = (saved?.context ?? savedNoop)?.noop;
     const statuses = (saved?.benchmarks ?? []).map((trial): BenchStatus => {
       const runs = trial.runs.map((run) => runStatus(trial, run, noop, config.minDelta));
@@ -488,6 +500,7 @@ export async function runCLI(args: string[]) {
   if (benchCount === 0) {
     const filterNote = tagEnv ? ` for ${tagEnv.split(',').join(' ')}` : '';
     console.log(`\n${YELLOW}⚠${RESET} No benches ran${filterNote}, nothing to save`);
+    if (json) emit({ name: saveName, saved: false, benches: [], crashes });
     return;
   }
 
@@ -504,8 +517,8 @@ export async function runCLI(args: string[]) {
   };
 
   // Interactive runs keep details in the report view and close with a short summary
-  const interactive = isInteractiveTerminal();
   const report = (saveMsg?: string) => {
+    if (json) return;
     const input = {
       envData: saveEnvData,
       cpu: hardware.cpu,
@@ -536,6 +549,7 @@ export async function runCLI(args: string[]) {
     if (saveDiagnostics.failedChecks.length > 0) process.exitCode = 1;
     if (interactive) await showRunReport(result, config, false);
     report();
+    if (json) emit({ ...runJson(result, config, false), crashes });
     return;
   }
 
@@ -562,6 +576,7 @@ export async function runCLI(args: string[]) {
   if (!interactive) report(`${GREEN}✔${RESET} Saved "${saveName}"${gitNote} (${details})`);
   if (!shouldCompare && interactive) await showRunReport(result, config);
 
+  let comparison: ReturnType<typeof compareJson> | null = null;
   if (shouldCompare) {
     const baselineName = getBaseline(labsDir);
     if (!baselineName) {
@@ -571,16 +586,23 @@ export async function runCLI(args: string[]) {
     } else {
       try {
         const baselineResult = loadResult(labsDir, baselineName);
-        const comparison = compare(baselineResult, result, config);
+        const compared = compare(baselineResult, result, config);
         setLastComparison(labsDir, baselineName, saveName);
-        if (compareFailed(comparison)) process.exitCode = 1;
-        await showCompareReport(comparison, config);
+        const code = comparisonExitCode(compared, config, result, failOnSlower);
+        if (code && process.exitCode !== 1) process.exitCode = code;
+        if (json) comparison = compareJson(compared, config);
+        else await showCompareReport(compared, config);
       } catch (e: any) {
         console.log(`\n${RED}✖${RESET} Compare failed: ${e.message}`);
       }
     }
   }
   if (interactive) report(`${saveName}${gitNote}  ${DIM}${details}${RESET}`);
+  if (json) emit({ ...runJson(result, config, true), baseline: markedBaseline, comparison, crashes });
+}
+
+function emit(output: unknown): void {
+  process.stdout.write(JSON.stringify(output, null, 2) + '\n');
 }
 
 function trimContext(context: WorkerResult['context']): SavedContext {
