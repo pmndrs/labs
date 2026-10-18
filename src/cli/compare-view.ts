@@ -1,4 +1,3 @@
-import { createRequire } from 'node:module';
 import { formatGcCost, formatGcEvents, formatGcSpike } from '../bench/format/gc.ts';
 import type { BenchResult, CompareResult, EligibleBench } from '../compare.ts';
 import type { LabsConfig } from '../config.ts';
@@ -22,8 +21,6 @@ import type {
   TerminalFrame as CompareFrame,
 } from './screen.ts';
 import { TerminalCanvas, terminalText, textWidth, wrapMetrics, wrapText } from './terminal.ts';
-
-const { version } = createRequire(import.meta.url)('../../package.json') as { version: string };
 
 function style(bench: BenchResult): { symbol: string; color: string; label: string } {
   if (bench.kind === 'eligible') {
@@ -398,14 +395,14 @@ export function renderCompareView(
   const detailOffset = Math.max(0, Math.min(maxDetailOffset, state.detailOffset ?? 0));
   canvas.fill(0, '\x1b[42m' + BLACK, 1, 9);
   canvas.put(0, 1, ' COMPARE ', '', 9);
-  canvas.put(0, 12, 'labs');
-  let contextX = 18;
-  if (innerWidth >= 71) {
-    canvas.put(0, contextX, `v${version}`, GRAY);
-    contextX += textWidth(`v${version}`) + 2;
+  const count = result.environmentWarnings.length;
+  const badge = count ? ` ⚠ ${count} WARNING${count === 1 ? '' : 'S'} ` : '';
+  if (badge) {
+    canvas.fill(0, '\x1b[43m' + BLACK, 11, textWidth(badge));
+    canvas.put(0, 11, badge, '', textWidth(badge));
   }
-  const warning = result.environmentWarnings.length ? ` ⚠ ${result.environmentWarnings.length}` : '';
-  const namesWidth = width - contextX - textWidth(warning) - 1;
+  const contextX = badge ? 13 + textWidth(badge) : 12;
+  const namesWidth = width - contextX - 1;
   const baselineWidth = Math.min(
     textWidth(result.baselineName),
     Math.max(Math.floor((namesWidth - 3) / 2), namesWidth - 3 - textWidth(result.candidateName))
@@ -419,7 +416,6 @@ export function renderCompareView(
     MAGENTA,
     namesWidth - baselineWidth - 3
   );
-  if (warning) canvas.put(0, width - textWidth(warning) - 1, warning, YELLOW);
   const listColumns = innerWidth >= 71 ? [innerWidth - 41, 11, 11, 7, 8] : [innerWidth - 23, 11, 10];
   const listRow = (row: number, values: string[], styles: string[]) => {
     let x = 1;

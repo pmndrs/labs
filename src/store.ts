@@ -33,6 +33,8 @@ export interface SavedStats {
   plan?: BlockPlan;
   /** Output compared with the baseline. */
   snapshot?: Snapshot;
+  unsettled?: boolean;
+  varyingOutput?: boolean;
   blocks?: {
     medians: number[];
     /** Software calibration rates. The `freqs` name is retained for schema compatibility. */
@@ -345,6 +347,8 @@ export function trimStats(stats: Stats): SavedStats {
     p99: stats.p99,
     ...(stats.plan ? { plan: stats.plan } : {}),
     ...(stats.snapshot !== undefined ? { snapshot: stats.snapshot } : {}),
+    ...(stats.unsettled ? { unsettled: true } : {}),
+    ...(stats.varyingOutput ? { varyingOutput: true } : {}),
     ...(stats.blocks ? { blocks: stats.blocks } : {}),
     ...(stats.gc
       ? {

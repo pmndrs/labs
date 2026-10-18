@@ -51,13 +51,15 @@ bench "@mytag"
 bench "@mytag" -n 'v1.0.0'
 ```
 
-In an interactive terminal, completed runs open a full-screen results view. Select a benchmark to inspect its timings, sample distribution, memory use, and run consistency. Reopen saved results with `bench list`.
+In an interactive terminal, a live view shows each benchmark's progress while it runs, then a full-screen results view opens. Select a benchmark to inspect its timings, sample distribution, memory use, and run consistency. Quitting prints a short summary. Reopen saved results with `bench list`.
 
 <img src="docs/images/bench.png" width="760" alt="Labs run view with a benchmark list, timing measurements, sample histogram, garbage collection, heap per iteration, and run consistency" />
 
 <details>
 <summary>How to read the results</summary>
 
+- **⚠ UNSTABLE**: The CPU speed probes taken during the run varied more than 5%, usually from background load, efficiency cores, or throttling. Treat comparisons with other runs carefully.
+- **✓, ⚠, ✗**: A warning shows one line with the most serious problem and what to do. `likely optimized out` means the work was removed by the JIT. `results change between runs` means warmup never settled or the output differed between fresh processes. `min detectable change ±N%` is the smallest change a comparison could detect, shown when it is larger than `minDelta`.
 - **avg, p75, p99**: Average time per iteration and the 75th and 99th percentiles. For batched work, percentiles describe batch averages rather than individual calls.
 - **Histogram**: The fastest 99% of timing samples, with the minimum and upper cutoff below. Cyan marks samples below the average, yellow the average bin, and magenta samples above it.
 - **gc**: Observed GC time per iteration and its share of sampling time, including gaps between calls. Below is average GC event frequency. The share is not an exact GC contribution to `avg`.
@@ -104,8 +106,8 @@ Labs promises to give results you can trust. To do this a number of guarantees a
 - Every bench is run in isolated blocks that are interleaved: `A₁ B₁ C₁ → A₂ B₂ C₂ → … → A₈ B₈ C₈`. This reduces bias from gradual changes such as CPU throttling or even boosting.
 - Timing overhead is controlled. If a sample's measurement time is so fast that the overhead of the timing itself would bias the results, then it is run in a batch sized so each sample lasts about a millisecond.
 - Detect dead code elimination (DCE). If the samples measure the same as an empty function call, then we detect DCE and report it. This can be mitigated by returning a result from the yielded function.
-- Detect noisy samples. Each block runs for a fixed time budget and sample floor. When the samples inside one process vary widely, a warning is given. This likely means the bench is non-deterministic or affected by runtime interference like background processes.
-- Machine stability is measured. When median timings vary too much across blocks of samples, a warning is given. This can indicate an unstable machine ranging from thermal throttling to background processes.
+- Detect non-deterministic benches. When warmup timings never settle or the output differs between fresh processes, a warning is given.
+- Comparison precision is measured. When median timings vary too much across blocks to detect a `minDelta` change, a warning is given with advice: rerun on an idle machine when the CPU speed probes explain the variation, otherwise add blocks.
 
 ### Test correctness
 
@@ -155,7 +157,7 @@ You get decent control with Windows by going into the BIOS. 90% of the variance 
 
 ### MacOS (Apple Silicon)
 
-While Apple Silicon is relatively stable, there isn't much that can be done to control it. The governor cannot be adjusted and the dynamic CPU frequencies cannot be disabled.
+While Apple Silicon is relatively stable, there isn't much that can be done to control it. The governor cannot be adjusted and the dynamic CPU frequencies cannot be disabled. Expect occasional unstable clock warnings. They do not always mean the results are affected, so check whether run medians agree before discarding a run.
 
 ### Linux
 

@@ -207,6 +207,54 @@ export function printReportBox(input: ReportInput): void {
   console.log('');
 }
 
+/** Short closing summary for interactive runs, where the report view holds the details. */
+export function printRunSummary(
+  input: ReportInput & { counts: { passed: number; warned: number; failed: number } }
+): void {
+  const { envData, saveMsg, blocks, minDelta, diagnostics, counts } = input;
+  const rows: Array<[string, string]> = [];
+  const total = counts.passed + counts.warned + counts.failed;
+  rows.push([
+    'Benches',
+    [
+      counts.failed ? `${RED}${counts.failed} failed${RESET}` : '',
+      counts.warned
+        ? `${YELLOW}${counts.warned} warning${counts.warned === 1 ? '' : 's'}${RESET}`
+        : '',
+      counts.passed ? `${GREEN}${counts.passed} passed${RESET}` : '',
+    ]
+      .filter(Boolean)
+      .join('  ') + ` ${DIM}(${total})${RESET}`,
+  ]);
+  if (envData.length > 0) {
+    const freqs = envData.flatMap((e) => [e.runFreq, e.postFreq]);
+    const min = Math.min(...freqs);
+    const max = Math.max(...freqs);
+    // The empty-call probe tracks available CPU speed, not a hardware clock
+    const drift = (max - min) / ((max + min) / 2);
+    rows.push([
+      'CPU',
+      `speed varied ${(drift * 100).toFixed(0)}%  ${drift <= 0.05 ? `${GREEN}stable` : `${YELLOW}unstable`}${RESET}`,
+    ]);
+  }
+  if (diagnostics.medianSpreads.length > 0) {
+    const spread = median(diagnostics.medianSpreads);
+    const resolution = minDetectableEffect(spread, blocks);
+    const consistent = resolution <= minDelta;
+    rows.push([
+      'Runs',
+      `±${(spread * 100).toFixed(1)}% spread  ~±${(resolution * 100).toFixed(1)}% resolution  ` +
+        `${consistent ? `${GREEN}consistent` : `${YELLOW}inconsistent`}${RESET}`,
+    ]);
+  }
+  if (saveMsg) rows.push(['Saved', saveMsg]);
+
+  const width = Math.max(...rows.map(([label]) => label.length));
+  console.log('');
+  for (const [label, value] of rows) console.log(` ${DIM}${label.padStart(width)}${RESET}  ${value}`);
+  console.log('');
+}
+
 export function replayReport(result: SavedResult, config: LabsConfig): void {
   for (const file of result.files) {
     console.log(`\n${BLUE}▶ ${file.file}${RESET}`);

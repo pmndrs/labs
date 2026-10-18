@@ -25,6 +25,14 @@ export function isWarmupDone(
   return opts.warmup_samples <= 0 || state.stable || now >= state.deadline;
 }
 
+/** Enough full windows ran within the budget, yet their per-call costs never agreed. */
+export function isWarmupUnsettled(
+  state: WarmupState,
+  opts: Pick<Options, 'warmup_samples'>
+): boolean {
+  return opts.warmup_samples > 0 && !state.stable && state.resolvedWindows >= opts.warmup_samples;
+}
+
 /** Grow timing windows until recent per-call costs agree or the budget expires. */
 export function recordWarmup(
   state: WarmupState,

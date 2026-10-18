@@ -6,6 +6,7 @@ import {
   collectDiagnostics,
   emptyDiagnostics,
   printReportBox,
+  printRunSummary,
 } from '../src/report.ts';
 
 function captureReport(run: () => void): string[] {
@@ -184,5 +185,27 @@ describe('measurement report', () => {
 
     expect(lines.some((line) => line.startsWith('random work'))).toBe(true);
     expect(lines.some((line) => line.startsWith('⚠'))).toBe(false);
+  });
+});
+
+describe('run summary', () => {
+  it('closes an interactive run with counts, clock, run consistency, and the save', () => {
+    const lines = captureReport(() =>
+      printRunSummary({
+        envData: [{ file: 'a.bench.ts', runFreq: 1.55, postFreq: 1.81 }],
+        cpu: 'Apple M5',
+        saveMsg: 'abc1234  baseline',
+        blocks: 8,
+        minDelta: 0.05,
+        diagnostics: { ...emptyDiagnostics(), medianSpreads: [0.002, 0.003] },
+        counts: { passed: 4, warned: 1, failed: 1 },
+      })
+    );
+    const text = lines.join('\n');
+    expect(text).toContain('Benches  1 failed  1 warning  4 passed (6)');
+    expect(text).toContain('CPU  speed varied 15%  unstable');
+    expect(text).toMatch(/Runs {2}±0\.3% spread {2}~±[\d.]+% resolution {2}consistent/);
+    expect(text).toContain('Saved  abc1234  baseline');
+    expect(text).not.toContain('┌');
   });
 });

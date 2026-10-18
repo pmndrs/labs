@@ -1,13 +1,13 @@
-import { createRequire } from 'node:module';
 import { isLikelyOptimizedOut } from '../bench/diagnostics.ts';
 import * as histogramFmt from '../bench/format/histogram.ts';
 import { formatGcColumns } from '../bench/format/gc.ts';
 import type { LabsConfig } from '../config.ts';
-import { collectDiagnostics } from '../report.ts';
+import { calibrationExplainedFraction, comparisonResolution } from '../stats.ts';
 import {
   isEnvironmentStable,
   type SavedBenchmarkRun,
   type SavedBenchmarkTrial,
+  type SavedContext,
   type SavedResult,
 } from '../store.ts';
 import {
@@ -26,8 +26,6 @@ import { formatBytes, formatNs } from '../utils/units.ts';
 import type { TerminalFrame, TerminalViewState } from './screen.ts';
 import { TerminalCanvas, textWidth, wrapText } from './terminal.ts';
 
-const { version } = createRequire(import.meta.url)('../../package.json') as { version: string };
-
 type RunEntry = {
   file: string;
   group: string;
@@ -37,36 +35,68 @@ type RunEntry = {
   symbol: string;
   color: string;
   message: string;
+  advice: string;
 };
+
+/**
+ * Report status for one run, shared by the report and the live progress view.
+ * Only the most serious problem is reported, with advice on what to do about it.
+ */
+export function runStatus(
+  trial: SavedBenchmarkTrial,
+  run: SavedBenchmarkRun,
+  noop: SavedContext['noop'],
+  minDelta: number
+): { symbol: string; message: string; advice: string } {
+  const failed = run.error !== undefined;
+  if (failed) {
+    const error = run.error as { message?: unknown } | null;
+    return { symbol: '✗', message: String(error?.message ?? run.error), advice: '' };
+  }
+  const stats = run.stats;
+  if (!stats) return { symbol: '·', message: 'No measurements available', advice: '' };
+  if (isLikelyOptimizedOut(stats, trial.gcMode, noop))
+    return { symbol: '⚠', message: 'likely optimized out', advice: 'return the result' };
+  if (stats.unsettled || stats.varyingOutput)
+    return {
+      symbol: '⚠',
+      message: 'results change between runs',
+      advice: 'make the work deterministic',
+    };
+  const medians = stats.blocks?.medians ?? [];
+  const resolution = comparisonResolution(medians);
+  if (medians.length >= 2 && resolution > minDelta) {
+    // Probe readings that track the run medians point at the machine, not the bench
+    const machine = calibrationExplainedFraction(medians, stats.blocks!.freqs) >= 0.5;
+    return {
+      symbol: '⚠',
+      message: `min detectable change ±${Math.round(resolution * 100)}%`,
+      advice: machine ? 'rerun on an idle machine' : 'add blocks',
+    };
+  }
+  return { symbol: '✓', message: '', advice: '' };
+}
 
 function entries(result: SavedResult, config: LabsConfig): RunEntry[] {
   return result.files.flatMap((file) =>
     file.benchmarks.flatMap((trial) =>
       trial.runs.map((run) => {
-        const diagnostics = collectDiagnostics([{ ...trial, runs: [run] }], config.minDelta);
-        const failed = run.error !== undefined;
-        const messages: string[] = [];
-        if (failed) {
-          const error = run.error as { message?: unknown } | null;
-          messages.push(String(error?.message ?? run.error));
-        } else if (!run.stats) messages.push('No measurements available');
-        else {
-          if (isLikelyOptimizedOut(run.stats, trial.gcMode, (file.context ?? result.context)?.noop))
-            messages.push('likely optimized out');
-          if (diagnostics.noisy.length) messages.push('noisy samples');
-          if (diagnostics.inconsistent.length) messages.push('run medians vary');
-          else if (diagnostics.noisy.length && (run.stats.blocks?.medians.length ?? 0) >= 2)
-            messages.push('runs agree');
-        }
+        const { symbol, message, advice } = runStatus(
+          trial,
+          run,
+          (file.context ?? result.context)?.noop,
+          config.minDelta
+        );
         return {
           file: file.file,
           group: trial.groupName ?? '',
           name: run.name || trial.alias || 'anonymous',
           run,
           gcMode: trial.gcMode,
-          symbol: failed ? '✗' : !run.stats ? '·' : messages.length ? '⚠' : '✓',
-          color: failed ? RED : messages.length ? YELLOW : GREEN,
-          message: messages.join(' ✦ '),
+          symbol,
+          color: symbol === '✗' ? RED : symbol === '⚠' ? YELLOW : GREEN,
+          message,
+          advice,
         };
       })
     )
@@ -139,12 +169,7 @@ function consistency(
   canvas.put(y + 3, x + half, duration(high), GRAY, width - half, true);
 }
 
-function details(
-  entry: RunEntry | undefined,
-  width: number,
-  state: TerminalViewState,
-  clockWarning: string
-): string[] {
+function details(entry: RunEntry | undefined, width: number, state: TerminalViewState): string[] {
   const colors = state.colors !== false;
   const canvas = new TerminalCanvas(width);
   if (!entry) {
@@ -154,8 +179,14 @@ function details(
   canvas.put(0, 0, `${entry.symbol} ${entry.name}`, BOLD);
   canvas.put(0, 0, entry.symbol, entry.color, 1);
   let y = 1;
-  for (const message of wrapText(clockWarning, width)) canvas.put(y++, 0, message, YELLOW);
-  for (const message of wrapText(entry.message, width)) canvas.put(y++, 0, message, entry.color);
+  const advice = entry.advice ? ` ✦ ${entry.advice}` : '';
+  if (textWidth(entry.message + advice) <= width) {
+    canvas.put(y, 0, entry.message, entry.color);
+    canvas.put(y++, textWidth(entry.message), advice, GRAY);
+  } else {
+    for (const message of wrapText(entry.message, width)) canvas.put(y++, 0, message, entry.color);
+    for (const line of wrapText(advice.trim(), width)) canvas.put(y++, 0, line, GRAY);
+  }
   const stats = entry.run.stats;
   if (!stats || entry.run.error !== undefined) return canvas.lines(colors);
   y++;
@@ -289,15 +320,7 @@ export function renderRunView(
     };
   }
   const innerWidth = width - 2;
-  let clockWarning = '';
-  if (!isEnvironmentStable(result)) {
-    const freqs = result.environment!.freqs.flatMap(({ runFreq, postFreq }) => [runFreq, postFreq]);
-    const min = Math.min(...freqs);
-    const max = Math.max(...freqs);
-    const drift = (max - min) / ((max + min) / 2);
-    clockWarning = `⚠ Unstable clock: ${min.toFixed(2)}–${max.toFixed(2)} GHz (${(drift * 100).toFixed(1)}% drift)`;
-  }
-  const detailLines = details(benches[selected], innerWidth, state, clockWarning);
+  const detailLines = details(benches[selected], innerWidth, state);
   const detailHeight = Math.min(detailLines.length + 1, innerWidth >= 71 ? 17 : 24, height - 8);
   const detailTop = height - detailHeight - 1;
   const pageSize = detailTop - 3;
@@ -305,11 +328,14 @@ export function renderRunView(
   const detailOffset = Math.max(0, Math.min(maxDetailOffset, state.detailOffset ?? 0));
   canvas.fill(0, '\x1b[42m' + BLACK, 1, 5);
   canvas.put(0, 1, ' RUN ', '', 5);
-  canvas.put(0, 8, 'labs');
-  if (innerWidth >= 71) canvas.put(0, 14, `v${version}`, GRAY);
-  const nameX = innerWidth >= 71 ? 22 : 14;
-  canvas.put(0, nameX, result.name, CYAN, width - nameX - 10);
-  canvas.put(0, width - 9, saved ? 'saved' : 'complete', GREEN, 8, true);
+  const unstable = !isEnvironmentStable(result);
+  if (unstable) {
+    canvas.fill(0, '\x1b[43m' + BLACK, 7, 12);
+    canvas.put(0, 7, ' ⚠ UNSTABLE ', '', 12);
+  }
+  const nameX = unstable ? 21 : 8;
+  canvas.put(0, nameX, result.name, CYAN, width - nameX - (saved ? 8 : 1));
+  if (saved) canvas.put(0, width - 6, 'saved', GREEN, 5);
   const nameWidth = innerWidth >= 71 ? innerWidth - 40 : innerWidth - 26;
   const listRow = (y: number, label: string, bench?: RunEntry) => {
     const stats = bench?.run.error === undefined ? bench?.run.stats : undefined;
@@ -368,7 +394,7 @@ export function renderRunView(
     }
   });
   canvas.put(detailTop - 1, 1, '━'.repeat(innerWidth), DARK_GRAY);
-  const warnings = benches.filter((bench) => bench.symbol === '⚠').length + (clockWarning ? 1 : 0);
+  const warnings = benches.filter((bench) => bench.symbol === '⚠').length;
   const failed = benches.filter((bench) => bench.run.error !== undefined).length;
   const complete = benches.filter((bench) => bench.run.stats && bench.run.error === undefined).length;
   const counts = [

@@ -1,11 +1,12 @@
 import { execFileSync } from 'node:child_process';
-import { readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { readFileSync, rmSync, writeFileSync, writeSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { getBenchRegistry } from '../index.ts';
 import { median, relativeSpread } from '../stats.ts';
 import { measure, run } from './index.ts';
 import { runTrialAt } from './main.ts';
+import type { ProgressEvent } from '../cli/progress.ts';
 import type { BlockPlan, GcStats, Stats, Trial } from './types.ts';
 import { mergeGc } from './lib/gc.ts';
 
@@ -46,6 +47,13 @@ async function calibrateFreq(): Promise<number> {
 async function probeCalibrationRate(): Promise<number> {
   const r = await measure(() => {}, { batch_unroll: 1, min_cpu_time: 5e7 });
   return 1 / (r as any).avg;
+}
+
+/** The CLI's live view reads progress events as JSON lines on fd 3 instead of a printed report. */
+const progress = process.env.LABS_PROGRESS === '1';
+
+function emit(event: ProgressEvent): void {
+  if (progress) writeSync(3, JSON.stringify(event) + '\n');
 }
 
 /** Serializes Error instances the same way the `json` format does. */
@@ -189,12 +197,18 @@ function mergeBlocks(parts: Array<{ trial: Trial; calibrationRate: number }>): T
             `blocks; make its output deterministic or compare will report it as changed`
         );
       }
+      const stats = survivors.map((p) => p.trial.runs[j]!.stats!) as Stats[];
       return {
         ...run,
-        stats: mergeStats(
-          survivors.map((p) => p.trial.runs[j]!.stats!) as Stats[],
-          survivors.map((p) => p.calibrationRate)
-        ),
+        stats: {
+          ...mergeStats(
+            stats,
+            survivors.map((p) => p.calibrationRate)
+          ),
+          // A majority keeps one disturbed block from marking the bench
+          unsettled: stats.filter((s) => s.unsettled).length > stats.length / 2,
+          varyingOutput: snapshots.size > 1,
+        },
       };
     }),
   };
@@ -212,16 +226,41 @@ function makeBlockExecutor(blocks: number) {
   return async (jobs: Array<{ trial: any; index: number }>): Promise<Map<number, Trial>> => {
     const collected = new Map<number, Array<{ trial: Trial; calibrationRate: number }>>();
     const plans = new Map<number, BlockPlan[]>();
+    const registry = getBenchRegistry();
+    emit({
+      type: 'start',
+      blocks,
+      benches: jobs.map(({ trial, index }) => ({
+        index,
+        name: trial._name || 'anonymous',
+        group: registry[index]?.groupName ?? '',
+        cases: [...trial._names()].length,
+      })),
+    });
 
     for (let block = 0; block < blocks; block++) {
       for (const { trial, index } of jobs) {
         // A pilot without a full set of plans (errored runs) is not replayable
         if (block > 0 && !plans.has(index)) continue;
+        emit({ type: 'bench', index, block });
+        const started = performance.now();
         const out = runTrialChild(
           trial,
           index,
           block === 0 ? {} : { LABS_BLOCK_PLANS: JSON.stringify(plans.get(index)) }
         );
+        const runs = out.trial.runs;
+        const failed = runs.find((run) => run.error !== undefined);
+        emit({
+          type: 'block',
+          index,
+          block,
+          duration: performance.now() - started,
+          ...(runs.length === 1 && runs[0].stats ? { median: runs[0].stats.p50 } : {}),
+          ...(failed
+            ? { error: String((failed.error as { message?: unknown })?.message ?? failed.error) }
+            : {}),
+        });
         let list = collected.get(index);
         if (!list) collected.set(index, (list = []));
         list.push(out);
@@ -240,7 +279,11 @@ function makeBlockExecutor(blocks: number) {
 
 async function main(): Promise<void> {
   await import(file!);
-  const result = await run({ tune: parseTuneEnv(), execute: makeBlockExecutor(blockCount()) });
+  const result = await run({
+    tune: parseTuneEnv(),
+    execute: makeBlockExecutor(blockCount()),
+    ...(progress ? { print: () => {} } : {}),
+  });
   const postFreq = await calibrateFreq();
 
   const registry = getBenchRegistry();
