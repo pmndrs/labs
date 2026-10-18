@@ -178,7 +178,7 @@ pnpm bench "relation"                   # partial match on file name, save
 pnpm bench "relation churn"             # separator-agnostic match, save
 pnpm bench "@relation"                  # filter by tag, save
 pnpm bench "churn @relation"            # name + tag combined, save
-pnpm bench -n "v1.2.0"                 # save with explicit name (prompts if exists)
+pnpm bench -n "v1.2.0"                 # save with explicit name (prompts if it exists)
 pnpm bench -n "v1.2.0" -f              # overwrite existing without prompting
 pnpm bench -n "v1.2.0" --force         # same as -f
 pnpm bench -n "v1.2.0" -m "refactor"   # save with name and description
@@ -271,6 +271,20 @@ Comparison is gated. Two runs must pass environment checks before results are sh
 - **Not missing** — the bench must exist in both runs. Benches present only in baseline or only in candidate are reported separately.
 - **Limited-resolution benches are annotated, not skipped** — a bench whose approximate between-block resolution is coarser than `minDelta` still gets judged because the rank test already responds to spread. Its row carries a `⚠ ~±N%` marker; a neutral result there is inconclusive at the shown resolution, not evidence of no change.
 - **Block replication** — both sides need at least two fresh-process blocks, and their combined counts must permit an exact p-value at or below `alpha`. Results saved before blocked sampling are skipped.
+
+## Scripts and agents
+
+Without an interactive terminal, labs never prompts. Commands that would open a picker or confirm an overwrite fail with the command to run instead, and `bench list` prints the saved names.
+
+```sh
+pnpm bench --json                       # judged results as JSON on stdout
+pnpm bench -c --json --fail-on-slower   # also compare against the baseline
+pnpm bench compare "v1.3.0" --json      # judged comparison of a saved result
+```
+
+With `--json`, stdout holds only the JSON document and everything else goes to stderr. Each bench has a `status` (`passed`, `warning`, or `failed`), a `problem` and `advice` when it has one, and its `minDetectableChange`. Comparison verdicts are `faster`, `slower`, `neutral`, `inconclusive` (neutral, but a `minDelta` change could have been missed), `changed`, `failed`, `skipped`, or `missing`.
+
+Failed checks and changed output exit with 1. With `--fail-on-slower`, a slower bench also exits with 1, and a comparison that could have missed a change exits with 2: an inconclusive or skipped bench, or a candidate that ran on an unstable machine.
 
 ## Writing a bench
 
