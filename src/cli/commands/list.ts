@@ -1,13 +1,8 @@
 import { isCancel, select } from '@clack/prompts';
-import {
-  getBaseline,
-  isEnvironmentStable,
-  listResults,
-  loadResult,
-  resultMedianFreq,
-} from '../../store.ts';
+import { getBaseline, isEnvironmentStable, listResults, loadResult } from '../../store.ts';
 import { DIM, RESET } from '../../utils/ansi.ts';
 import { showRunReport } from '../run-screen.ts';
+import { isInteractiveTerminal } from '../screen.ts';
 import type { CLIContext } from '../types.ts';
 import { dateHint, gitHint } from '../utils.ts';
 
@@ -19,25 +14,26 @@ export async function runListCommand(ctx: CLIContext): Promise<void> {
     return;
   }
 
+  const hints = (r: (typeof results)[number]) => {
+    const hints: string[] = [];
+    const dh = dateHint(r);
+    if (dh) hints.push(dh);
+    if (r.git) hints.push(gitHint(r.git));
+    if (r.name === baselineName) hints.push('baseline');
+    if (!isEnvironmentStable(r)) hints.push('unstable');
+    if (r.description) hints.push(r.description);
+    return hints.join(', ');
+  };
+
+  // Without a terminal, print the names so scripts and agents can pick one
+  if (!isInteractiveTerminal()) {
+    for (const r of results) console.log(`${r.name}${hints(r) ? `  ${DIM}${hints(r)}${RESET}` : ''}`);
+    return;
+  }
+
   const chosen = await select({
     message: 'Select a result to view its report',
-    options: results.map((r) => {
-      const stable = isEnvironmentStable(r);
-      const hints: string[] = [];
-      const dh = dateHint(r);
-      if (dh) hints.push(dh);
-      if (r.git) hints.push(gitHint(r.git));
-      if (r.name === baselineName) hints.push('baseline');
-      if (!stable) hints.push('unstable');
-      if (r.description) hints.push(r.description);
-      const freq = resultMedianFreq(r);
-      if (freq > 0) hints.push(`${freq.toFixed(2)} GHz`);
-      return {
-        value: r.name,
-        label: r.name,
-        hint: hints.length > 0 ? hints.join(', ') : undefined,
-      };
-    }),
+    options: results.map((r) => ({ value: r.name, label: r.name, hint: hints(r) || undefined })),
   });
   if (isCancel(chosen)) {
     console.log(`${DIM}Cancelled${RESET}`);

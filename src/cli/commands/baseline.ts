@@ -1,6 +1,7 @@
 import { isCancel, select } from '@clack/prompts';
 import { getBaseline, isEnvironmentStable, listResults, setBaseline } from '../../store.ts';
 import { DIM, GREEN, RESET } from '../../utils/ansi.ts';
+import { isInteractiveTerminal } from '../screen.ts';
 import type { CLIContext } from '../types.ts';
 import { dateHint, error, gitHint } from '../utils.ts';
 
@@ -21,6 +22,7 @@ export async function runBaselineCommand(ctx: CLIContext, name?: string): Promis
     return;
   }
 
+  if (!isInteractiveTerminal()) error('No result given. Run: bench baseline <name>');
   const current = getBaseline(ctx.labsDir);
   const chosen = await select({
     message: 'Select a baseline',

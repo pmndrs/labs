@@ -1,6 +1,7 @@
 import { isCancel, multiselect } from '@clack/prompts';
 import { deleteResult, getBaseline, listResults } from '../../store.ts';
 import { DIM, GREEN, RESET } from '../../utils/ansi.ts';
+import { isInteractiveTerminal } from '../screen.ts';
 import type { CLIContext } from '../types.ts';
 import { dateHint, error, gitHint } from '../utils.ts';
 
@@ -21,6 +22,7 @@ export async function runDeleteCommand(ctx: CLIContext, name?: string): Promise<
     return;
   }
 
+  if (!isInteractiveTerminal()) error('No result given. Run: bench delete <name>');
   const baselineName = getBaseline(ctx.labsDir);
   const chosen = await multiselect({
     message: 'Select results to delete',
