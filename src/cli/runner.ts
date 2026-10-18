@@ -1,15 +1,16 @@
-import { execFileSync, execSync } from 'node:child_process';
+import { execFileSync, execSync, spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { basename, dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { compare, compareFailed } from '../compare.ts';
 import type { LabsConfig } from '../config.ts';
-import { collectDiagnostics, emptyDiagnostics, printReportBox } from '../report.ts';
+import { collectDiagnostics, emptyDiagnostics, printReportBox, printRunSummary } from '../report.ts';
 import {
   type FreqSample,
   type GitInfo,
   type SavedContext,
+  type SavedFile,
   type SavedResult,
   type WorkerResult,
   clearResults,
@@ -30,7 +31,18 @@ import { runDeleteCommand } from './commands/delete.ts';
 import { runListCommand } from './commands/list.ts';
 import { runPruneCommand } from './commands/prune.ts';
 import { showCompareReport } from './compare-screen.ts';
+import {
+  type BenchStatus,
+  type ProgressEvent,
+  LiveView,
+  applyEvent,
+  createProgress,
+  finishFile,
+  renderProgress,
+  startFile,
+} from './progress.ts';
 import { showRunReport } from './run-screen.ts';
+import { runStatus } from './run-view.ts';
 import { isInteractiveTerminal } from './screen.ts';
 import { error, fileHasAnyTag, gitHint } from './utils.ts';
 
@@ -80,33 +92,89 @@ function saveSelection(files: string[]) {
   writeFileSync(CACHE_FILE, JSON.stringify(files));
 }
 
-function runBench(
+type WorkerTune = Pick<Partial<LabsConfig>, 'blockTime' | 'minSamples' | 'blocks'>;
+
+function workerEnv(
   file: string,
-  nodeFlags: string[],
-  label: string,
-  tune: Pick<Partial<LabsConfig>, 'blockTime' | 'minSamples' | 'blocks'>,
+  tune: WorkerTune,
   tagFilter?: string,
   resultFile?: string
-): void {
-  console.log(`\n${BLUE}▶ ${label}${RESET}`);
-
+): NodeJS.ProcessEnv {
   // Worker behavior is determined only by the current run configuration.
   const env = { ...process.env };
   for (const key of Object.keys(env)) {
     if (key.startsWith('LABS_')) delete env[key];
   }
+  return {
+    ...env,
+    LABS_BENCH_FILE: pathToFileURL(file).href,
+    LABS_BLOCKS: String(tune.blocks ?? 8),
+    ...(tune.blockTime !== undefined ? { LABS_BLOCK_TIME: String(tune.blockTime * 1e9) } : {}),
+    ...(tune.minSamples !== undefined ? { LABS_MIN_SAMPLES: String(tune.minSamples) } : {}),
+    ...(tagFilter ? { LABS_GREP_TAGS: tagFilter } : {}),
+    ...(resultFile ? { LABS_RESULT_FILE: resultFile } : {}),
+  };
+}
 
+function runBench(
+  file: string,
+  nodeFlags: string[],
+  label: string,
+  tune: WorkerTune,
+  tagFilter?: string,
+  resultFile?: string
+): void {
+  console.log(`\n${BLUE}▶ ${label}${RESET}`);
   execFileSync(process.execPath, ['--import', TSX_LOADER, ...nodeFlags, WORKER], {
     stdio: 'inherit',
-    env: {
-      ...env,
-      LABS_BENCH_FILE: pathToFileURL(file).href,
-      LABS_BLOCKS: String(tune.blocks ?? 8),
-      ...(tune.blockTime !== undefined ? { LABS_BLOCK_TIME: String(tune.blockTime * 1e9) } : {}),
-      ...(tune.minSamples !== undefined ? { LABS_MIN_SAMPLES: String(tune.minSamples) } : {}),
-      ...(tagFilter ? { LABS_GREP_TAGS: tagFilter } : {}),
-      ...(resultFile ? { LABS_RESULT_FILE: resultFile } : {}),
-    },
+    env: workerEnv(file, tune, tagFilter, resultFile),
+  });
+}
+
+/** Call `onLine` with each complete line from a stream. */
+function readLines(stream: NodeJS.ReadableStream, onLine: (line: string) => void): void {
+  let pending = '';
+  stream.setEncoding('utf8');
+  stream.on('data', (chunk: string) => {
+    const lines = (pending + chunk).split('\n');
+    pending = lines.pop()!;
+    lines.forEach(onLine);
+  });
+  stream.on('end', () => pending && onLine(pending));
+}
+
+/**
+ * Run a worker without blocking so the live view keeps drawing. Progress events
+ * arrive on fd 3 and bench output is passed through as lines.
+ */
+function runBenchLive(
+  file: string,
+  nodeFlags: string[],
+  tune: WorkerTune,
+  onEvent: (event: ProgressEvent) => void,
+  onOutput: (line: string) => void,
+  tagFilter?: string,
+  resultFile?: string
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const worker = spawn(process.execPath, ['--import', TSX_LOADER, ...nodeFlags, WORKER], {
+      stdio: ['ignore', 'pipe', 'pipe', 'pipe'],
+      env: { ...workerEnv(file, tune, tagFilter, resultFile), LABS_PROGRESS: '1' },
+    });
+    let lastError = '';
+    readLines(worker.stdio[3] as NodeJS.ReadableStream, (line) => {
+      if (line) onEvent(JSON.parse(line));
+    });
+    readLines(worker.stdout!, onOutput);
+    readLines(worker.stderr!, (line) => {
+      if (line.trim()) lastError = line.trim();
+      onOutput(line);
+    });
+    worker.on('error', reject);
+    worker.on('close', (code) => {
+      if (code === 0) resolve();
+      else reject(new Error(lastError || `worker exited with code ${code}`));
+    });
   });
 }
 
@@ -267,7 +335,7 @@ export async function runCLI(args: string[]) {
     }
 
     saveSelection(selected);
-    console.log(`${CYAN}labs${RESET}`);
+    if (!isInteractiveTerminal()) console.log(`${CYAN}labs${RESET}`);
   }
 
   const blocksFlag = flagValue(benchArgs, '--blocks');
@@ -310,13 +378,6 @@ export async function runCLI(args: string[]) {
   const tmpDir = join(cwd, 'node_modules', '.cache', 'labs-tmp');
   mkdirSync(tmpDir, { recursive: true });
 
-  const workerOutputs: Array<{ file: string; resultFile: string }> = [];
-  for (const f of selected) {
-    const resultFile = join(tmpDir, `${basename(f, '.ts')}-${Date.now()}.json`);
-    runBench(f, config.nodeFlags, suiteName(f), benchTune, tagEnv, resultFile);
-    workerOutputs.push({ file: f, resultFile });
-  }
-
   let hardware = {
     cpu: null as string | null,
     arch: null as string | null,
@@ -329,8 +390,8 @@ export async function runCLI(args: string[]) {
   const saveDiagnostics = emptyDiagnostics();
   let savedNoop: SavedResult['context'] | undefined;
 
-  for (const { file, resultFile } of workerOutputs) {
-    if (!existsSync(resultFile)) continue;
+  const collect = (file: string, resultFile: string): SavedFile | undefined => {
+    if (!existsSync(resultFile)) return;
     const workerResult: WorkerResult = JSON.parse(readFileSync(resultFile, 'utf-8'));
     rmSync(resultFile);
     if (!hardwareSet) {
@@ -376,7 +437,50 @@ export async function runCLI(args: string[]) {
         })),
       })),
     });
+    return files.at(-1);
+  };
+
+  const live = isInteractiveTerminal();
+  const progress = createProgress(saveName, selected.map(suiteName), Date.now());
+  const view = live
+    ? new LiveView(process.stdout, (columns, rows) =>
+        renderProgress(progress, { columns, rows, now: Date.now() })
+      )
+    : undefined;
+  view?.start();
+  for (const [index, f] of selected.entries()) {
+    const resultFile = join(tmpDir, `${basename(f, '.ts')}-${Date.now()}.json`);
+    if (!view) {
+      runBench(f, config.nodeFlags, suiteName(f), benchTune, tagEnv, resultFile);
+      collect(f, resultFile);
+      continue;
+    }
+    startFile(progress, index, Date.now());
+    try {
+      await runBenchLive(
+        f,
+        config.nodeFlags,
+        benchTune,
+        (event) => applyEvent(progress, index, event),
+        (line) => view.log(line),
+        tagEnv,
+        resultFile
+      );
+    } catch (err) {
+      finishFile(progress, index, Date.now(), { error: (err as Error).message });
+      continue;
+    }
+    const saved = collect(f, resultFile);
+    const noop = (saved?.context ?? savedNoop)?.noop;
+    const statuses = (saved?.benchmarks ?? []).map((trial): BenchStatus => {
+      const runs = trial.runs.map((run) => runStatus(trial, run, noop, config.minDelta));
+      return (
+        runs.find((run) => run.symbol === '✗') ?? runs.find((run) => run.symbol === '⚠') ?? runs[0]
+      );
+    });
+    finishFile(progress, index, Date.now(), { statuses });
   }
+  view?.stop();
 
   // A run that selected no benches has nothing worth keeping and would only
   // clutter later compares, so it is reported but never saved.
@@ -399,16 +503,39 @@ export async function runCLI(args: string[]) {
     environment: { freqs: saveEnvData },
   };
 
-  if (!shouldSave) {
-    printReportBox({
+  // Interactive runs keep details in the report view and close with a short summary
+  const interactive = isInteractiveTerminal();
+  const report = (saveMsg?: string) => {
+    const input = {
       envData: saveEnvData,
       cpu: hardware.cpu,
+      saveMsg,
       blocks,
       minDelta: config.minDelta,
       diagnostics: saveDiagnostics,
-    });
+    };
+    if (!interactive) return printReportBox(input);
+    const counts = { passed: 0, warned: 0, failed: 0 };
+    for (const file of files)
+      for (const trial of file.benchmarks)
+        for (const run of trial.runs) {
+          const { symbol } = runStatus(
+            trial,
+            run,
+            (file.context ?? savedNoop)?.noop,
+            config.minDelta
+          );
+          if (symbol === '✗') counts.failed++;
+          else if (symbol === '✓') counts.passed++;
+          else counts.warned++;
+        }
+    printRunSummary({ ...input, counts });
+  };
+
+  if (!shouldSave) {
     if (saveDiagnostics.failedChecks.length > 0) process.exitCode = 1;
-    if (isInteractiveTerminal()) await showRunReport(result, config, false);
+    if (interactive) await showRunReport(result, config, false);
+    report();
     return;
   }
 
@@ -432,18 +559,8 @@ export async function runCLI(args: string[]) {
   ]
     .filter(Boolean)
     .join(', ');
-  const saveMsg = `${GREEN}✔${RESET} Saved "${saveName}"${gitNote} (${details})`;
-
-  printReportBox({
-    envData: saveEnvData,
-    cpu: hardware.cpu,
-    saveMsg,
-    blocks,
-    minDelta: config.minDelta,
-    diagnostics: saveDiagnostics,
-  });
-
-  if (!shouldCompare && isInteractiveTerminal()) await showRunReport(result, config);
+  if (!interactive) report(`${GREEN}✔${RESET} Saved "${saveName}"${gitNote} (${details})`);
+  if (!shouldCompare && interactive) await showRunReport(result, config);
 
   if (shouldCompare) {
     const baselineName = getBaseline(labsDir);
@@ -463,6 +580,7 @@ export async function runCLI(args: string[]) {
       }
     }
   }
+  if (interactive) report(`${saveName}${gitNote}  ${DIM}${details}${RESET}`);
 }
 
 function trimContext(context: WorkerResult['context']): SavedContext {
