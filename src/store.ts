@@ -290,7 +290,7 @@ function normalizeRange(range: any): { min: number; max: number; p50: number } |
 function normalizeRun(run: SavedBenchmarkRun): SavedBenchmarkRun {
   if (!run.stats) return run;
   const heap = normalizeRange(run.stats.heap);
-  const gc = normalizeRange(run.stats.gc);
+  const gc = run.stats.gc && 'total' in run.stats.gc ? run.stats.gc : normalizeRange(run.stats.gc);
   return {
     ...run,
     stats: {
