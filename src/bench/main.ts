@@ -162,26 +162,28 @@ export class B {
       // Always request initial collection. Custom GC hooks remain supported.
       gc: 'function' === typeof _tune.gc ? _tune.gc : undefined,
 
-      heap: await (async () => {
-        if ((globalThis as any).Bun) {
-          const _m = 'bun:jsc';
-          const { memoryUsage } = await import(_m);
-          return () => {
-            const m = memoryUsage();
-            return m.current;
-          };
-        }
+      heap:
+        _tune.heap ??
+        (await (async () => {
+          if ((globalThis as any).Bun) {
+            const _m = 'bun:jsc';
+            const { memoryUsage } = await import(_m);
+            return () => {
+              const m = memoryUsage();
+              return m.current;
+            };
+          }
 
-        try {
-          const _v8 = 'node:v8';
-          const { getHeapStatistics } = await import(_v8);
-          getHeapStatistics();
-          return () => {
-            const m = getHeapStatistics();
-            return m.used_heap_size + m.malloced_memory + m.external_memory;
-          };
-        } catch {}
-      })(),
+          try {
+            const _v8 = 'node:v8';
+            const { getHeapStatistics } = await import(_v8);
+            getHeapStatistics();
+            return () => {
+              const m = getHeapStatistics();
+              return m.used_heap_size + m.malloced_memory + m.external_memory;
+            };
+          } catch {}
+        })()),
     };
 
     if (kind === 'static') {
