@@ -1,5 +1,5 @@
 import type { LabsConfig } from './config.ts';
-import { renderMitata, type RenderedCollection } from './bench/render.ts';
+import { renderReport, type RenderedCollection } from './bench/render.ts';
 import { isAssertionError, type Context, type Stats, type Trial } from './bench/types.ts';
 import {
   calibrationExplainedFraction,
@@ -258,7 +258,7 @@ export function printRunSummary(
 export function replayReport(result: SavedResult, config: LabsConfig): void {
   for (const file of result.files) {
     console.log(`\n${BLUE}▶ ${file.file}${RESET}`);
-    renderMitata(
+    renderReport(
       replayContext(file, result),
       {
         print: console.log,

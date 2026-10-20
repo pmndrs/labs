@@ -4,18 +4,28 @@
  * non-normal distributions. No external dependencies.
  */
 
-export function median(a: number[]): number {
-  if (a.length === 0) return 0;
-  const s = a.slice().sort((x, y) => x - y);
+/** Median of values already sorted ascending. */
+function sortedMedian(s: Float64Array): number {
+  if (s.length === 0) return 0;
   const mid = s.length >> 1;
   return s.length % 2 === 1 ? s[mid] : (s[mid - 1] + s[mid]) / 2;
+}
+
+/** Median absolute deviation around `m`, reusing `scratch` for the deviations. */
+function deviationMedian(a: ArrayLike<number>, m: number, scratch: Float64Array): number {
+  for (let i = 0; i < a.length; i++) scratch[i] = Math.abs(a[i] - m);
+  return sortedMedian(scratch.sort());
+}
+
+export function median(a: number[]): number {
+  return sortedMedian(Float64Array.from(a).sort());
 }
 
 /** Median absolute deviation, a robust spread metric paired with median. */
 export function mad(a: number[]): number {
   if (a.length < 2) return 0;
-  const m = median(a);
-  return median(a.map((v) => Math.abs(v - m)));
+  const sorted = Float64Array.from(a).sort();
+  return deviationMedian(a, sortedMedian(sorted), sorted);
 }
 
 /** Largest combined sample size where the exact Mann-Whitney distribution is used. */
@@ -28,33 +38,33 @@ const MW_U_EXACT_MAX_TOTAL = 50;
  * assignments gives every allocation of group labels its proper weight.
  */
 function exactMannWhitneyP(ranks: Float64Array, n1: number, observedRankSum: number): number {
-  const doubledRanks = Array.from(ranks, (rank) => Math.round(rank * 2));
-  const maxRankSum = doubledRanks
-    .slice()
-    .sort((a, b) => b - a)
-    .slice(0, n1)
-    .reduce((sum, rank) => sum + rank, 0);
-  const counts = Array.from({ length: n1 + 1 }, () => new Float64Array(maxRankSum + 1));
-  counts[0][0] = 1;
+  // Ranks arrive in ascending order, so the largest attainable sum takes the last n1.
+  let maxRankSum = 0;
+  for (let k = ranks.length - n1; k < ranks.length; k++) maxRankSum += Math.round(ranks[k] * 2);
 
-  let seen = 0;
-  for (const rank of doubledRanks) {
-    seen++;
-    for (let selected = Math.min(n1, seen); selected >= 1; selected--) {
-      const row = counts[selected];
-      const previous = counts[selected - 1];
+  // counts[selected * width + sum] ways to pick `selected` ranks summing to `sum`
+  const width = maxRankSum + 1;
+  const counts = new Float64Array((n1 + 1) * width);
+  counts[0] = 1;
+
+  for (let k = 0; k < ranks.length; k++) {
+    const rank = Math.round(ranks[k] * 2);
+    for (let selected = Math.min(n1, k + 1); selected >= 1; selected--) {
+      const row = selected * width;
+      const previous = row - width;
       for (let sum = maxRankSum; sum >= rank; sum--) {
-        row[sum] += previous[sum - rank];
+        counts[row + sum] += counts[previous + sum - rank];
       }
     }
   }
 
   const observed = Math.round(observedRankSum * 2);
+  const last = n1 * width;
   let lower = 0;
   let upper = 0;
   let total = 0;
   for (let sum = 0; sum <= maxRankSum; sum++) {
-    const count = counts[n1][sum];
+    const count = counts[last + sum];
     total += count;
     if (sum <= observed) lower += count;
     if (sum >= observed) upper += count;
@@ -76,32 +86,42 @@ export function mannWhitneyU(a: number[], b: number[]): { U: number; z: number; 
   const n2 = b.length;
   if (n1 === 0 || n2 === 0) return { U: 0, z: 0, p: 1 };
 
-  // Merge and rank (average ranks for ties)
-  const combined = [...a.map((v) => ({ v, group: 0 })), ...b.map((v) => ({ v, group: 1 }))].sort(
-    (x, y) => x.v - y.v
-  );
+  const total = n1 + n2;
 
+  // Sort each group, then merge so every combined position knows its group.
+  const sortedA = Float64Array.from(a).sort();
+  const sortedB = Float64Array.from(b).sort();
+  const values = new Float64Array(total);
+  const fromA = new Uint8Array(total);
+  for (let k = 0, i = 0, j = 0; k < total; k++) {
+    if (j >= n2 || (i < n1 && sortedA[i] <= sortedB[j])) {
+      values[k] = sortedA[i++];
+      fromA[k] = 1;
+    } else {
+      values[k] = sortedB[j++];
+    }
+  }
+
+  // Average ranks for ties
   let tieTerm = 0;
-  const ranks = new Float64Array(combined.length);
+  let R1 = 0;
+  const ranks = new Float64Array(total);
   let i = 0;
-  while (i < combined.length) {
+  while (i < total) {
     let j = i;
-    while (j < combined.length - 1 && combined[j + 1].v === combined[i].v) j++;
+    while (j < total - 1 && values[j + 1] === values[i]) j++;
     const tieSize = j - i + 1;
     tieTerm += tieSize ** 3 - tieSize;
     const avgRank = (i + j) / 2 + 1; // 1-indexed
-    for (let k = i; k <= j; k++) ranks[k] = avgRank;
+    for (let k = i; k <= j; k++) {
+      ranks[k] = avgRank;
+      if (fromA[k] === 1) R1 += avgRank;
+    }
     i = j + 1;
-  }
-
-  let R1 = 0;
-  for (let k = 0; k < combined.length; k++) {
-    if (combined[k].group === 0) R1 += ranks[k];
   }
 
   const U1 = R1 - (n1 * (n1 + 1)) / 2;
   const mean = (n1 * n2) / 2;
-  const total = n1 + n2;
   const variance = (n1 * n2 * (total + 1 - (total > 1 ? tieTerm / (total * (total - 1)) : 0))) / 12;
   const sd = Math.sqrt(Math.max(0, variance));
   const centered = U1 - mean;
@@ -156,35 +176,26 @@ export function cliffsD(a: number[], b: number[]): number {
 /** Exact tie-free null distribution of the Mann-Whitney U statistic, P(U = u). */
 function mannWhitneyNullDistribution(n1: number, n2: number): Float64Array {
   const width = n1 * n2 + 1;
-  // table[m][u] = P(U = u) for m group-one values among m + n combined
-  let table: Float64Array[] = Array.from({ length: n1 + 1 }, () => {
-    const row = new Float64Array(width);
-    row[0] = 1;
-    return row;
-  });
+  // table[m * width + u] = P(U = u) for m group-one values among m + n combined
+  const table = new Float64Array((n1 + 1) * width);
+  for (let m = 0; m <= n1; m++) table[m * width] = 1;
 
+  // Rows update in place in ascending m. Row m reads its own previous value at
+  // the same u and row m - 1, which already holds the current n.
   for (let n = 1; n <= n2; n++) {
-    const next: Float64Array[] = [];
-    for (let m = 0; m <= n1; m++) {
-      const row = new Float64Array(width);
-      if (m === 0) {
-        row[0] = 1;
-      } else {
-        // Largest remaining value is from group one with probability m/(m+n),
-        // contributing n to U, otherwise from group two contributing nothing
-        const pm = m / (m + n);
-        const fromOne = next[m - 1];
-        const fromTwo = table[m];
-        for (let u = 0; u < width; u++) {
-          row[u] = pm * (u >= n ? fromOne[u - n] : 0) + (1 - pm) * fromTwo[u];
-        }
+    for (let m = 1; m <= n1; m++) {
+      // Largest remaining value is from group one with probability m/(m+n),
+      // contributing n to U, otherwise from group two contributing nothing
+      const pm = m / (m + n);
+      const row = m * width;
+      const fromOne = row - width;
+      for (let u = width - 1; u >= 0; u--) {
+        table[row + u] = pm * (u >= n ? table[fromOne + u - n] : 0) + (1 - pm) * table[row + u];
       }
-      next.push(row);
     }
-    table = next;
   }
 
-  return table[n1];
+  return table.subarray(n1 * width);
 }
 
 /** Largest u with P(U ≤ u) ≤ alpha/2 under the exact null, or -1 if none. */
@@ -214,20 +225,23 @@ export function hodgesLehmannDelta(
   candidate: number[],
   alpha = 0.05
 ): { delta: number; low: number; high: number } {
-  const ratios: number[] = [];
-  for (const c of candidate) {
-    for (const b of baseline) {
-      if (b > 0) ratios.push(c / b);
+  const buffer = new Float64Array(candidate.length * baseline.length);
+  let count = 0;
+  for (let i = 0; i < candidate.length; i++) {
+    const c = candidate[i];
+    for (let j = 0; j < baseline.length; j++) {
+      const b = baseline[j];
+      if (b > 0) buffer[count++] = c / b;
     }
   }
-  if (ratios.length === 0) return { delta: 0, low: 0, high: 0 };
-  ratios.sort((a, b) => a - b);
+  if (count === 0) return { delta: 0, low: 0, high: 0 };
+  const ratios = buffer.subarray(0, count).sort();
 
   const critical = mannWhitneyCriticalU(baseline.length, candidate.length, alpha);
   const lowIndex = Math.max(0, critical);
   const highIndex = Math.min(ratios.length - 1, ratios.length - 1 - Math.max(0, critical));
   return {
-    delta: median(ratios) - 1,
+    delta: sortedMedian(ratios) - 1,
     low: ratios[Math.min(lowIndex, highIndex)] - 1,
     high: ratios[Math.max(lowIndex, highIndex)] - 1,
   };
@@ -255,9 +269,10 @@ export function calibrationExplainedFraction(medians: number[], calibrationRates
  */
 export function relativeSpread(values: number[]): number {
   if (values.length < 2) return 0;
-  const m = median(values);
+  const sorted = Float64Array.from(values).sort();
+  const m = sortedMedian(sorted);
   if (m <= 0) return 0;
-  return (1.4826 * mad(values)) / m;
+  return (1.4826 * deviationMedian(values, m, sorted)) / m;
 }
 
 /**

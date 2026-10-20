@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync
 import { createRequire } from 'node:module';
 import { basename, dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { resolve as resolveModule } from 'import-meta-resolve';
 import { compare } from '../compare.ts';
 import type { LabsConfig } from '../config.ts';
 import { collectDiagnostics, emptyDiagnostics, printReportBox, printRunSummary } from '../report.ts';
@@ -72,6 +73,15 @@ function globBenchFiles(dir: string, pattern: string): string[] {
   return results.sort();
 }
 
+/** Resolve the counters module from the config file so the project's own install is used. */
+function resolveCounters(specifier: string, configPath: string): string {
+  try {
+    return resolveModule(specifier, pathToFileURL(configPath).href);
+  } catch {
+    return specifier;
+  }
+}
+
 async function loadConfig(configPath: string): Promise<LabsConfig> {
   const mod = await import(pathToFileURL(configPath).href);
   return (mod.default ?? mod) as LabsConfig;
@@ -93,7 +103,7 @@ function saveSelection(files: string[]) {
   writeFileSync(CACHE_FILE, JSON.stringify(files));
 }
 
-type WorkerTune = Pick<Partial<LabsConfig>, 'blockTime' | 'minSamples' | 'blocks'>;
+type WorkerTune = Pick<Partial<LabsConfig>, 'blockTime' | 'minSamples' | 'blocks' | 'counters'>;
 
 function workerEnv(
   file: string,
@@ -112,6 +122,7 @@ function workerEnv(
     LABS_BLOCKS: String(tune.blocks ?? 8),
     ...(tune.blockTime !== undefined ? { LABS_BLOCK_TIME: String(tune.blockTime * 1e9) } : {}),
     ...(tune.minSamples !== undefined ? { LABS_MIN_SAMPLES: String(tune.minSamples) } : {}),
+    ...(tune.counters ? { LABS_COUNTERS: tune.counters } : {}),
     ...(tagFilter ? { LABS_GREP_TAGS: tagFilter } : {}),
     ...(resultFile ? { LABS_RESULT_FILE: resultFile } : {}),
   };
@@ -350,7 +361,12 @@ export async function runCLI(args: string[]) {
   }
   const blocks = blocksFlag !== undefined ? Number(blocksFlag) : (config.blocks ?? 8);
 
-  const benchTune = { blockTime: config.blockTime, minSamples: config.minSamples, blocks };
+  const benchTune = {
+    blockTime: config.blockTime,
+    minSamples: config.minSamples,
+    blocks,
+    counters: config.counters && resolveCounters(config.counters, configPath),
+  };
 
   const git = captureGitInfo(dirname(configPath));
 

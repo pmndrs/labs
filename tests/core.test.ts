@@ -13,6 +13,10 @@ const busy = (us: number) => () => {
 
 function expectUsefulStats(stats: any) {
   expect(stats.samples.length).toBeGreaterThan(0);
+  // Saved results serialize samples as a sorted JSON array
+  expect(Array.isArray(stats.samples)).toBe(true);
+  expect(stats.samples).toEqual(stats.samples.toSorted((a: number, b: number) => a - b));
+  expect(stats.samples.length).toBe(stats.plan.samples);
   expect(stats.min).toBeLessThanOrEqual(stats.avg);
   expect(stats.avg).toBeLessThanOrEqual(stats.max);
   expect(stats.p75).toBeLessThanOrEqual(stats.p99);
@@ -81,6 +85,39 @@ describe('measuring work', () => {
       20e6
     );
   });
+
+  it.each(['function', 'iterator'])(
+    'preserves large sample floors and frozen plans for %s benchmarks',
+    async (kind) => {
+      for (const fixed of [false, true]) {
+        let clock = 0;
+        const work = () => {
+          clock++;
+        };
+        const stats = await measure(
+          kind === 'function'
+            ? work
+            : (state: Iterable<unknown>) => {
+                for (const _ of state) work();
+              },
+          {
+            now: () => clock,
+            gc: false,
+            warmup_samples: 0,
+            batch: false,
+            min_samples: 2 ** 20 + 1,
+            ...(fixed ? { max_samples: 2 ** 20 + 1 } : {}),
+            min_cpu_time: 0,
+          }
+        );
+
+        expect(stats.samples).toHaveLength(2 ** 20 + 1);
+        expect(stats.plan?.samples).toBe(2 ** 20 + 1);
+        expect(stats.ticks).toBe(2 ** 20 + 1);
+        expect(stats.avg).toBe(1);
+      }
+    }
+  );
 
   it('protects returned benchmark results from dead-code elimination', async () => {
     let result = 0;

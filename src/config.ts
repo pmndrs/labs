@@ -29,6 +29,12 @@ export interface LabsConfig {
    * that a single process hides. Override per run with `--blocks`. @default 8
    */
   blocks?: number;
+  /**
+   * Module providing hardware counters, resolved from the config file's
+   * directory. Counters are read only where the module supports the platform,
+   * which on macOS requires running as root.
+   */
+  counters?: string;
 }
 
 export function defineConfig(config: Partial<LabsConfig> & Pick<LabsConfig, 'benchDir'>): LabsConfig {

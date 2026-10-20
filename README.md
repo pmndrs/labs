@@ -380,6 +380,7 @@ export default defineConfig({
 | `minDelta`          | `0.05`                                      | Minimum absolute Hodges-Lehmann relative effect for a verdict; rows whose approximate resolution exceeds it are annotated as limited-resolution |
 | `snapshotTolerance` | `1e-9`                                      | Relative tolerance for numeric snapshots, with an absolute floor at one; digests of non-numeric snapshots are compared exactly                  |
 | `blocks`            | `8`                                         | Fresh-process blocks per benchmark; override per run with `--blocks`                                                                            |
+| `counters`          | (none)                                      | Module providing hardware counters, resolved from the config file's directory. macOS requires running as root                                   |
 
 Sampling behavior:
 

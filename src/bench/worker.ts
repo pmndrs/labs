@@ -145,7 +145,13 @@ function mergeRange(list: Array<{ min: number; max: number; p50: number }>): {
  * come from the pilot.
  */
 function mergeStats(list: Stats[], calibrationRates: number[]): Stats {
-  const samples = list.flatMap((s) => s.samples).sort((a, b) => a - b);
+  let total = 0;
+  for (const s of list) total += s.samples.length;
+  const pooled = new Float64Array(total);
+  for (let i = 0, offset = 0; i < list.length; offset += list[i++].samples.length) {
+    pooled.set(list[i].samples, offset);
+  }
+  const samples = Array.from(pooled.sort());
   const heaps = list.map((s) => s.heap).filter(Boolean) as NonNullable<Stats['heap']>[];
   const gcs = list.map((s) => s.gc).filter((gc) => gc && 'total' in gc) as GcStats[];
   const medians = list.map((s) => s.p50);

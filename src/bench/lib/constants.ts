@@ -9,7 +9,7 @@ export const tuning = {
   /** Unroll factor inside batched loops. */
   batch_unroll: 4,
   /** Hard ceiling on sample count. */
-  max_samples: 1e9,
+  max_samples: 2 ** 20,
   /** Consecutive timing windows required for warm-up stability. */
   warmup_samples: 5,
   /** Maximum wall time (ns) spent warming up, including setup and cleanup. */
@@ -43,7 +43,7 @@ export function defaults(opts: any): void {
   opts.$counters ??= false;
   opts.concurrency ??= tuning.concurrency;
   opts.min_samples ??= tuning.min_samples;
-  opts.max_samples ??= tuning.max_samples;
+  opts.max_samples ??= Math.max(tuning.max_samples, opts.min_samples);
   opts.min_cpu_time ??= tuning.min_cpu_time;
   opts.batch_unroll ??= tuning.batch_unroll;
   opts.batch_duration ??= tuning.batch_duration;

@@ -8,7 +8,7 @@ function clamp(lo: number, v: number, hi: number): number {
 
 /** Bin sorted samples into `size` buckets over `[min, max]`. Returns normalized heights [0..1]. */
 function binSamples(
-  sorted: number[],
+  sorted: Float64Array,
   size: number,
   min: number,
   max: number,
@@ -50,8 +50,8 @@ export function renderDistributions(
   candidateSamples: number[],
   width: number
 ): { baseline: string; candidate: string } {
-  const bSorted = baselineSamples.slice().sort((a, b) => a - b);
-  const cSorted = candidateSamples.slice().sort((a, b) => a - b);
+  const bSorted = Float64Array.from(baselineSamples).sort();
+  const cSorted = Float64Array.from(candidateSamples).sort();
 
   const percentile = 0.99;
   const bCutoff = bSorted[(percentile * (bSorted.length - 1)) | 0] ?? 0;

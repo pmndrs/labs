@@ -86,6 +86,7 @@ export interface MeasureOptions {
   heap?: (() => number) | null | false;
   concurrency?: number;
   min_samples?: number;
+  /** Sample ceiling and timing buffer capacity. Defaults to at least 2 ** 20 and min_samples. */
   max_samples?: number;
   min_cpu_time?: number;
   batch_unroll?: number;

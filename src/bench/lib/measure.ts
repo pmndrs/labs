@@ -12,13 +12,43 @@ import { createWarmup, isWarmupDone, isWarmupUnsettled, recordWarmup } from './w
 import { memoryPass } from './memory.ts';
 import { GcObservation } from './gc.ts';
 
-/** Range and median of the first `count` per-sample values. */
-function summarize(values: number[], count: number): { min: number; max: number; p50: number } {
-  const sorted = values.slice(0, count).sort((a, b) => a - b);
+/** Range and median of the per-sample values, sorted in place. */
+function summarize(values: Float64Array): { min: number; max: number; p50: number } {
+  values.sort();
   return {
+    min: values[0],
+    max: values[values.length - 1],
+    p50: values[(0.5 * (values.length - 1)) | 0],
+  };
+}
+
+/**
+ * Sample storage for one block. A typed array keeps timings off the JS heap,
+ * so it neither allocates while sampling nor adds to the GC work being
+ * observed. Sampling stops at capacity instead of growing.
+ */
+function createSamples(maxSamples: number): Float64Array {
+  return new Float64Array(Math.max(0, Math.ceil(maxSamples)));
+}
+
+/**
+ * Sorts the first `count` samples in place and derives the headline stats.
+ * The saved samples are copied out as a plain array once, at the boundary.
+ */
+function summarizeSamples(samples: Float64Array, count: number) {
+  const sorted = samples.subarray(0, count).sort();
+  let sum = 0;
+  for (let i = 0; i < count; i++) sum += sorted[i];
+  return {
+    samples: Array.from(sorted),
     min: sorted[0],
-    max: sorted[sorted.length - 1],
-    p50: sorted[(0.5 * (sorted.length - 1)) | 0],
+    max: sorted[count - 1],
+    p25: sorted[(0.25 * (count - 1)) | 0],
+    p50: sorted[(0.5 * (count - 1)) | 0],
+    p75: sorted[(0.75 * (count - 1)) | 0],
+    p99: sorted[(0.99 * (count - 1)) | 0],
+    p999: sorted[(0.999 * (count - 1)) | 0],
+    avg: sum / count,
   };
 }
 
@@ -30,15 +60,16 @@ function summarize(values: number[], count: number): { min: number; max: number;
 export function measure(gen: GeneratorBench, opts?: MeasureOptions): Promise<Stats>;
 export function measure(f: (...args: any[]) => any, opts?: MeasureOptions): Promise<Stats>;
 export async function measure(f: (...args: any[]) => any, opts: MeasureOptions = {}): Promise<Stats> {
-  const dispatch: Record<string, (f: any, opts?: any) => Promise<Stats>> = {
-    fn: benchFn,
-    iter: benchIter,
-    yield: benchGenerator,
-    [void 0 as any]() {
+  switch (kind(f)) {
+    case 'fn':
+      return await benchFn(f, opts);
+    case 'iter':
+      return await benchIter(f, opts);
+    case 'yield':
+      return await benchGenerator(f, opts);
+    default:
       throw new TypeError('expected iterator, generator or one-shot function');
-    },
-  };
-  return await dispatch[kind(f) as any](f, opts);
+  }
 }
 
 /**
@@ -122,7 +153,7 @@ export async function benchFn(fn: (...args: any[]) => any, opts: any = {}): Prom
   defaults(opts);
   const now: () => number = opts.now;
   const consume = opts.$consume ?? do_not_optimize;
-  let warmup = createWarmup(now() + opts.warmup_time);
+  const warmup = createWarmup(now() + opts.warmup_time, opts.warmup_samples);
   let async = false;
   let batch = false;
   let single = 0;
@@ -155,7 +186,7 @@ export async function benchFn(fn: (...args: any[]) => any, opts: any = {}): Prom
 
     if (opts.after) await opts.after();
 
-    warmup = recordWarmup(warmup, t1 - t0, 1, opts);
+    recordWarmup(warmup, t1 - t0, 1, opts);
     while (!isWarmupDone(warmup, opts, now())) {
       let duration = 0;
       let iterations = 0;
@@ -171,7 +202,7 @@ export async function benchFn(fn: (...args: any[]) => any, opts: any = {}): Prom
         if (opts.after) await opts.after();
         iterations++;
       }
-      if (iterations) warmup = recordWarmup(warmup, duration, iterations, opts);
+      if (iterations) recordWarmup(warmup, duration, iterations, opts);
     }
     single = warmup.single;
     batch = single <= opts.batch_threshold;
@@ -275,6 +306,7 @@ export async function benchFn(fn: (...args: any[]) => any, opts: any = {}): Prom
     }
   `;
   const collect = !!(opts.gc && !opts.gc.fallback);
+  const samples = createSamples(opts.max_samples);
   const observation = opts.sample_gc ? new GcObservation() : undefined;
   const after = !opts.after ? '' : 'await $after();';
 
@@ -289,19 +321,19 @@ export async function benchFn(fn: (...args: any[]) => any, opts: any = {}): Prom
     '$after',
     '$summary',
     '$observation',
+    '$samples',
+    '$summarize',
     `
     ${!opts.$counters ? '' : 'let _hc = false;'}
     ${!opts.$counters ? '' : 'try { $counters.init(); _hc = true; } catch {}'}
 
     let _ = 0; let t = 0;
-    // Reserve double storage so writing timings does not allocate during sampling.
-    const samples = new Array(2 ** 20).fill(NaN);
 
     ${Array.from({ length: params.length }, (_, p) =>
       Array.from(
         { length: opts.concurrency },
         (_, c) => `
-        let param_${p}_${c} = ${!batch ? 'null' : `new Array(${batchSamples})`};
+        let param_${p}_${c} = ${!batch ? 'null' : `new Array(${batchSamples}).fill(undefined)`};
       `
       ).join('\n')
     ).join('\n')}
@@ -309,7 +341,7 @@ export async function benchFn(fn: (...args: any[]) => any, opts: any = {}): Prom
     ${!opts.gc ? '' : '$gc();'}
     ${!observation ? '' : '$observation.start();'}
 
-    for (; _ < ${opts.max_samples}; _++) {
+    for (; _ < ${samples.length}; _++) {
       if (_ >= ${opts.min_samples} && t >= ${opts.min_cpu_time}) break;
       ${prepare}
       ${!opts.$counters ? '' : 'if (_hc) try { $counters.before(); } catch {};'}
@@ -320,12 +352,11 @@ export async function benchFn(fn: (...args: any[]) => any, opts: any = {}): Prom
 
       const diff = ${opts.manual ? 't2' : 't1 - t0'};
       t += ${'manual' === opts.manual ? 't2' : 't1 - t0'};
-      samples[_] = diff ${!batch ? '' : `/ ${batchSamples}`};
+      $samples[_] = diff ${!batch ? '' : `/ ${batchSamples}`};
       ${after}
     }
 
     ${!observation ? '' : `const gc = await $observation.finish(t, _ * ${batch ? batchSamples : 1}, ${now === runtimeNow && !opts.manual});`}
-    samples.length = _;
     ${
       !opts.$counters
         ? ''
@@ -341,21 +372,11 @@ export async function benchFn(fn: (...args: any[]) => any, opts: any = {}): Prom
 
     ${memoryPass({ heap: !!opts.heap, gc: collect, prepare, body, after, iterations: batch ? batchSamples : 1 })}
 
-    samples.sort((a, b) => a - b);
-
     return {
-      samples,
-      min: samples[0],
-      max: samples[samples.length - 1],
-      p25: samples[(.25 * (samples.length - 1)) | 0],
-      p50: samples[(.50 * (samples.length - 1)) | 0],
-      p75: samples[(.75 * (samples.length - 1)) | 0],
-      p99: samples[(.99 * (samples.length - 1)) | 0],
-      p999: samples[(.999 * (samples.length - 1)) | 0],
-      avg: samples.reduce((a, v) => a + v, 0) / samples.length,
-      ticks: samples.length ${!batch ? '' : `* ${batchSamples}`},
+      ...$summarize($samples, _),
+      ticks: _ ${!batch ? '' : `* ${batchSamples}`},
       plan: { batch: ${batch}, batch_samples: ${batchSamples}, batch_unroll: ${opts.batch_unroll}, samples: _ },
-      ${!opts.heap ? '' : 'heap: $summary(heap, diagnosticCount),'}
+      ${!opts.heap ? '' : 'heap: $summary(heap),'}
       ${!observation ? '' : 'gc,'}
       ${!opts.$counters ? '' : '...(!_hc ? {} : { counters }),'}
     };
@@ -377,7 +398,9 @@ export async function benchFn(fn: (...args: any[]) => any, opts: any = {}): Prom
         consume,
         opts.after,
         summarize,
-        observation
+        observation,
+        samples,
+        summarizeSamples
       )),
     };
   } finally {
@@ -394,11 +417,21 @@ export async function benchFn(fn: (...args: any[]) => any, opts: any = {}): Prom
  * {@link benchFn}.
  */
 export async function benchIter(iter: (...args: any[]) => any, opts: any = {}): Promise<Stats> {
-  const _: any = {};
   defaults(opts);
+  // Shared with the generated loop. Every key exists from the start so the shape never changes.
+  const _: any = {
+    next: null,
+    batch: false,
+    unsettled: false,
+    debug: '',
+    count: 0,
+    timed: 0,
+    iterations: undefined,
+    gc: undefined,
+  };
   const now: () => number = opts.now;
   let batchSamples = 0;
-  const samples = Array.from({ length: 2 ** 20 }, () => NaN);
+  const samples = createSamples(opts.max_samples);
   const observation = opts.sample_gc ? new GcObservation() : undefined;
   const _i = {
     next() {
@@ -420,7 +453,7 @@ export async function benchIter(iter: (...args: any[]) => any, opts: any = {}): 
 
   const gen: Generator = (function* () {
     let batch = false;
-    let warmup = createWarmup(now() + opts.warmup_time);
+    const warmup = createWarmup(now() + opts.warmup_time, opts.warmup_samples);
     do {
       let iterations = 0;
       const t0 = now();
@@ -428,7 +461,7 @@ export async function benchIter(iter: (...args: any[]) => any, opts: any = {}): 
         yield void 0;
         iterations++;
       } while (iterations < warmup.iterations && now() < warmup.deadline);
-      warmup = recordWarmup(warmup, now() - t0, iterations, opts);
+      recordWarmup(warmup, now() - t0, iterations, opts);
     } while (!isWarmupDone(warmup, opts, now()));
 
     const single = warmup.single;
@@ -459,7 +492,7 @@ export async function benchIter(iter: (...args: any[]) => any, opts: any = {}): 
       ${!opts.gc ? '' : '$gc();'}
       ${!observation ? '' : '$observation.start();'}
 
-      for (; _ < ${opts.max_samples}; _++) {
+      for (; _ < ${samples.length}; _++) {
         if (_ >= ${opts.min_samples} && t >= ${opts.min_cpu_time}) break;
         const t0 = $now();
         ${body}
@@ -468,7 +501,7 @@ export async function benchIter(iter: (...args: any[]) => any, opts: any = {}): 
         t += diff;
       }
 
-      $samples.length = _;
+      $state.count = _;
       $state.timed = t;
       $state.iterations = _ * ${batch ? batchSamples : 1};
       ${!observation ? '' : `$state.gc = $observation.finish(t, $state.iterations, ${now === runtimeNow});`}
@@ -488,32 +521,21 @@ export async function benchIter(iter: (...args: any[]) => any, opts: any = {}): 
   }
   if (_.iterations === undefined)
     throw new TypeError('expected iterator to consume all measurement iterations');
-  if (samples.length < opts.min_samples)
+  if (_.count < opts.min_samples)
     throw new TypeError(`expected at least ${opts.min_samples} samples from iterator`);
 
-  samples.sort((a, b) => a - b);
-  const rawCount = samples.length;
-
   return {
-    samples,
+    ...summarizeSamples(samples, _.count),
     kind: 'iter' as const,
     plan: {
       batch: !!_.batch,
       batch_samples: batchSamples,
       batch_unroll: opts.batch_unroll,
-      samples: rawCount,
+      samples: _.count,
     },
     debug: _.debug,
     ...(_.unsettled ? { unsettled: true } : {}),
-    min: samples[0],
-    max: samples[samples.length - 1],
-    p25: samples[(0.25 * (samples.length - 1)) | 0],
-    p50: samples[(0.5 * (samples.length - 1)) | 0],
-    p75: samples[(0.75 * (samples.length - 1)) | 0],
-    p99: samples[(0.99 * (samples.length - 1)) | 0],
-    p999: samples[(0.999 * (samples.length - 1)) | 0],
-    avg: samples.reduce((a, v) => a + v, 0) / samples.length,
-    ticks: samples.length * (!_.batch ? 1 : batchSamples),
+    ticks: _.count * (!_.batch ? 1 : batchSamples),
     ...(_.gc ? { gc: _.gc } : {}),
   };
 }

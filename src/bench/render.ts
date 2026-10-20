@@ -22,16 +22,16 @@ export interface RenderedCollection {
   trials: RenderedTrial[];
 }
 
-export interface RenderMitataOptions {
+export interface RenderReportOptions {
   print: (s: string) => void;
   colors: boolean;
   format?: { name?: number | string };
   countersAvailable?: unknown;
 }
 
-export function renderMitata(
+export function renderReport(
   ctx: Context,
-  opts: RenderMitataOptions,
+  opts: RenderReportOptions,
   collections: RenderedCollection[]
 ): void {
   const print = opts.print;
@@ -783,7 +783,6 @@ export function renderMitata(
     const pad = ' '.repeat(k_legend - 13);
     if (!opts.colors) {
       print(pad + 'benchmark was likely optimized out (dead code elimination) = !');
-      print(pad + 'https://github.com/evanwashere/mitata#writing-good-benchmarks');
     } else {
       print(
         pad +
@@ -797,9 +796,6 @@ export function renderMitata(
           ansi.red +
           '!' +
           ansi.reset
-      );
-      print(
-        pad + ansi.gray + 'https://github.com/evanwashere/mitata#writing-good-benchmarks' + ansi.reset
       );
     }
   }

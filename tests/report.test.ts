@@ -1,6 +1,6 @@
 import { stripVTControlCharacters } from 'node:util';
 import { describe, expect, it, vi } from 'vitest';
-import { renderMitata } from '../src/bench/render.ts';
+import { renderReport } from '../src/bench/render.ts';
 import {
   type BenchDiagnostics,
   collectDiagnostics,
@@ -154,7 +154,7 @@ describe('measurement report', () => {
       debug: '',
     };
 
-    renderMitata(
+    renderReport(
       {
         cpu: { freq: 4, name: 'test-cpu' },
         runtime: 'node',

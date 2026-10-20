@@ -5,7 +5,7 @@ import { formatNs } from '../utils/units.ts';
 import { arch, colors, cpu, runtime, version } from './env.ts';
 import { measure } from './lib/measure.ts';
 import { _print, kind } from './lib/runtime.ts';
-import { renderMitata, type RenderedCollection } from './render.ts';
+import { renderReport, type RenderedCollection } from './render.ts';
 import {
   type BlockPlan,
   type Collection,
@@ -332,29 +332,31 @@ function defaults(opts: any): void {
   opts.print ??= _print;
   opts.throw ??= false;
   opts.filter ??= /.*/;
-  opts.format ??= 'mitata';
+  opts.format ??= 'pretty';
   opts.colors ??= colors();
   opts.tune ??= {};
   opts.observe ??= (trial: any) => trial;
   opts.run_trial ??= (trial: B, _index: number) => trial.run(opts.throw, opts.tune);
 }
 
-/** Initialize process-local hardware counters when supported. */
+/**
+ * Initialize process-local hardware counters from the module named by
+ * `LABS_COUNTERS` when one is configured and the platform supports it.
+ */
 async function initCounters(arch: string | null, runtime: string | null): Promise<void> {
-  if ($counters || !['bun', 'node', 'deno'].includes(runtime as string)) return;
+  const module = process.env.LABS_COUNTERS;
+  if (!module || $counters || !['bun', 'node', 'deno'].includes(runtime as string)) return;
 
   if (arch?.includes?.('darwin')) {
     try {
-      const _c = '@mitata/counters';
-      $counters = await import(_c);
+      $counters = await import(module);
       if (0 !== (globalThis as any).process.getuid()) throw (($counters = false), 1);
     } catch {}
   }
 
   if (!$counters && arch?.includes?.('linux')) {
     try {
-      const _c = '@mitata/counters';
-      $counters = await import(_c);
+      $counters = await import(module);
     } catch (err: any) {
       if (err?.message?.includes?.('PermissionDenied')) $counters = false;
     }
@@ -542,7 +544,7 @@ const formats = {
     }
   },
 
-  async mitata(ctx: any, opts: any, benchmarks: Trial[]) {
+  async pretty(ctx: any, opts: any, benchmarks: Trial[]) {
     const renderedCollections: RenderedCollection[] = [];
 
     let index = 0;
@@ -570,7 +572,7 @@ const formats = {
       }
     }
 
-    renderMitata(
+    renderReport(
       ctx,
       {
         print: opts.print,

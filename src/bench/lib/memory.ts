@@ -18,7 +18,7 @@ export function memoryPass({
 
   return `
     const diagnosticCount = Math.min(20, _);
-    const heap = [];
+    const heap = new Float64Array(diagnosticCount);
     ${gc ? '$gc();' : ''}
 
     ${
