@@ -67,7 +67,7 @@ In an interactive terminal, a live view shows each benchmark's progress while it
 - **heap**: Median and range of estimated bytes allocated per iteration, including typed array storage. Measured after timing; collections during diagnostics can lower the estimate.
 - **consistency**: Each dot represents a fresh process's median time. Larger dots represent multiple runs at the same plotted position. Tight clusters show agreement between runs, while a wider spread shows more variation.
 
-GC figures exclude warmup and heap diagnostics and do not capture all GC overhead. Disable observation with `.gc(false)`. Older forced-GC estimates are kept separate.
+GC figures exclude warmup and heap diagnostics and do not capture all GC overhead. Disable observation with `.gc(false)`. Set `heap: false` in `labs.config.ts` to skip heap diagnostics and their forced collections while keeping GC observation during timing.
 
 </details>
 
@@ -376,6 +376,7 @@ export default defineConfig({
 | `resultsDir`        | `.labs`                                     | Directory for saved results, relative to config                                                                                                 |
 | `blockTime`         | `0.5`                                       | Pilot block's timed work budget in seconds, excluding warmup and heap diagnostics. Later blocks replay its sample count                         |
 | `minSamples`        | `20`                                        | Minimum samples per block                                                                                                                       |
+| `heap`              | `true`                                      | Estimate allocated bytes after timing. Set to `false` to skip heap diagnostics while keeping timing samples and GC observation                  |
 | `alpha`             | `0.05`                                      | Mann-Whitney U significance level                                                                                                               |
 | `minDelta`          | `0.05`                                      | Minimum absolute Hodges-Lehmann relative effect for a verdict; rows whose approximate resolution exceeds it are annotated as limited-resolution |
 | `snapshotTolerance` | `1e-9`                                      | Relative tolerance for numeric snapshots, with an absolute floor at one; digests of non-numeric snapshots are compared exactly                  |

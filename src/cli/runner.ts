@@ -103,7 +103,10 @@ function saveSelection(files: string[]) {
   writeFileSync(CACHE_FILE, JSON.stringify(files));
 }
 
-type WorkerTune = Pick<Partial<LabsConfig>, 'blockTime' | 'minSamples' | 'blocks' | 'counters'>;
+type WorkerTune = Pick<
+  Partial<LabsConfig>,
+  'blockTime' | 'minSamples' | 'heap' | 'blocks' | 'counters'
+>;
 
 function workerEnv(
   file: string,
@@ -122,6 +125,7 @@ function workerEnv(
     LABS_BLOCKS: String(tune.blocks ?? 8),
     ...(tune.blockTime !== undefined ? { LABS_BLOCK_TIME: String(tune.blockTime * 1e9) } : {}),
     ...(tune.minSamples !== undefined ? { LABS_MIN_SAMPLES: String(tune.minSamples) } : {}),
+    ...(tune.heap === false ? { LABS_HEAP: '0' } : {}),
     ...(tune.counters ? { LABS_COUNTERS: tune.counters } : {}),
     ...(tagFilter ? { LABS_GREP_TAGS: tagFilter } : {}),
     ...(resultFile ? { LABS_RESULT_FILE: resultFile } : {}),
@@ -364,6 +368,7 @@ export async function runCLI(args: string[]) {
   const benchTune = {
     blockTime: config.blockTime,
     minSamples: config.minSamples,
+    heap: config.heap,
     blocks,
     counters: config.counters && resolveCounters(config.counters, configPath),
   };

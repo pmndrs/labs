@@ -328,6 +328,36 @@ describe('composing a benchmark suite', () => {
 });
 
 describe('run policy', () => {
+  it('skips heap diagnostics without changing timing samples or GC observation', async () => {
+    const run = async (heap: boolean) => {
+      let clock = 0;
+      let collections = 0;
+      const trial = await new B('work', () => ++clock).run(true, {
+        now: () => clock,
+        heap: heap ? () => clock * 32 : false,
+        gc: () => collections++,
+        warmup_samples: 0,
+        batch: false,
+        min_samples: 12,
+        max_samples: 12,
+        min_cpu_time: 0,
+      });
+      return { stats: trial.runs[0].stats!, collections };
+    };
+
+    const enabled = await run(true);
+    const disabled = await run(false);
+
+    expect(disabled.stats.samples).toEqual(enabled.stats.samples);
+    expect(disabled.stats.plan).toEqual(enabled.stats.plan);
+    expect(disabled.stats.ticks).toBe(enabled.stats.ticks);
+    expect(disabled.stats.gc).toMatchObject({ timed: 12, iterations: 12 });
+    expect(enabled.stats.heap).toEqual({ min: 32, max: 32, p50: 32 });
+    expect(disabled.stats.heap).toBeUndefined();
+    expect(disabled.collections).toBe(1);
+    expect(enabled.collections).toBeGreaterThan(disabled.collections);
+  });
+
   it('observes GC by default and keeps forced collection in the heap pass', async () => {
     let collections = 0;
     const tune = {

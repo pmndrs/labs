@@ -14,6 +14,7 @@ export interface LabsConfig {
   blockTime?: number;
   /** Minimum samples per block. @default 20 */
   minSamples?: number;
+  heap?: boolean;
   /** Mann-Whitney U significance level. @default 0.05 */
   alpha: number;
   /** Minimum |Hodges-Lehmann delta| required to flag a verdict. Filters environmental noise on identical code. @default 0.05 */
@@ -44,6 +45,7 @@ export function defineConfig(config: Partial<LabsConfig> & Pick<LabsConfig, 'ben
     resultsDir: '.labs',
     blockTime: 0.5,
     minSamples: 20,
+    heap: true,
     alpha: 0.05,
     minDelta: 0.05,
     snapshotTolerance: 1e-9,

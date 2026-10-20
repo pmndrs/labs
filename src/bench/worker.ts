@@ -13,9 +13,10 @@ import { mergeGc } from './lib/gc.ts';
 type TuneOptions = {
   min_cpu_time?: number;
   min_samples?: number;
+  heap?: false;
 };
 
-/** Per-block budget (LABS_BLOCK_TIME, ns) and sample floor (LABS_MIN_SAMPLES). */
+/** Per-block timing budgets and heap diagnostics forwarded by the CLI. */
 function parseTuneEnv(): TuneOptions {
   const blockTime = Number(process.env.LABS_BLOCK_TIME);
   const minSamples = Number(process.env.LABS_MIN_SAMPLES);
@@ -23,6 +24,7 @@ function parseTuneEnv(): TuneOptions {
   return {
     ...(Number.isFinite(blockTime) && blockTime > 0 ? { min_cpu_time: blockTime } : {}),
     ...(Number.isFinite(minSamples) && minSamples > 0 ? { min_samples: minSamples } : {}),
+    ...(process.env.LABS_HEAP === '0' ? { heap: false } : {}),
   };
 }
 
