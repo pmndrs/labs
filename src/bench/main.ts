@@ -385,11 +385,20 @@ export async function run(
   const t = Date.now();
   const benchmarks: Trial[] = [];
   const cal = opts.calibrate ?? {};
-  const noop = await measure(() => {}, cal);
+  const filter = new RegExp(opts.filter);
+  filter.lastIndex = opts.filter.lastIndex;
+  const kinds = new Set(
+    COLLECTIONS.flatMap((collection) => collection.trials)
+      .filter((trial) => filter.test(trial._name))
+      .map((trial) => kind(trial.f))
+  );
+  const noop = kinds.has('fn') || kinds.has('yield') ? await measure(() => {}, cal) : undefined;
   const _cpu = await measure(() => {}, { ...cal, batch_unroll: 1 });
-  const noop_iter = await measure((state: any) => {
-    for (const _ of state);
-  }, cal);
+  const noop_iter = kinds.has('iter')
+    ? await measure((state: any) => {
+        for (const _ of state);
+      }, cal)
+    : undefined;
 
   const context: Context = {
     now: t,
@@ -403,10 +412,9 @@ export async function run(
     },
 
     noop: {
-      fn: noop,
-      iter: noop_iter,
       // Retain the field used by saved results with separate GC calibration.
-      fn_gc: noop,
+      ...(noop ? { fn: noop, fn_gc: noop } : {}),
+      ...(noop_iter ? { iter: noop_iter } : {}),
     },
   };
 

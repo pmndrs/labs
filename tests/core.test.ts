@@ -276,6 +276,43 @@ describe('sample lifecycle', () => {
 });
 
 describe('composing a benchmark suite', () => {
+  it.each(['function', 'generator', 'iterator', 'mixed'])(
+    'calibrates only the selected benchmark types for a %s suite',
+    async (mode) => {
+      bench('function', () => 42);
+      bench('generator', function* () {
+        yield () => 42;
+      });
+      bench('iterator', (state: Iterable<unknown>) => {
+        for (const _ of state);
+      });
+
+      const result = await run({
+        format: 'quiet',
+        filter: mode === 'mixed' ? /.*/ : new RegExp(`^${mode}$`),
+        tune: fast,
+        calibrate: fast,
+      });
+
+      expect(result.benchmarks.map((trial) => trial.alias)).toEqual(
+        mode === 'mixed' ? ['function', 'generator', 'iterator'] : [mode]
+      );
+      expect(result.context.cpu.freq).toBeGreaterThan(0);
+      if (mode === 'iterator') {
+        expect(result.context.noop.fn).toBeUndefined();
+        expect(result.context.noop.fn_gc).toBeUndefined();
+      } else {
+        expect(result.context.noop.fn?.avg).toBeGreaterThan(0);
+        expect(result.context.noop.fn_gc).toBe(result.context.noop.fn);
+      }
+      if (mode === 'iterator' || mode === 'mixed') {
+        expect(result.context.noop.iter?.avg).toBeGreaterThan(0);
+      } else {
+        expect(result.context.noop.iter).toBeUndefined();
+      }
+    }
+  );
+
   it('runs grouped and parameterized benchmarks with readable names', async () => {
     void group('arrays', () => {
       bench('create', () => []);
