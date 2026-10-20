@@ -148,7 +148,7 @@ export interface Context {
   version: string | null;
   runtime: string | null;
   cpu: { freq: number; name: string | null };
-  noop: { fn: Stats; iter: Stats; fn_gc: Stats };
+  noop: { fn?: Stats; iter?: Stats; fn_gc?: Stats };
 }
 
 export interface RunOptions {
