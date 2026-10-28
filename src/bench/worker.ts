@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { getBenchRegistry } from '../index.ts';
 import { median, relativeSpread } from '../stats.ts';
 import { measure, run } from './index.ts';
+import { _print } from './lib/runtime.ts';
 import { runTrialAt } from './main.ts';
 import type { ProgressEvent } from '../cli/progress.ts';
 import type { BlockPlan, GcStats, Stats, Trial } from './types.ts';
@@ -56,6 +57,25 @@ const progress = process.env.LABS_PROGRESS === '1';
 
 function emit(event: ProgressEvent): void {
   if (progress) writeSync(3, JSON.stringify(event) + '\n');
+}
+
+/**
+ * Turn protocol. A worker spawned with an IPC channel asks its parent for the
+ * CPU before each measurement and holds it until the next request or exit, so
+ * the parent can alternate workers block for block. Without a channel the
+ * worker runs unpaced.
+ */
+function takeTurn(): Promise<void> {
+  if (!process.send) return Promise.resolve();
+  return new Promise((resolve) => {
+    const onMessage = (message: unknown) => {
+      if (message !== 'go') return;
+      process.off('message', onMessage);
+      resolve();
+    };
+    process.on('message', onMessage);
+    process.send!('turn');
+  });
 }
 
 /** Serializes Error instances the same way the `json` format does. */
@@ -250,6 +270,7 @@ function makeBlockExecutor(blocks: number) {
       for (const { trial, index } of jobs) {
         // A pilot without a full set of plans (errored runs) is not replayable
         if (block > 0 && !plans.has(index)) continue;
+        await takeTurn();
         emit({ type: 'bench', index, block });
         const started = performance.now();
         const out = runTrialChild(
@@ -286,11 +307,20 @@ function makeBlockExecutor(blocks: number) {
 }
 
 async function main(): Promise<void> {
+  await takeTurn();
   await import(file!);
+  // Interleaved workers share one terminal, so each names its tree before its
+  // first line of output.
+  let label = process.env.LABS_LABEL;
+  const print = (s: unknown) => {
+    if (label) _print(label);
+    label = undefined;
+    _print(s);
+  };
   const result = await run({
     tune: parseTuneEnv(),
     execute: makeBlockExecutor(blockCount()),
-    ...(progress ? { print: () => {} } : {}),
+    print: progress ? () => {} : print,
   });
   const postFreq = await calibrateFreq();
 

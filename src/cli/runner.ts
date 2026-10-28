@@ -1,4 +1,3 @@
-import { execFileSync, execSync, spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { basename, dirname, join, relative, resolve } from 'node:path';
@@ -47,6 +46,8 @@ import { showRunReport } from './run-screen.ts';
 import { runStatus } from './run-view.ts';
 import { isInteractiveTerminal } from './screen.ts';
 import { error, fileHasAnyTag, gitHint } from './utils.ts';
+import { type WorkerSpec, runWorkers } from './workers.ts';
+import { type Checkout, captureGitInfo, openSide, repoRoot } from './worktree.ts';
 
 function freqSample(workerResult: WorkerResult, file: string): FreqSample {
   const runFreq = workerResult.context.cpu.freq;
@@ -132,82 +133,89 @@ function workerEnv(
   };
 }
 
-function runBench(
-  file: string,
-  nodeFlags: string[],
-  label: string,
-  tune: WorkerTune,
-  tagFilter?: string,
-  resultFile?: string
-): void {
-  console.log(`\n${BLUE}▶ ${label}${RESET}`);
-  execFileSync(process.execPath, ['--import', TSX_LOADER, ...nodeFlags, WORKER], {
-    stdio: 'inherit',
-    env: workerEnv(file, tune, tagFilter, resultFile),
-  });
-}
+/** Accumulates the per file worker outputs of one tree into a saved result. */
+class Collection {
+  hardware = {
+    cpu: null as string | null,
+    arch: null as string | null,
+    runtime: null as string | null,
+    freq: 0,
+  };
+  files: SavedFile[] = [];
+  envData: FreqSample[] = [];
+  diagnostics = emptyDiagnostics();
+  noop: SavedResult['context'];
+  minDelta: number;
 
-/** Call `onLine` with each complete line from a stream. */
-function readLines(stream: NodeJS.ReadableStream, onLine: (line: string) => void): void {
-  let pending = '';
-  stream.setEncoding('utf8');
-  stream.on('data', (chunk: string) => {
-    const lines = (pending + chunk).split('\n');
-    pending = lines.pop()!;
-    lines.forEach(onLine);
-  });
-  stream.on('end', () => pending && onLine(pending));
+  constructor(minDelta: number) {
+    this.minDelta = minDelta;
+  }
+
+  collect(file: string, resultFile: string): SavedFile | undefined {
+    if (!existsSync(resultFile)) return;
+    const workerResult: WorkerResult = JSON.parse(readFileSync(resultFile, 'utf-8'));
+    rmSync(resultFile);
+    if (this.files.length === 0) {
+      this.hardware = {
+        cpu: workerResult.context.cpu.name,
+        arch: workerResult.context.arch,
+        runtime: workerResult.context.runtime,
+        freq: workerResult.context.cpu.freq,
+      };
+      if (workerResult.context.noop) {
+        this.noop = {
+          version: workerResult.context.version,
+          noop: {
+            fn: { avg: workerResult.context.noop.fn?.avg ?? 0 },
+            iter: { avg: workerResult.context.noop.iter?.avg ?? 0 },
+            fn_gc: { avg: workerResult.context.noop.fn_gc?.avg ?? 0 },
+          },
+        };
+      }
+    }
+
+    this.envData.push(freqSample(workerResult, basename(file)));
+    collectDiagnostics(workerResult.benchmarks, this.minDelta, this.diagnostics);
+
+    this.files.push({
+      file: basename(file),
+      layout: workerResult.layout,
+      context: trimContext(workerResult.context),
+      benchmarks: workerResult.benchmarks.map((trial) => ({
+        alias: trial.alias,
+        group: trial.group,
+        baseline: trial.baseline,
+        gcMode: trial.gcMode ?? true,
+        groupName: trial.groupName,
+        kind: trial.kind ?? 'static',
+        style: trial.style ?? { compact: false, highlight: false },
+        runs: trial.runs.map((run) => ({
+          name: run.name,
+          args: run.args,
+          ...(run.stats ? { stats: trimStats(run.stats) } : {}),
+          ...(run.error !== undefined ? { error: run.error } : {}),
+        })),
+      })),
+    });
+    return this.files.at(-1);
+  }
+
+  get benchCount(): number {
+    return this.files.reduce((n, f) => n + f.benchmarks.length, 0);
+  }
 }
 
 /**
- * Run a worker without blocking so the live view keeps drawing. Progress events
- * arrive on fd 3 and bench output is passed through as lines.
+ * One tree a run measures. The candidate is the working checkout unless
+ * `--candidate` names another tree. With `--against` a second side is the
+ * reference tree, and the two run interleaved so their blocks share the same
+ * minutes of machine state.
  */
-function runBenchLive(
-  file: string,
-  nodeFlags: string[],
-  tune: WorkerTune,
-  onEvent: (event: ProgressEvent) => void,
-  onOutput: (line: string) => void,
-  tagFilter?: string,
-  resultFile?: string
-): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const worker = spawn(process.execPath, ['--import', TSX_LOADER, ...nodeFlags, WORKER], {
-      stdio: ['ignore', 'pipe', 'pipe', 'pipe'],
-      env: { ...workerEnv(file, tune, tagFilter, resultFile), LABS_PROGRESS: '1' },
-    });
-    let lastError = '';
-    readLines(worker.stdio[3] as NodeJS.ReadableStream, (line) => {
-      if (line) onEvent(JSON.parse(line));
-    });
-    readLines(worker.stdout!, onOutput);
-    readLines(worker.stderr!, (line) => {
-      if (line.trim()) lastError = line.trim();
-      onOutput(line);
-    });
-    worker.on('error', reject);
-    worker.on('close', (code) => {
-      if (code === 0) resolve();
-      else reject(new Error(lastError || `worker exited with code ${code}`));
-    });
-  });
-}
-
-/** Snapshot of the git state a run was produced from. Undefined outside a repo. */
-function captureGitInfo(dir: string): GitInfo | undefined {
-  const git = (cmd: string) =>
-    execSync(`git ${cmd}`, { cwd: dir, stdio: ['ignore', 'pipe', 'ignore'] })
-      .toString()
-      .trim();
-  try {
-    const commit = git('rev-parse HEAD');
-    const ref = git('rev-parse --abbrev-ref HEAD');
-    const dirty = git('status --porcelain').length > 0;
-    return { commit, branch: ref === 'HEAD' ? null : ref, dirty };
-  } catch {
-    return undefined;
-  }
+interface Side {
+  benchDir: string;
+  cwd: string;
+  git: GitInfo | undefined;
+  collected: Collection;
 }
 
 /** Parse a named flag value: --flag value -> value, or undefined if flag absent. */
@@ -303,7 +311,15 @@ export async function runCLI(args: string[]) {
     if (selected.length === 0) error('No previous selection found');
     console.log(`${CYAN}labs${RESET} ${DIM}(replaying last)${RESET}`);
   } else {
-    const flagTakesValue = new Set(['-n', '--name', '-m', '--message', '--blocks']);
+    const flagTakesValue = new Set([
+      '-n',
+      '--name',
+      '-m',
+      '--message',
+      '--blocks',
+      '--against',
+      '--candidate',
+    ]);
     let filterArg: string | undefined;
     for (let i = 0; i < benchArgs.length; i++) {
       const a = benchArgs[i];
@@ -373,13 +389,63 @@ export async function runCLI(args: string[]) {
     counters: config.counters && resolveCounters(config.counters, configPath),
   };
 
-  const git = captureGitInfo(dirname(configPath));
+  const description = flagValue(benchArgs, '-m') ?? flagValue(benchArgs, '--message');
+  const setAsBaseline = benchArgs.includes('--baseline') || benchArgs.includes('-b');
+  const shouldCompare = benchArgs.includes('--compare') || benchArgs.includes('-c');
+
+  // `--against <rev|dir>` runs the candidate and the reference tree
+  // interleaved, then compares the reference to the candidate. It is a self
+  // contained A/B, so the baseline pointer is neither read nor set.
+  // `--candidate <rev|dir>` measures that tree in place of the working checkout.
+  const againstSpec = flagValue(benchArgs, '--against');
+  const candidateSpec = flagValue(benchArgs, '--candidate');
+  if (againstSpec === '') error('--against needs a git revision or directory, e.g. --against main');
+  if (candidateSpec === '') error('--candidate needs a git revision or directory');
+  if (againstSpec && (setAsBaseline || shouldCompare)) {
+    error('--against compares the two runs directly; drop --baseline/--compare');
+  }
+  if ((againstSpec || candidateSpec) && !captureGitInfo(dirname(configPath))) {
+    error('--against and --candidate need a git repository');
+  }
+
+  // Trees are released on every exit path, including `error()` and interrupts.
+  const checkouts: Checkout[] = [];
+  process.once('exit', () => {
+    for (const c of checkouts) c.dispose();
+  });
+  const open = (spec: string) => {
+    try {
+      const checkout = openSide(dirname(configPath), spec, benchDir);
+      checkouts.push(checkout);
+      return checkout;
+    } catch (e: any) {
+      error(e.message);
+    }
+  };
+  const side = (checkout: Checkout): Side => ({
+    benchDir: join(checkout.dir, relative(repoRoot(dirname(configPath)), benchDir)),
+    cwd: join(checkout.dir, relative(repoRoot(dirname(configPath)), cwd)),
+    git: checkout.git,
+    collected: new Collection(config.minDelta),
+  });
+
+  const candidate: Side = candidateSpec
+    ? side(open(candidateSpec))
+    : {
+        benchDir,
+        cwd,
+        git: captureGitInfo(dirname(configPath)),
+        collected: new Collection(config.minDelta),
+      };
+  const reference = againstSpec ? side(open(againstSpec)) : undefined;
+  const sides = reference ? [candidate, reference] : [candidate];
+  const git = candidate.git;
 
   // Default names come from the commit when in a repo (abc1234, abc1234-dirty,
   // abc1234-2, ...), falling back to a timestamp otherwise.
-  const defaultName = () => {
-    if (git) {
-      return uniqueResultName(labsDir, `${git.commit.slice(0, 7)}${git.dirty ? '-dirty' : ''}`);
+  const defaultName = (info = git) => {
+    if (info) {
+      return uniqueResultName(labsDir, `${info.commit.slice(0, 7)}${info.dirty ? '-dirty' : ''}`);
     }
     return new Date().toISOString().replace(/[:.]/g, '-').replace('T', '_').slice(0, 19);
   };
@@ -402,163 +468,135 @@ export async function runCLI(args: string[]) {
     }
   }
 
-  const description = flagValue(benchArgs, '-m') ?? flagValue(benchArgs, '--message');
-  const setAsBaseline = benchArgs.includes('--baseline') || benchArgs.includes('-b');
-  const shouldCompare = benchArgs.includes('--compare') || benchArgs.includes('-c');
-
   const tmpDir = join(cwd, 'node_modules', '.cache', 'labs-tmp');
   mkdirSync(tmpDir, { recursive: true });
 
-  let hardware = {
-    cpu: null as string | null,
-    arch: null as string | null,
-    runtime: null as string | null,
-    freq: 0,
-  };
-  const files: SavedResult['files'] = [];
-  let hardwareSet = false;
-  const saveEnvData: FreqSample[] = [];
-  const saveDiagnostics = emptyDiagnostics();
-  let savedNoop: SavedResult['context'] | undefined;
-
-  const collect = (file: string, resultFile: string): SavedFile | undefined => {
-    if (!existsSync(resultFile)) return;
-    const workerResult: WorkerResult = JSON.parse(readFileSync(resultFile, 'utf-8'));
-    rmSync(resultFile);
-    if (!hardwareSet) {
-      hardware = {
-        cpu: workerResult.context.cpu.name,
-        arch: workerResult.context.arch,
-        runtime: workerResult.context.runtime,
-        freq: workerResult.context.cpu.freq,
-      };
-      if (workerResult.context.noop) {
-        savedNoop = {
-          version: workerResult.context.version,
-          noop: {
-            fn: { avg: workerResult.context.noop.fn?.avg ?? 0 },
-            iter: { avg: workerResult.context.noop.iter?.avg ?? 0 },
-            fn_gc: { avg: workerResult.context.noop.fn_gc?.avg ?? 0 },
-          },
-        };
-      }
-      hardwareSet = true;
-    }
-
-    saveEnvData.push(freqSample(workerResult, suiteName(file)));
-    collectDiagnostics(workerResult.benchmarks, config.minDelta, saveDiagnostics);
-
-    files.push({
-      file: suiteName(file),
-      layout: workerResult.layout,
-      context: trimContext(workerResult.context),
-      benchmarks: workerResult.benchmarks.map((trial) => ({
-        alias: trial.alias,
-        group: trial.group,
-        baseline: trial.baseline,
-        gcMode: trial.gcMode ?? true,
-        groupName: trial.groupName,
-        kind: trial.kind ?? 'static',
-        style: trial.style ?? { compact: false, highlight: false },
-        runs: trial.runs.map((run) => ({
-          name: run.name,
-          args: run.args,
-          ...(run.stats ? { stats: trimStats(run.stats) } : {}),
-          ...(run.error !== undefined ? { error: run.error } : {}),
-        })),
-      })),
-    });
-    return files.at(-1);
-  };
-
   const crashes: Array<{ file: string; error: string }> = [];
-  const progress = createProgress(saveName, selected.map(suiteName), Date.now());
+  // The live view lists one entry per file and side
+  const entryName = (f: string, s: Side) =>
+    reference ? `${suiteName(f)} ${gitHint(s.git!)}` : suiteName(f);
+  const progress = createProgress(
+    saveName,
+    selected.flatMap((f) => sides.map((s) => entryName(f, s))),
+    Date.now()
+  );
   const view = interactive
     ? new LiveView(process.stdout, (columns, rows) =>
         renderProgress(progress, { columns, rows, now: Date.now() })
       )
     : undefined;
+  const live =
+    view || json
+      ? (entry: number) => ({
+          onEvent: (event: ProgressEvent) => view && applyEvent(progress, entry, event),
+          onOutput: (line: string) => (view ? view.log(line) : process.stderr.write(line + '\n')),
+        })
+      : undefined;
   view?.start();
+  if (checkouts.length) process.once('SIGINT', () => process.exit(130));
   for (const [index, f] of selected.entries()) {
-    const resultFile = join(tmpDir, `${basename(f, '.ts')}-${Date.now()}.json`);
-    if (!view && !json) {
-      runBench(f, config.nodeFlags, suiteName(f), benchTune, tagEnv, resultFile);
-      collect(f, resultFile);
-      continue;
+    const specs: WorkerSpec[] = [];
+    const absent: string[] = [];
+    const ran: Array<{ side: Side; entry: number; file: string; resultFile: string }> = [];
+    for (const [i, s] of sides.entries()) {
+      const file = join(s.benchDir, relative(benchDir, f));
+      const entry = index * sides.length + i;
+      if (!existsSync(file)) {
+        absent.push(gitHint(s.git!));
+        if (view) finishFile(progress, entry, Date.now(), { error: 'not present in this tree' });
+        continue;
+      }
+      const resultFile = join(tmpDir, `${basename(f, '.ts')}-${i}-${Date.now()}.json`);
+      ran.push({ side: s, entry, file, resultFile });
+      if (view) startFile(progress, entry, Date.now());
+      specs.push({
+        args: ['--import', TSX_LOADER, ...config.nodeFlags, WORKER],
+        cwd: s.cwd,
+        env: {
+          ...workerEnv(file, benchTune, tagEnv, resultFile),
+          ...(reference ? { LABS_LABEL: `${DIM}${gitHint(s.git!)}${RESET}` } : {}),
+        },
+        ...(reference ? { name: gitHint(s.git!) } : {}),
+        ...(live ? { live: live(entry) } : {}),
+      });
     }
-    if (view) startFile(progress, index, Date.now());
+    if (!live) {
+      const pairing = reference ? ` ${DIM}${gitHint(git!)} ⇄ ${gitHint(reference.git!)}${RESET}` : '';
+      console.log(`\n${BLUE}▶ ${suiteName(f)}${RESET}${pairing}`);
+    }
+    if (!view) {
+      for (const at of absent) {
+        console.log(`${YELLOW}⚠${RESET} not present at ${at}, skipped there`);
+      }
+    }
+    let crash: string | undefined;
     try {
-      await runBenchLive(
-        f,
-        config.nodeFlags,
-        benchTune,
-        (event) => view && applyEvent(progress, index, event),
-        (line) => (view ? view.log(line) : process.stderr.write(line + '\n')),
-        tagEnv,
-        resultFile
-      );
+      if (specs.length) await runWorkers(specs);
     } catch (err) {
-      crashes.push({ file: suiteName(f), error: (err as Error).message });
-      if (view) finishFile(progress, index, Date.now(), { error: (err as Error).message });
-      continue;
+      process.exitCode = 1;
+      crash = (err as Error).message;
+      crashes.push({ file: suiteName(f), error: crash });
     }
-    const saved = collect(f, resultFile);
-    if (!view) continue;
-    const noop = (saved?.context ?? savedNoop)?.noop;
-    const statuses = (saved?.benchmarks ?? []).map((trial): BenchStatus => {
-      const runs = trial.runs.map((run) => runStatus(trial, run, noop, config.minDelta));
-      return (
-        runs.find((run) => run.symbol === '✗') ?? runs.find((run) => run.symbol === '⚠') ?? runs[0]
-      );
-    });
-    finishFile(progress, index, Date.now(), { statuses });
+    for (const { side: s, entry, file, resultFile } of ran) {
+      const saved = s.collected.collect(file, resultFile);
+      if (!view) continue;
+      if (!saved) {
+        finishFile(progress, entry, Date.now(), { error: crash ?? 'no result' });
+        continue;
+      }
+      const noop = (saved.context ?? s.collected.noop)?.noop;
+      const statuses = saved.benchmarks.map((trial): BenchStatus => {
+        const runs = trial.runs.map((run) => runStatus(trial, run, noop, config.minDelta));
+        return (
+          runs.find((run) => run.symbol === '✗') ?? runs.find((run) => run.symbol === '⚠') ?? runs[0]
+        );
+      });
+      finishFile(progress, entry, Date.now(), { statuses });
+    }
   }
   view?.stop();
+  for (const c of checkouts.splice(0)) c.dispose();
 
   // A run that selected no benches has nothing worth keeping and would only
   // clutter later compares, so it is reported but never saved.
-  const benchCount = files.reduce((n, f) => n + f.benchmarks.length, 0);
-  if (benchCount === 0) {
+  if (candidate.collected.benchCount === 0) {
     const filterNote = tagEnv ? ` for ${tagEnv.split(',').join(' ')}` : '';
     console.log(`\n${YELLOW}⚠${RESET} No benches ran${filterNote}, nothing to save`);
     if (json) emit({ name: saveName, saved: false, benches: [], crashes });
     return;
   }
 
-  const result: SavedResult = {
-    name: saveName,
+  const buildResult = (s: Side, name: string, description?: string): SavedResult => ({
+    name,
     ...(description ? { description } : {}),
     timestamp: new Date().toISOString(),
-    ...(git ? { git } : {}),
-    hardware,
+    ...(s.git ? { git: s.git } : {}),
+    hardware: s.collected.hardware,
     blocks,
-    context: savedNoop,
-    files,
-    environment: { freqs: saveEnvData },
-  };
+    context: s.collected.noop,
+    files: s.collected.files,
+    environment: { freqs: s.collected.envData },
+  });
+  const result = buildResult(candidate, saveName, description);
 
   // Interactive runs keep details in the report view and close with a short summary
-  const report = (saveMsg?: string) => {
+  const report = (s: Side, saveMsg?: string) => {
     if (json) return;
+    const { files, hardware, envData, diagnostics, noop } = s.collected;
     const input = {
-      envData: saveEnvData,
+      envData,
       cpu: hardware.cpu,
       saveMsg,
       blocks,
       minDelta: config.minDelta,
-      diagnostics: saveDiagnostics,
+      diagnostics,
     };
     if (!interactive) return printReportBox(input);
     const counts = { passed: 0, warned: 0, failed: 0 };
     for (const file of files)
       for (const trial of file.benchmarks)
         for (const run of trial.runs) {
-          const { symbol } = runStatus(
-            trial,
-            run,
-            (file.context ?? savedNoop)?.noop,
-            config.minDelta
-          );
+          const { symbol } = runStatus(trial, run, (file.context ?? noop)?.noop, config.minDelta);
           if (symbol === '✗') counts.failed++;
           else if (symbol === '✓') counts.passed++;
           else counts.warned++;
@@ -566,10 +604,51 @@ export async function runCLI(args: string[]) {
     printRunSummary({ ...input, counts });
   };
 
+  if (reference) {
+    if (sides.some((s) => s.collected.diagnostics.failedChecks.length > 0)) process.exitCode = 1;
+    if (shouldSave) saveResult(labsDir, result);
+    // Named after its commit like any default run, once the candidate holds its name.
+    const refResult = buildResult(reference, defaultName(reference.git));
+    if (shouldSave) {
+      saveResult(labsDir, refResult);
+      setLastComparison(labsDir, refResult.name, saveName);
+    }
+    const compared = compare(refResult, result, config);
+    const code = comparisonExitCode(compared, config, result, failOnSlower);
+    if (code && process.exitCode !== 1) process.exitCode = code;
+
+    const savedLine = (r: SavedResult) => {
+      if (!shouldSave) return undefined;
+      const hint = r.git ? ` ${DIM}${gitHint(r.git)}${RESET}` : '';
+      const details = `${r.files.length} file${r.files.length !== 1 ? 's' : ''}`;
+      return interactive
+        ? `${r.name}${hint}  ${DIM}${details}${RESET}`
+        : `${GREEN}✔${RESET} Saved "${r.name}"${hint} (${details})`;
+    };
+    const reports = () => {
+      report(reference, savedLine(refResult));
+      report(candidate, savedLine(result));
+    };
+    if (!interactive) reports();
+    if (json) {
+      emit({
+        ...runJson(result, config, shouldSave),
+        reference: runJson(refResult, config, shouldSave),
+        comparison: compareJson(compared, config),
+        crashes,
+      });
+      return;
+    }
+    await showCompareReport(compared, config);
+    if (interactive) reports();
+    return;
+  }
+
+  const { files, diagnostics } = candidate.collected;
   if (!shouldSave) {
-    if (saveDiagnostics.failedChecks.length > 0) process.exitCode = 1;
+    if (diagnostics.failedChecks.length > 0) process.exitCode = 1;
     if (interactive) await showRunReport(result, config, false);
-    report();
+    report(candidate);
     if (json) emit({ ...runJson(result, config, false), crashes });
     return;
   }
@@ -577,7 +656,7 @@ export async function runCLI(args: string[]) {
   saveResult(labsDir, result);
   const isFirstSave = !getBaseline(labsDir);
   let markedBaseline = false;
-  const checksFailed = saveDiagnostics.failedChecks.length > 0;
+  const checksFailed = diagnostics.failedChecks.length > 0 || crashes.length > 0;
 
   // Failed checks cannot establish a baseline.
   if ((setAsBaseline || isFirstSave) && !checksFailed) {
@@ -594,7 +673,7 @@ export async function runCLI(args: string[]) {
   ]
     .filter(Boolean)
     .join(', ');
-  if (!interactive) report(`${GREEN}✔${RESET} Saved "${saveName}"${gitNote} (${details})`);
+  if (!interactive) report(candidate, `${GREEN}✔${RESET} Saved "${saveName}"${gitNote} (${details})`);
   if (!shouldCompare && interactive) await showRunReport(result, config);
 
   let comparison: ReturnType<typeof compareJson> | null = null;
@@ -618,7 +697,7 @@ export async function runCLI(args: string[]) {
       }
     }
   }
-  if (interactive) report(`${saveName}${gitNote}  ${DIM}${details}${RESET}`);
+  if (interactive) report(candidate, `${saveName}${gitNote}  ${DIM}${details}${RESET}`);
   if (json) emit({ ...runJson(result, config, true), baseline: markedBaseline, comparison, crashes });
 }
 
