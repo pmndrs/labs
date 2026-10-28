@@ -81,6 +81,13 @@ bench compare
 
 Browse the results in a full-screen comparison view. Select a benchmark to see its timings, memory use, run consistency, and confidence interval.
 
+Alternatively, compare the working tree against a git revision or another checkout. Labs alternates fresh process blocks between both trees in one session to reduce differences in clock speed, thermals, and background load. Both runs are saved, and the reference is compared against the candidate.
+
+```sh
+bench --against main
+bench --against ../wt-a --candidate ../wt-b
+```
+
 <img src="docs/images/compare.png" width="760" alt="Labs comparison view with a benchmark list, baseline and candidate measurements, run consistency, and a 95% confidence interval" />
 
 <details>
@@ -187,6 +194,8 @@ pnpm bench -b                           # shorthand for --baseline
 pnpm bench -n "v1.2.0" -b              # save with name and set as baseline
 pnpm bench --compare                    # save, then compare vs baseline
 pnpm bench --blocks 12                  # save with 12 fresh-process blocks per benchmark
+pnpm bench --against main               # run the working tree and main interleaved, save both, compare
+pnpm bench --against ../a --candidate ../b  # run two existing checkouts interleaved and compare
 pnpm bench -c                           # shorthand for --compare
 pnpm bench --last                       # rerun previous selection, save
 ```
@@ -231,6 +240,8 @@ pnpm bench compare "v1.3.0"           # compare named result vs baseline
 pnpm bench compare --last             # replay the last compared pair
 pnpm bench compare -l                 # shorthand for --last
 ```
+
+`--against <rev|dir>` and `--candidate <rev|dir>` each name a tree. An existing directory is used as it is, so worktrees other tools created can be compared directly, uncommitted changes included. Anything else is a git revision, checked out detached into a temporary worktree that is removed when the run ends. A tree without `node_modules` links the working checkout's for the run, so both sides resolve the same dependencies and only the code under test differs. Bench files are discovered in the working tree and matched by path in each side. A file one side lacks runs on the other side only. `-n` names the candidate's result, the reference's result is named after its commit, and the baseline pointer is neither read nor set. `--baseline` and `--compare` are rejected alongside `--against`. `--candidate` alone measures that tree in place of the working checkout.
 
 In an interactive terminal, comparison opens a full-screen view with a scrolling benchmark list and a fixed inspector below it. Use `↑` / `↓`, `Page Up` / `Page Down`, or `Home` / `End` to select a result. Press `q` or `Esc` to return to the previous terminal screen. `Ctrl+C` exits with code 130. The layout follows terminal resizing, and `[` / `]` scroll inspector details when the screen is short or a result has long warnings.
 

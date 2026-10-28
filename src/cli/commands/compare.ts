@@ -21,12 +21,11 @@ export async function runCompareCommand(ctx: CLIContext, args: string[]): Promis
   const json = args.includes('--json');
   // In JSON mode stdout carries only the JSON document, so messages go to stderr
   if (json) console.log = console.error;
-  const baselineName = getBaseline(ctx.labsDir);
-  if (!baselineName) error('No baseline set. Run: bench baseline <name>');
-
-  let compareBaselineName = baselineName;
+  let compareBaselineName: string;
   let candidateName: string;
 
+  // Replaying needs no baseline pointer: the stored pair may come from a
+  // `--against` run, which never sets one.
   if (candidateArg === '--last' || args.includes('-l')) {
     const last = getLastComparison(ctx.labsDir);
     if (!last) error('No previous comparison found');
@@ -36,8 +35,14 @@ export async function runCompareCommand(ctx: CLIContext, args: string[]): Promis
       `${CYAN}labs${RESET} ${DIM}(replaying last compare: ${compareBaselineName} -> ${candidateName})${RESET}`
     );
   } else if (candidateArg) {
+    const baselineName = getBaseline(ctx.labsDir);
+    if (!baselineName) error('No baseline set. Run: bench baseline <name>');
+    compareBaselineName = baselineName;
     candidateName = candidateArg;
   } else {
+    const baselineName = getBaseline(ctx.labsDir);
+    if (!baselineName) error('No baseline set. Run: bench baseline <name>');
+    compareBaselineName = baselineName;
     const all = listResults(ctx.labsDir);
     const candidates = all.filter((r) => r.name !== baselineName);
     if (candidates.length === 0) error('No saved result to compare. Save a result first with -s.');
