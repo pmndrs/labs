@@ -7,13 +7,16 @@ type Options = Required<
 /**
  * Warm-up state owned by the caller and updated in place. `samples` is a ring
  * of the most recent per-call window costs and `sorted` is scratch for ranking
- * them, both sized once to `warmup_samples`.
+ * them, both sized once to `warmup_samples`. Agreeing windows end the warm-up
+ * only after `settled`, since timings can agree for a while before the engine
+ * finishes optimizing.
  */
-export function createWarmup(deadline: number, capacity: number) {
+export function createWarmup(deadline: number, capacity: number, settled = 0) {
   return {
     iterations: 1,
     single: 0,
     deadline,
+    settled,
     samples: new Float64Array(Math.max(1, capacity)),
     sorted: new Float64Array(Math.max(1, capacity)),
     count: 0,
@@ -30,7 +33,7 @@ export function isWarmupDone(
   opts: Pick<Options, 'warmup_samples'>,
   now: number
 ): boolean {
-  return opts.warmup_samples <= 0 || state.stable || now >= state.deadline;
+  return opts.warmup_samples <= 0 || (state.stable && now >= state.settled) || now >= state.deadline;
 }
 
 /** Enough full windows ran within the budget, yet their per-call costs never agreed. */

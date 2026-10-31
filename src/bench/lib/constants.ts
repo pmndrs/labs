@@ -14,6 +14,8 @@ export const tuning = {
   warmup_samples: 5,
   /** Maximum wall time (ns) spent warming up, including setup and cleanup. */
   warmup_time: 100 * 1e6,
+  /** Minimum wall time (ns) of warm-up before agreeing windows may end it. */
+  warmup_settle: 5 * 1e6,
   /** Target measured duration (ns) of a warm-up window. */
   warmup_window: 50_000,
   /** Maximum relative range of recent per-call window timings. */
@@ -50,6 +52,7 @@ export function defaults(opts: any): void {
   opts.batch_max ??= tuning.batch_max;
   opts.warmup_samples ??= tuning.warmup_samples;
   opts.warmup_time ??= tuning.warmup_time;
+  opts.warmup_settle ??= tuning.warmup_settle;
   opts.warmup_window ??= tuning.warmup_window;
   opts.warmup_tolerance ??= tuning.warmup_tolerance;
   opts.batch_threshold ??= tuning.batch_threshold;

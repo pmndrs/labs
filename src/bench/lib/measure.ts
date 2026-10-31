@@ -153,7 +153,11 @@ export async function benchFn(fn: (...args: any[]) => any, opts: any = {}): Prom
   defaults(opts);
   const now: () => number = opts.now;
   const consume = opts.$consume ?? do_not_optimize;
-  const warmup = createWarmup(now() + opts.warmup_time, opts.warmup_samples);
+  const warmup = createWarmup(
+    now() + opts.warmup_time,
+    opts.warmup_samples,
+    now() + opts.warmup_settle
+  );
   let async = false;
   let batch = false;
   let single = 0;
@@ -453,7 +457,11 @@ export async function benchIter(iter: (...args: any[]) => any, opts: any = {}): 
 
   const gen: Generator = (function* () {
     let batch = false;
-    const warmup = createWarmup(now() + opts.warmup_time, opts.warmup_samples);
+    const warmup = createWarmup(
+      now() + opts.warmup_time,
+      opts.warmup_samples,
+      now() + opts.warmup_settle
+    );
     do {
       let iterations = 0;
       const t0 = now();
