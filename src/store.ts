@@ -29,7 +29,7 @@ export interface SavedStats {
   p75: number;
   p99: number;
   gc?: Stats['gc'];
-  heap?: { min: number; max: number; p50: number };
+  heap?: Stats['heap'];
   plan?: BlockPlan;
   /** Output compared with the baseline. */
   snapshot?: Snapshot;
@@ -282,9 +282,14 @@ function normalizeSavedResult(result: SavedResult): SavedResult {
 }
 
 /** Older results summarized heap and gc with a mean under `avg`. */
-function normalizeRange(range: any): { min: number; max: number; p50: number } | undefined {
+function normalizeRange(range: any): Stats['heap'] {
   if (!range) return undefined;
-  return { min: range.min, max: range.max, p50: range.p50 ?? range.avg };
+  return {
+    min: range.min,
+    max: range.max,
+    p50: range.p50 ?? range.avg,
+    ...(range.source === 'replay' ? { source: 'replay' } : {}),
+  };
 }
 
 function normalizeRun(run: SavedBenchmarkRun): SavedBenchmarkRun {
@@ -357,7 +362,12 @@ export function trimStats(stats: Stats): SavedStats {
       : {}),
     ...(stats.heap
       ? {
-          heap: { min: stats.heap.min, max: stats.heap.max, p50: stats.heap.p50 },
+          heap: {
+            min: stats.heap.min,
+            max: stats.heap.max,
+            p50: stats.heap.p50,
+            ...(stats.heap.source ? { source: stats.heap.source } : {}),
+          },
         }
       : {}),
   };

@@ -4,6 +4,7 @@ import { median } from '../stats.ts';
 import { CYAN, DARK_GRAY, GRAY, GREEN, RED, YELLOW } from '../utils/ansi.ts';
 import { formatNs } from '../utils/units.ts';
 import { TerminalCanvas, textWidth, wrapText } from './terminal.ts';
+import { runtimeLabel } from './utils.ts';
 
 const { version } = createRequire(import.meta.url)('../../package.json') as { version: string };
 
@@ -53,13 +54,20 @@ interface FileProgress {
 
 export interface RunProgress {
   name: string;
+  runtime: 'node' | 'chrome';
   started: number;
   files: FileProgress[];
 }
 
-export function createProgress(name: string, files: string[], now: number): RunProgress {
+export function createProgress(
+  name: string,
+  files: string[],
+  now: number,
+  runtime: RunProgress['runtime'] = 'node'
+): RunProgress {
   return {
     name,
+    runtime,
     started: now,
     files: files.map((file) => ({ name: file, state: 'waiting', blocks: 0, benches: [] })),
   };
@@ -252,10 +260,13 @@ export function renderProgress(
   const visible = body.slice(start, start + room);
   const canvas = new TerminalCanvas(width);
   canvas.put(0, 1, 'labs', '', 4);
-  const nameX = width >= 60 ? 10 + version.length : 7;
+  const runtimeX = width >= 60 ? 10 + version.length : 7;
   if (width >= 60) canvas.put(0, 7, `v${version}`, GRAY);
+  const runtime = runtimeLabel(progress.runtime);
+  canvas.put(0, runtimeX, runtime, GRAY, textWidth(runtime));
+  const nameX = runtimeX + textWidth(runtime) + 2;
   canvas.put(0, nameX, progress.name, CYAN, width - nameX - 12);
-  canvas.put(0, 0, seconds(view.now - progress.started), GRAY, width, true);
+  canvas.put(0, nameX, seconds(view.now - progress.started), GRAY, width - nameX, true);
   visible.forEach((line, index) => line(canvas, index + 2));
   canvas.put(visible.length + 3, 1, footer, GRAY);
   return canvas.lines(view.colors !== false);

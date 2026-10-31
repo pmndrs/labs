@@ -30,13 +30,13 @@ export function formatGcColumns(gc: GcStats): GcColumn[] {
   const cost = formatGcCost(gc);
   return [
     {
-      heading: 'gc',
+      heading: gc.source === 'replay' ? 'gc replay' : 'gc',
       qualifier: cost?.share,
       value: cost?.avg ?? '—',
       detail: gc.count ? formatGcFrequency(gc) : '—',
     },
     {
-      heading: 'gc max',
+      heading: gc.source === 'replay' ? 'gc max replay' : 'gc max',
       // Only major is labeled since minor is the common case
       qualifier: gc.count && gc.maxKind === 'major' ? 'major' : undefined,
       value: gc.count ? formatNs(gc.max) : '0 ns',

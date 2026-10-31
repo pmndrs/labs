@@ -87,6 +87,14 @@ describe('runWorkers', () => {
     expect(readFileSync(log, 'utf-8')).toMatch(/^(ababab|bababa)$/);
   });
 
+  it('finishes timing on both sides before granting a diagnostic replay', async () => {
+    await runWorkers([
+      stub({ ID: 'a', TURNS: '1', DIAGNOSTICS: '1' }),
+      stub({ ID: 'b', DIAGNOSTICS: '1' }),
+    ]);
+    expect(readFileSync(log, 'utf-8')).toMatch(/^(abbb|babb)(AB|BA)$/);
+  });
+
   it('finishes the surviving worker when its peer fails before requesting a turn', async () => {
     await expect(
       runWorkers([stub({ ID: 'a' }), stub({ ID: 'b', FAIL_BEFORE_TURN: '1' })])

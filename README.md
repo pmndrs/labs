@@ -1,7 +1,7 @@
 # Labs
 
 > [!WARNING]
-> Labs currently only supports Node.js. Workers are spawned via `tsx` with V8-specific flags (`--allow-natives-syntax`, `--expose-gc`), which are not portable to Bun (JSC) or Deno. Portability will be on the roadmap.
+> Labs runs benchmarks in Node.js or Google Chrome. The CLI requires Node.js. Bun is not supported yet.
 
 Labs is JS benchmarking you can trust. Trying to get good signal is harder than you might think. VMs are non-deterministic, environments are unstable, and typical benchmarks don't give you any sense of a comparison's validity. Labs detects variance, giving feedback on how to fix it, and uses statistical analysis to determine if two runs are actually different.
 
@@ -45,6 +45,8 @@ Run your benchmarks with the `bench` command.
 ```sh
 # Run all benches, save named after the current commit
 bench
+# Or run in Chrome
+bench --runtime chrome
 # Or filter by tag
 bench "@mytag"
 # Save with a name for easier reading
@@ -52,6 +54,8 @@ bench "@mytag" -n 'v1.0.0'
 ```
 
 In an interactive terminal, a live view shows each benchmark's progress while it runs, then a full-screen results view opens. Select a benchmark to inspect its timings, sample distribution, memory use, and run consistency. Quitting prints a short summary. Reopen saved results with `bench list`.
+
+Chrome requires a local installation and runs headlessly.
 
 <img src="docs/images/bench.png" width="760" alt="Labs run view with a benchmark list, timing measurements, sample histogram, garbage collection, heap per iteration, and run consistency" />
 
@@ -67,7 +71,7 @@ In an interactive terminal, a live view shows each benchmark's progress while it
 - **heap**: Median and range of estimated bytes allocated per iteration, including typed array storage. Measured after timing; collections during diagnostics can lower the estimate.
 - **consistency**: Each dot represents a fresh process's median time. Larger dots represent multiple runs at the same plotted position. Tight clusters show agreement between runs, while a wider spread shows more variation.
 
-GC figures exclude warmup and heap diagnostics and do not capture all GC overhead. Disable observation with `.gc(false)`. Set `heap: false` in `labs.config.ts` to skip heap diagnostics and their forced collections while keeping GC observation during timing.
+GC figures exclude warmup and heap diagnostics and do not capture all GC overhead. Disable observation with `gc: false` in config or `.gc(false)` on a benchmark. Set `heap: false` in `labs.config.ts` to skip heap diagnostics and their forced collections while keeping GC observation during timing.
 
 </details>
 
@@ -384,9 +388,12 @@ export default defineConfig({
 | `benchDir`          | (required)                                  | Directory to search, relative to config file                                                                                                    |
 | `benchMatch`        | `**/*.bench.ts`                             | Glob pattern for discovery                                                                                                                      |
 | `nodeFlags`         | `['--allow-natives-syntax', '--expose-gc']` | Node flags per worker process                                                                                                                   |
+| `runtime`           | `'node'`                                    | Benchmark runtime, `'node'` or `'chrome'`. Override per run with `--runtime`                                                                    |
+| `chrome`            | `{ headless: true }`                        | Chrome launch options: `headless` and optional `executablePath`                                                                                 |
 | `resultsDir`        | `.labs`                                     | Directory for saved results, relative to config                                                                                                 |
 | `blockTime`         | `0.5`                                       | Pilot block's timed work budget in seconds, excluding warmup and heap diagnostics. Later blocks replay its sample count                         |
 | `minSamples`        | `20`                                        | Minimum samples per block                                                                                                                       |
+| `gc`                | `true`                                      | Observe GC during sampling. Set `false` for all runtimes or use `{ node: false, chrome: true }`. Omitted runtime entries default to `true`      |
 | `heap`              | `true`                                      | Estimate allocated bytes after timing. Set to `false` to skip heap diagnostics while keeping timing samples and GC observation                  |
 | `alpha`             | `0.05`                                      | Mann-Whitney U significance level                                                                                                               |
 | `minDelta`          | `0.05`                                      | Minimum absolute Hodges-Lehmann relative effect for a verdict; rows whose approximate resolution exceeds it are annotated as limited-resolution |

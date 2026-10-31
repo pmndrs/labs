@@ -18,6 +18,7 @@ export function colors(): any {
 
 /** Detect the CPU model string via `os.cpus()` or equivalent. */
 export async function cpu(): Promise<string | null> {
+  if (globalThis.document) return null;
   if ((globalThis as any).process?.versions?.webcontainer) return null;
   try {
     let n;
@@ -105,6 +106,7 @@ export function runtime(): string | null {
 
 /** Detect the CPU architecture / platform (e.g. `arm64-darwin`). */
 export async function arch(): Promise<string | null> {
+  if (globalThis.document) return null;
   if (runtime() === 'webcontainer') return 'js + wasm';
   try {
     let n;

@@ -152,19 +152,23 @@ export class B {
   }
 
   async run(thrw = false, _tune: any = {}, plans?: Array<BlockPlan | undefined>): Promise<Trial> {
+    const gcMode = _tune.sample_gc === false ? false : this._gc;
     const args = Object.keys(this._args);
     const kind = 0 === args.length ? 'static' : 1 === args.length ? 'args' : 'multi-args';
 
     const tune = {
       $counters,
       ..._tune,
-      sample_gc: this._gc,
+      sample_gc: gcMode,
       // Always request initial collection. Custom GC hooks remain supported.
       gc: 'function' === typeof _tune.gc ? _tune.gc : undefined,
 
       heap:
         _tune.heap ??
         (await (async () => {
+          if ((globalThis.performance as any)?.memory) {
+            return () => (performance as any).memory.usedJSHeapSize;
+          }
           if ((globalThis as any).Bun) {
             const _m = 'bun:jsc';
             const { memoryUsage } = await import(_m);
@@ -200,7 +204,7 @@ export class B {
         args: this._args,
         alias: this._name,
         group: this._group,
-        gcMode: this._gc,
+        gcMode,
         baseline: !!(this.flags & flags.baseline),
 
         runs: [
@@ -258,7 +262,7 @@ export class B {
         args: this._args,
         alias: this._name,
         group: this._group,
-        gcMode: this._gc,
+        gcMode,
         baseline: !!(this.flags & flags.baseline),
 
         style: {
@@ -346,7 +350,7 @@ function defaults(opts: any): void {
  * `LABS_COUNTERS` when one is configured and the platform supports it.
  */
 async function initCounters(arch: string | null, runtime: string | null): Promise<void> {
-  const module = process.env.LABS_COUNTERS;
+  const module = (globalThis as any).process?.env?.LABS_COUNTERS;
   if (!module || $counters || !['bun', 'node', 'deno'].includes(runtime as string)) return;
 
   if (arch?.includes?.('darwin')) {
@@ -569,7 +573,7 @@ const formats = {
         renderedTrials.push({
           highlight: -1 === COLOR_NAMES.indexOf(trial._highlight) ? null : trial._highlight,
           compact: !!(trial.flags & flags.compact),
-          gcMode: trial._gc,
+          gcMode: bench.gcMode,
           bench,
         });
       }

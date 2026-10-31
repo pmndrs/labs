@@ -15,6 +15,7 @@ function cpuSpeedVaried(result: SavedResult): number {
 
 function gcJson(gc: GcStats) {
   return {
+    ...(gc.source ? { source: gc.source } : {}),
     perIterationNs: gc.iterations > 0 ? gc.total / gc.iterations : null,
     share: gc.elapsed > 0 ? gc.total / gc.elapsed : null,
     events: gc.count,

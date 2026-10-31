@@ -36,17 +36,20 @@ function readLines(stream: NodeJS.ReadableStream, onLine: (line: string) => void
  * CPU until its next request or exit. Turns go to the longest waiting worker,
  * so two workers alternate and their blocks interleave in time. A single
  * worker simply runs through. Rejects when any worker exits unsuccessfully.
+ * Diagnostic turns wait until every worker has finished timing.
  */
 export function runWorkers(specs: WorkerSpec[]): Promise<void> {
   return new Promise((resolve, reject) => {
     const waiting: ChildProcess[] = [];
+    const diagnosing = new Set<ChildProcess>();
     let holder: ChildProcess | null = null;
     let alive = specs.length;
     let failure: Error | undefined;
 
     const dispatch = () => {
       if (holder || waiting.length !== alive) return;
-      holder = waiting.shift()!;
+      const next = waiting.findIndex((child) => !diagnosing.has(child));
+      holder = waiting.splice(next === -1 ? 0 : next, 1)[0];
       holder.send('go');
     };
 
@@ -77,7 +80,8 @@ export function runWorkers(specs: WorkerSpec[]): Promise<void> {
         });
       }
       child.on('message', (message) => {
-        if (message !== 'turn') return;
+        if (message !== 'turn' && message !== 'diagnostics') return;
+        if (message === 'diagnostics') diagnosing.add(child);
         release(child);
         waiting.push(child);
         dispatch();

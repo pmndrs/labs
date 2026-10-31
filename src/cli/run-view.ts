@@ -25,6 +25,7 @@ import {
 import { formatBytes, formatNs } from '../utils/units.ts';
 import type { TerminalFrame, TerminalViewState } from './screen.ts';
 import { TerminalCanvas, textWidth, wrapText } from './terminal.ts';
+import { runtimeLabel } from './utils.ts';
 
 type RunEntry = {
   file: string;
@@ -246,7 +247,7 @@ function details(entry: RunEntry | undefined, width: number, state: TerminalView
           },
         ]),
     {
-      heading: 'heap',
+      heading: stats.heap?.source === 'replay' ? 'heap replay' : 'heap',
       value: stats.heap ? bytes(stats.heap.p50) : '—',
       detail: range(stats.heap, bytes),
     },
@@ -363,7 +364,10 @@ export function renderRunView(
     canvas.fill(0, '\x1b[43m' + BLACK, 7, 12);
     canvas.put(0, 7, ' ⚠ UNSTABLE ', '', 12);
   }
-  const nameX = unstable ? 21 : 8;
+  const runtimeX = unstable ? 21 : 8;
+  const runtime = runtimeLabel(result.hardware.runtime);
+  canvas.put(0, runtimeX, runtime, GRAY, textWidth(runtime));
+  const nameX = runtimeX + textWidth(runtime) + 2;
   canvas.put(0, nameX, result.name, CYAN, width - nameX - (saved ? 8 : 1));
   if (saved) canvas.put(0, width - 6, 'saved', GREEN, 5);
   const nameWidth = innerWidth >= 71 ? innerWidth - 40 : innerWidth - 26;

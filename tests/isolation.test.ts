@@ -40,7 +40,7 @@ describe('worker bench isolation', () => {
   function runWorker(env: Record<string, string>) {
     const resultFile = join(tmpdir(), `labs-isolation-test-${process.pid}-${spawnCount++}.json`);
     try {
-      execFileSync(process.execPath, ['--import', TSX, WORKER], {
+      execFileSync(process.execPath, ['--throw-deprecation', '--import', TSX, WORKER], {
         stdio: ['ignore', 'ignore', 'pipe'],
         env: {
           ...process.env,

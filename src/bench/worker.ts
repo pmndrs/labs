@@ -2,6 +2,8 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync, rmSync, writeFileSync, writeSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import type { runChrome } from '../chrome.ts';
+import type { BlockJob, BlockResult } from '../browser.ts';
 import { getBenchRegistry } from '../index.ts';
 import { median, relativeSpread } from '../stats.ts';
 import { measure, run } from './index.ts';
@@ -10,10 +12,13 @@ import { runTrialAt } from './main.ts';
 import type { ProgressEvent } from '../cli/progress.ts';
 import type { BlockPlan, GcStats, Stats, Trial } from './types.ts';
 import { mergeGc } from './lib/gc.ts';
+import { colors } from './env.ts';
+import { renderReport } from './render.ts';
 
 type TuneOptions = {
   min_cpu_time?: number;
   min_samples?: number;
+  sample_gc?: false;
   heap?: false;
 };
 
@@ -25,6 +30,7 @@ function parseTuneEnv(): TuneOptions {
   return {
     ...(Number.isFinite(blockTime) && blockTime > 0 ? { min_cpu_time: blockTime } : {}),
     ...(Number.isFinite(minSamples) && minSamples > 0 ? { min_samples: minSamples } : {}),
+    ...(process.env.LABS_GC === '0' ? { sample_gc: false } : {}),
     ...(process.env.LABS_HEAP === '0' ? { heap: false } : {}),
   };
 }
@@ -65,7 +71,7 @@ function emit(event: ProgressEvent): void {
  * the parent can alternate workers block for block. Without a channel the
  * worker runs unpaced.
  */
-function takeTurn(): Promise<void> {
+function takeTurn(phase = 'turn'): Promise<void> {
   if (!process.send) return Promise.resolve();
   return new Promise((resolve) => {
     const onMessage = (message: unknown) => {
@@ -74,7 +80,7 @@ function takeTurn(): Promise<void> {
       resolve();
     };
     process.on('message', onMessage);
-    process.send!('turn');
+    process.send!(phase);
   });
 }
 
@@ -250,34 +256,27 @@ function mergeBlocks(parts: Array<{ trial: Trial; calibrationRate: number }>): T
  * between-block spread samples real environment drift, not just adjacent
  * seconds.
  */
-function makeBlockExecutor(blocks: number) {
-  return async (jobs: Array<{ trial: any; index: number }>): Promise<Map<number, Trial>> => {
+function makeBlockExecutor(
+  blocks: number,
+  runTrial: (index: number, plans?: BlockPlan[]) => Promise<BlockResult>
+) {
+  return async (jobs: BlockJob[]): Promise<Map<number, Trial>> => {
     const collected = new Map<number, Array<{ trial: Trial; calibrationRate: number }>>();
     const plans = new Map<number, BlockPlan[]>();
-    const registry = getBenchRegistry();
     emit({
       type: 'start',
       blocks,
-      benches: jobs.map(({ trial, index }) => ({
-        index,
-        name: trial._name || 'anonymous',
-        group: registry[index]?.groupName ?? '',
-        cases: [...trial._names()].length,
-      })),
+      benches: jobs,
     });
 
     for (let block = 0; block < blocks; block++) {
-      for (const { trial, index } of jobs) {
+      for (const { index } of jobs) {
         // A pilot without a full set of plans (errored runs) is not replayable
         if (block > 0 && !plans.has(index)) continue;
         await takeTurn();
         emit({ type: 'bench', index, block });
         const started = performance.now();
-        const out = runTrialChild(
-          trial,
-          index,
-          block === 0 ? {} : { LABS_BLOCK_PLANS: JSON.stringify(plans.get(index)) }
-        );
+        const out = await runTrial(index, block === 0 ? undefined : plans.get(index));
         const runs = out.trial.runs;
         const failed = runs.find((run) => run.error !== undefined);
         emit({
@@ -308,7 +307,6 @@ function makeBlockExecutor(blocks: number) {
 
 async function main(): Promise<void> {
   await takeTurn();
-  await import(file!);
   // Interleaved workers share one terminal, so each names its tree before its
   // first line of output.
   let label = process.env.LABS_LABEL;
@@ -317,23 +315,71 @@ async function main(): Promise<void> {
     label = undefined;
     _print(s);
   };
-  const result = await run({
-    tune: parseTuneEnv(),
-    execute: makeBlockExecutor(blockCount()),
-    print: progress ? () => {} : print,
-  });
-  const postFreq = await calibrateFreq();
-
-  const registry = getBenchRegistry();
-  for (let i = 0; i < result.benchmarks.length; i++) {
-    (result.benchmarks[i] as any).groupName = registry[i]?.groupName ?? '';
+  let result: Awaited<ReturnType<typeof runChrome>>;
+  if (process.env.LABS_RUNTIME === 'chrome') {
+    const { runChrome } = await import('../chrome.ts');
+    result = await runChrome({
+      file: file!,
+      tune: parseTuneEnv(),
+      grepTags: process.env.LABS_GREP_TAGS,
+      chrome: process.env.LABS_CHROME ? JSON.parse(process.env.LABS_CHROME) : undefined,
+      snapshotTolerance:
+        process.env.LABS_SNAPSHOT_TOLERANCE === undefined
+          ? undefined
+          : Number(process.env.LABS_SNAPSHOT_TOLERANCE),
+      execute: (jobs, runTrial) => makeBlockExecutor(blockCount(), runTrial)(jobs),
+      beforeDiagnostics: () => takeTurn('diagnostics'),
+    });
+    if (!progress) {
+      renderReport(
+        result.context,
+        { print, colors: colors() },
+        result.layout.map((collection, index) => ({
+          ...collection,
+          trials: result.benchmarks
+            .filter((trial) => trial.group === index)
+            .map((bench) => ({
+              bench,
+              gcMode: bench.gcMode,
+              compact: bench.style.compact,
+              highlight: bench.style.highlight,
+            })),
+        }))
+      );
+    }
+  } else {
+    await import(file!);
+    const registry = getBenchRegistry();
+    const execute = makeBlockExecutor(blockCount(), async (index, plans) =>
+      runTrialChild(
+        { _name: registry[index]?.alias },
+        index,
+        plans ? { LABS_BLOCK_PLANS: JSON.stringify(plans) } : {}
+      )
+    );
+    const measured = await run({
+      tune: parseTuneEnv(),
+      execute: (jobs: Array<{ trial: any; index: number }>) =>
+        execute(
+          jobs.map(({ trial, index }) => ({
+            index,
+            name: trial._name || 'anonymous',
+            group: registry[index]?.groupName ?? '',
+            cases: [...trial._names()].length,
+            gc: trial._gc !== false,
+          }))
+        ),
+      print: progress ? () => {} : print,
+    });
+    const postFreq = await calibrateFreq();
+    for (let i = 0; i < measured.benchmarks.length; i++) {
+      Object.assign(measured.benchmarks[i], { groupName: registry[i]?.groupName ?? '' });
+    }
+    result = { ...measured, environment: { postFreq } };
   }
 
   if (process.env.LABS_RESULT_FILE) {
-    writeFileSync(
-      process.env.LABS_RESULT_FILE,
-      JSON.stringify({ ...result, environment: { postFreq } }, errorReplacer)
-    );
+    writeFileSync(process.env.LABS_RESULT_FILE, JSON.stringify(result, errorReplacer));
   }
 }
 

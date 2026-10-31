@@ -208,7 +208,7 @@ export interface EligibleBench {
   comparisonResolution: number;
   /** Present only when both runs recorded the metric. Descriptive, no verdict. */
   gc?: MetricChange & { observed?: boolean; baselineStats?: GcStats; candidateStats?: GcStats };
-  heap?: MetricChange;
+  heap?: MetricChange & { source?: 'replay' };
 }
 
 export interface SkippedBench {
@@ -275,6 +275,7 @@ function trialRuns(trial: ComparableTrial): Array<{
   gcObserved?: boolean;
   gcStats?: GcStats;
   heapP50?: number;
+  heapSource?: 'replay';
   snapshot?: Snapshot;
   error?: unknown;
 }> {
@@ -296,6 +297,7 @@ function trialRuns(trial: ComparableTrial): Array<{
         ? { gcValue: stats.gc.p50, gcObserved: false }
         : {}),
     ...(typeof stats?.heap?.p50 === 'number' ? { heapP50: stats.heap.p50 } : {}),
+    ...(stats?.heap?.source === 'replay' ? { heapSource: 'replay' as const } : {}),
     ...(stats?.snapshot !== undefined ? { snapshot: stats.snapshot } : {}),
     ...(error !== undefined ? { error } : {}),
   });
@@ -325,6 +327,7 @@ interface IndexEntry {
   gcObserved?: boolean;
   gcStats?: GcStats;
   heapP50?: number;
+  heapSource?: 'replay';
   snapshot?: Snapshot;
   error?: unknown;
 }
@@ -359,6 +362,7 @@ function buildIndex(result: SavedResult): Map<string, IndexEntry> {
           ...(run.gcObserved !== undefined ? { gcObserved: run.gcObserved } : {}),
           ...(run.gcStats ? { gcStats: run.gcStats } : {}),
           ...(run.heapP50 !== undefined ? { heapP50: run.heapP50 } : {}),
+          ...(run.heapSource ? { heapSource: run.heapSource } : {}),
           ...(run.snapshot !== undefined ? { snapshot: run.snapshot } : {}),
           ...(run.error !== undefined ? { error: run.error } : {}),
         });
@@ -536,6 +540,18 @@ export function compare(
           continue;
         }
 
+        if (
+          !!(base.gcStats && base.gcStats.source !== 'replay') !==
+          !!(run.gcStats && run.gcStats.source !== 'replay')
+        ) {
+          benches.push({
+            kind: 'skipped',
+            key: key_,
+            reason: 'GC observation during sampling differs between runs',
+          });
+          continue;
+        }
+
         const benchData = {
           baseline: { samples: base.samples, runMedians: base.runMedians },
           candidate: { samples: run.samples, runMedians: run.runMedians },
@@ -574,8 +590,11 @@ export function compare(
         }
 
         const gc =
-          base.gcObserved === run.gcObserved ? metricChange(base.gcValue, run.gcValue) : undefined;
-        const heap = metricChange(base.heapP50, run.heapP50);
+          base.gcObserved === run.gcObserved && base.gcStats?.source === run.gcStats?.source
+            ? metricChange(base.gcValue, run.gcValue)
+            : undefined;
+        const heap =
+          base.heapSource === run.heapSource ? metricChange(base.heapP50, run.heapP50) : undefined;
         benches.push({
           kind: 'eligible',
           key: key_,
@@ -611,7 +630,9 @@ export function compare(
                   : gc,
               }
             : {}),
-          ...(heap ? { heap } : {}),
+          ...(heap
+            ? { heap: { ...heap, ...(run.heapSource ? { source: run.heapSource } : {}) } }
+            : {}),
         });
       }
     }
@@ -721,13 +742,21 @@ export function printCompareReport(result: CompareResult, config: LabsConfig): v
       {
         gc: bench.gc
           ? metricTag(
-              bench.gc.observed ? 'gc/iter' : 'gc',
+              bench.gc.candidateStats?.source === 'replay'
+                ? 'gc replay'
+                : bench.gc.observed
+                  ? 'gc/iter'
+                  : 'gc',
               formatTime(bench.gc.candidate),
               bench.gc.delta
             )
           : '',
         heap: bench.heap
-          ? metricTag('heap', formatBytes(bench.heap.candidate, false), bench.heap.delta)
+          ? metricTag(
+              bench.heap.source === 'replay' ? 'heap replay' : 'heap',
+              formatBytes(bench.heap.candidate, false),
+              bench.heap.delta
+            )
           : '',
       },
     ])

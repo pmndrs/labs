@@ -4,27 +4,42 @@ import { defineConfig } from 'tsdown';
 
 const cwd = fileURLToPath(new URL('..', import.meta.url));
 
-export default defineConfig({
-  cwd,
-  entry: {
-    index: './src/index.ts',
-    'cli/cli': './src/cli/cli.ts',
-    worker: './src/worker.ts',
+export default defineConfig([
+  {
+    cwd,
+    entry: {
+      index: './src/index.ts',
+      'cli/cli': './src/cli/cli.ts',
+      worker: './src/worker.ts',
+    },
+    format: ['esm', 'cjs'],
+    outExtensions({ format }) {
+      return {
+        js: format === 'es' ? '.mjs' : '.cjs',
+        dts: format === 'es' ? '.d.ts' : '.d.cts',
+      };
+    },
+    tsconfig: './tsconfig.build.json',
+    dts: {
+      generator: 'tsgo',
+    },
+    clean: true,
+    deps: {
+      alwaysBundle: ['fast-string-width', 'fast-string-truncated-width'],
+      neverBundle: ['bun:jsc'],
+    },
   },
-  format: ['esm', 'cjs'],
-  outExtensions({ format }) {
-    return {
-      js: format === 'es' ? '.mjs' : '.cjs',
-      dts: format === 'es' ? '.d.ts' : '.d.cts',
-    };
+  {
+    cwd,
+    entry: { browser: './src/browser.ts' },
+    platform: 'browser',
+    target: 'esnext',
+    format: 'esm',
+    outExtensions: () => ({ js: '.mjs' }),
+    outputOptions: { codeSplitting: false },
+    tsconfig: './tsconfig.build.json',
+    dts: false,
+    clean: false,
+    deps: { neverBundle: ['node:perf_hooks', 'node:timers/promises', 'bun:jsc'] },
   },
-  tsconfig: './tsconfig.build.json',
-  dts: {
-    generator: 'tsgo',
-  },
-  clean: true,
-  deps: {
-    alwaysBundle: ['fast-string-width', 'fast-string-truncated-width'],
-    neverBundle: ['bun:jsc'],
-  },
-});
+]);
