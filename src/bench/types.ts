@@ -101,6 +101,7 @@ export interface MeasureOptions {
   warmup_samples?: number;
   /** Wall-time budget in ns for warm-up, including parameter and after hooks. */
   warmup_time?: number;
+  warmup_settle?: number;
   /** Target measured duration in ns of each warm-up window. */
   warmup_window?: number;
   /** Maximum relative range of the recent per-call window timings. */
