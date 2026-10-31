@@ -263,11 +263,19 @@ export function renderReport(
             const hm = formatBytes(r.stats!.heap.min).padStart(9);
             const hx = formatBytes(r.stats!.heap.max).padStart(9);
 
-            if (!opts.colors) l += 'heap(' + hm + ' … ' + hx + ') ' + ha + '/iter';
+            if (!opts.colors)
+              l +=
+                (r.stats!.heap.source === 'replay' ? 'heap replay(' : 'heap(') +
+                hm +
+                ' … ' +
+                hx +
+                ') ' +
+                ha +
+                '/iter';
             else
               l +=
                 ansi.gray +
-                'heap(' +
+                (r.stats!.heap.source === 'replay' ? 'heap replay(' : 'heap(') +
                 ansi.reset +
                 ansi.yellow +
                 hm +

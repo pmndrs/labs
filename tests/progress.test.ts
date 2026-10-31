@@ -39,7 +39,7 @@ describe('live progress', () => {
     applyEvent(progress, 0, { type: 'bench', index: 1, block: 0 });
 
     const text = renderProgress(progress, view).join('\n');
-    expect(text).toMatch(/labs {2}v\d+\.\d+\.\d+ {2}main/);
+    expect(text).toMatch(/labs {2}v\d+\.\d+\.\d+ {2}Node\.js {2}main/);
     expect(text).toContain('block 1/3');
     expect(text).toMatch(/create entities\s+●○○\s+575\.00 ns/);
     expect(text).toMatch(/[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] remove entities\s+○○○/);

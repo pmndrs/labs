@@ -312,7 +312,7 @@ export async function benchFn(fn: (...args: any[]) => any, opts: any = {}): Prom
   `;
   const collect = !!(opts.gc && !opts.gc.fallback);
   const samples = createSamples(opts.max_samples);
-  const observation = opts.sample_gc ? new GcObservation() : undefined;
+  const observation = opts.sample_gc ? await GcObservation.create() : undefined;
   const after = !opts.after ? '' : 'await $after();';
 
   const loop: (...args: any[]) => Promise<any> = new AsyncFunction(
@@ -444,7 +444,7 @@ export async function benchIter(iter: (...args: any[]) => any, opts: any = {}): 
   const now: () => number = opts.now;
   let batchSamples = 0;
   const samples = createSamples(opts.max_samples);
-  const observation = opts.sample_gc ? new GcObservation() : undefined;
+  const observation = opts.sample_gc ? await GcObservation.create() : undefined;
   const _i = {
     next() {
       return _.next();

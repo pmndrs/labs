@@ -21,6 +21,7 @@ import type {
   TerminalFrame as CompareFrame,
 } from './screen.ts';
 import { TerminalCanvas, terminalText, textWidth, wrapMetrics, wrapText } from './terminal.ts';
+import { runtimeLabel } from './utils.ts';
 
 function style(bench: BenchResult): { symbol: string; color: string; label: string } {
   if (bench.kind === 'eligible') {
@@ -169,13 +170,18 @@ function measurements(canvas: TerminalCanvas, bench: EligibleBench, y: number): 
       delta: change(bench.deltaP99),
     },
     {
-      label: bench.gc?.observed ? 'gc/iter' : 'gc',
+      label:
+        bench.gc?.candidateStats?.source === 'replay'
+          ? 'gc replay'
+          : bench.gc?.observed
+            ? 'gc/iter'
+            : 'gc',
       base: bench.gc ? formatNs(bench.gc.baseline) : '—',
       cand: bench.gc ? formatNs(bench.gc.candidate) : '—',
       delta: change(bench.gc?.delta),
     },
     {
-      label: 'heap',
+      label: bench.heap?.source === 'replay' ? 'heap replay' : 'heap',
       base: bench.heap ? bytes(bench.heap.baseline) : '—',
       cand: bench.heap ? bytes(bench.heap.candidate) : '—',
       delta: change(bench.heap?.delta),
@@ -396,12 +402,19 @@ export function renderCompareView(
   canvas.fill(0, '\x1b[42m' + BLACK, 1, 9);
   canvas.put(0, 1, ' COMPARE ', '', 9);
   const count = result.environmentWarnings.length;
-  const badge = count ? ` ⚠ ${count} WARNING${count === 1 ? '' : 'S'} ` : '';
+  const badge = count
+    ? width >= 60
+      ? ` ⚠ ${count} WARNING${count === 1 ? '' : 'S'} `
+      : ` ⚠ ${count} `
+    : '';
   if (badge) {
     canvas.fill(0, '\x1b[43m' + BLACK, 11, textWidth(badge));
     canvas.put(0, 11, badge, '', textWidth(badge));
   }
-  const contextX = badge ? 13 + textWidth(badge) : 12;
+  const runtimeX = badge ? 13 + textWidth(badge) : 12;
+  const runtime = runtimeLabel(result.hardware.runtime);
+  canvas.put(0, runtimeX, runtime, GRAY, textWidth(runtime));
+  const contextX = runtimeX + textWidth(runtime) + 2;
   const namesWidth = width - contextX - 1;
   const baselineWidth = Math.min(
     textWidth(result.baselineName),

@@ -53,6 +53,89 @@ const steady = [100, 100.4, 99.7, 100.2, 99.9, 100.1, 99.8, 100.3];
 const scattered = [80, 130, 95, 120, 70, 110, 100, 90];
 
 describe('agent output', () => {
+  it('labels replay diagnostics and keeps performance verdicts independent of their cost', () => {
+    const baseline = result('a', steady);
+    const candidate = result('b', steady);
+    for (const [i, run] of [baseline, candidate].entries()) {
+      const stats = run.files[0].benchmarks[0].runs[0].stats!;
+      stats.gc = {
+        source: 'replay',
+        total: 1000 * (i + 1),
+        max: 1000,
+        count: 1,
+        minor: 0,
+        major: 1,
+        incremental: 0,
+        weak: 0,
+        other: 0,
+        elapsed: 10000,
+        timed: 10000,
+        iterations: 10,
+      };
+      stats.heap = { min: 32, max: 64, p50: 32 * (i + 1), source: 'replay' };
+    }
+    expect(runJson(candidate, config, true).benches[0]).toMatchObject({
+      gc: { source: 'replay' },
+      heapBytes: { source: 'replay' },
+    });
+    const compared = compare(baseline, candidate, config);
+    expect(compared.benches[0]).toMatchObject({
+      kind: 'eligible',
+      verdict: 'neutral',
+      gc: { candidateStats: { source: 'replay' } },
+      heap: { source: 'replay' },
+    });
+    const baselineGc = baseline.files[0].benchmarks[0].runs[0].stats!.gc!;
+    if ('total' in baselineGc) delete baselineGc.source;
+    delete baseline.files[0].benchmarks[0].runs[0].stats!.heap!.source;
+    expect(compare(baseline, candidate, config).benches[0]).toMatchObject({
+      kind: 'skipped',
+      reason: 'GC observation during sampling differs between runs',
+    });
+    delete baseline.files[0].benchmarks[0].runs[0].stats!.gc;
+    const mixed = compare(baseline, candidate, config).benches[0];
+    expect(mixed.kind).toBe('eligible');
+    if (mixed.kind === 'eligible') {
+      expect(mixed.gc).toBeUndefined();
+      expect(mixed.heap).toBeUndefined();
+    }
+  });
+
+  it('refuses mixed sampling observation modes even when no collections occurred', () => {
+    const baseline = result('a', steady);
+    const candidate = result('b', steady);
+    baseline.hardware.runtime = candidate.hardware.runtime = 'chrome';
+    candidate.files[0].benchmarks[0].runs[0].stats!.gc = {
+      total: 0,
+      max: 0,
+      count: 0,
+      minor: 0,
+      major: 0,
+      incremental: 0,
+      weak: 0,
+      other: 0,
+      elapsed: 10000,
+      timed: 10000,
+      iterations: 10,
+    };
+    for (const [a, b] of [
+      [baseline, candidate],
+      [candidate, baseline],
+    ]) {
+      expect(compare(a, b, config).benches[0]).toMatchObject({
+        kind: 'skipped',
+        reason: 'GC observation during sampling differs between runs',
+      });
+    }
+    baseline.files[0].benchmarks[0].runs[0].stats!.gc = {
+      ...candidate.files[0].benchmarks[0].runs[0].stats!.gc!,
+    };
+    expect(compare(baseline, candidate, config).benches[0]).toMatchObject({
+      kind: 'eligible',
+      verdict: 'neutral',
+    });
+  });
+
   it('reports each bench with the same judgment as the report screen', () => {
     const passed = runJson(result('a', steady), config, true);
     expect(passed).toMatchObject({ name: 'a', saved: true, environment: { stable: true } });

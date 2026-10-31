@@ -7,7 +7,10 @@ export type { LabsConfig } from './config.ts';
 
 const tagStack: string[][] = [];
 const groupNameStack: string[] = [];
-const grepTags = process.env.LABS_GREP_TAGS?.split(',').filter(Boolean) ?? [];
+const grepTags: string[] =
+  ((globalThis as any).process?.env?.LABS_GREP_TAGS ?? (globalThis as any).__LABS_GREP_TAGS)
+    ?.split(',')
+    .filter(Boolean) ?? [];
 
 // Ordered registry of (groupName, benchAlias) built as bench() calls execute.
 // worker.ts zips this with the engine's benchmarks[] array (same registration order)

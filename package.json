@@ -32,9 +32,13 @@
     "typecheck:watch": "tsc --build --watch"
   },
   "dependencies": {
+    "@babel/parser": "^7.29.12",
     "@clack/prompts": "^1.7.0",
+    "@noble/hashes": "^2.4.0",
+    "esbuild": "^0.27.4",
     "fast-string-width": "^3.0.2",
     "import-meta-resolve": "^4.2.0",
+    "playwright-core": "^1.64.1",
     "tsx": "^4.23.12"
   },
   "devDependencies": {

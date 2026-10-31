@@ -1,4 +1,5 @@
-import { createHash } from 'node:crypto';
+import { sha256 } from '@noble/hashes/sha2.js';
+import { bytesToHex } from '@noble/hashes/utils.js';
 import type { Snapshot } from '../types.ts';
 
 /** Serializes supported values deterministically for equality and hashing. */
@@ -79,7 +80,7 @@ function numeric(value: unknown, budget: { left: number }): Snapshot | null {
 export function toSnapshot(value: unknown): Snapshot {
   return (
     numeric(value, { left: 16384 }) ??
-    createHash('sha256').update(serialize(value)).digest('hex').slice(0, 16)
+    bytesToHex(sha256(new TextEncoder().encode(serialize(value)))).slice(0, 16)
   );
 }
 

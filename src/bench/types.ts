@@ -10,8 +10,9 @@ export interface BlockPlan {
   samples: number;
 }
 
-/** Observed GC during sampling, with all durations in nanoseconds. */
+/** GC pauses during sampling or a diagnostic replay, with durations in nanoseconds. */
 export interface GcStats {
+  source?: 'replay';
   total: number;
   max: number;
   maxKind?: 'minor' | 'major' | 'incremental' | 'weak' | 'other';
@@ -50,7 +51,7 @@ export interface Stats {
   p99: number;
   p999: number;
   gc?: GcStats | LegacyGcStats;
-  heap?: { min: number; max: number; p50: number };
+  heap?: { min: number; max: number; p50: number; source?: 'replay' };
   /** Decisions this measurement made, usable to freeze later blocks. */
   plan?: BlockPlan;
   /** Output compared with the baseline. */

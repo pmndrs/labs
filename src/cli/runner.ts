@@ -106,8 +106,15 @@ function saveSelection(files: string[]) {
 
 type WorkerTune = Pick<
   Partial<LabsConfig>,
-  'blockTime' | 'minSamples' | 'heap' | 'blocks' | 'counters'
->;
+  | 'blockTime'
+  | 'minSamples'
+  | 'heap'
+  | 'blocks'
+  | 'counters'
+  | 'runtime'
+  | 'chrome'
+  | 'snapshotTolerance'
+> & { gc?: boolean };
 
 function workerEnv(
   file: string,
@@ -124,8 +131,14 @@ function workerEnv(
     ...env,
     LABS_BENCH_FILE: pathToFileURL(file).href,
     LABS_BLOCKS: String(tune.blocks ?? 8),
+    LABS_RUNTIME: tune.runtime ?? 'node',
+    ...(tune.snapshotTolerance !== undefined
+      ? { LABS_SNAPSHOT_TOLERANCE: String(tune.snapshotTolerance) }
+      : {}),
+    ...(tune.chrome ? { LABS_CHROME: JSON.stringify(tune.chrome) } : {}),
     ...(tune.blockTime !== undefined ? { LABS_BLOCK_TIME: String(tune.blockTime * 1e9) } : {}),
     ...(tune.minSamples !== undefined ? { LABS_MIN_SAMPLES: String(tune.minSamples) } : {}),
+    ...(tune.gc === false ? { LABS_GC: '0' } : {}),
     ...(tune.heap === false ? { LABS_HEAP: '0' } : {}),
     ...(tune.counters ? { LABS_COUNTERS: tune.counters } : {}),
     ...(tagFilter ? { LABS_GREP_TAGS: tagFilter } : {}),
@@ -202,6 +215,12 @@ class Collection {
 
   get benchCount(): number {
     return this.files.reduce((n, f) => n + f.benchmarks.length, 0);
+  }
+
+  get failed(): boolean {
+    return this.files.some((file) =>
+      file.benchmarks.some((trial) => trial.runs.some((run) => run.error !== undefined))
+    );
   }
 }
 
@@ -317,6 +336,7 @@ export async function runCLI(args: string[]) {
       '-m',
       '--message',
       '--blocks',
+      '--runtime',
       '--against',
       '--candidate',
     ]);
@@ -380,12 +400,23 @@ export async function runCLI(args: string[]) {
     error(`Invalid --blocks value "${blocksFlag}" — expected an integer ≥ 2`);
   }
   const blocks = blocksFlag !== undefined ? Number(blocksFlag) : (config.blocks ?? 8);
+  const runtime = flagValue(benchArgs, '--runtime') ?? config.runtime ?? 'node';
+  if (runtime !== 'node' && runtime !== 'chrome') {
+    error(`Invalid runtime "${runtime}". Expected node or chrome`);
+  }
+  if (runtime === 'chrome' && config.counters) {
+    error('Hardware counters are only supported with the node runtime');
+  }
 
-  const benchTune = {
+  const benchTune: WorkerTune = {
     blockTime: config.blockTime,
     minSamples: config.minSamples,
+    gc: typeof config.gc === 'boolean' ? config.gc : (config.gc?.[runtime] ?? true),
     heap: config.heap,
     blocks,
+    runtime,
+    chrome: config.chrome,
+    snapshotTolerance: config.snapshotTolerance,
     counters: config.counters && resolveCounters(config.counters, configPath),
   };
 
@@ -478,7 +509,8 @@ export async function runCLI(args: string[]) {
   const progress = createProgress(
     saveName,
     selected.flatMap((f) => sides.map((s) => entryName(f, s))),
-    Date.now()
+    Date.now(),
+    runtime
   );
   const view = interactive
     ? new LiveView(process.stdout, (columns, rows) =>
@@ -605,7 +637,7 @@ export async function runCLI(args: string[]) {
   };
 
   if (reference) {
-    if (sides.some((s) => s.collected.diagnostics.failedChecks.length > 0)) process.exitCode = 1;
+    if (sides.some((s) => s.collected.failed)) process.exitCode = 1;
     if (shouldSave) saveResult(labsDir, result);
     // Named after its commit like any default run, once the candidate holds its name.
     const refResult = buildResult(reference, defaultName(reference.git));
@@ -644,9 +676,9 @@ export async function runCLI(args: string[]) {
     return;
   }
 
-  const { files, diagnostics } = candidate.collected;
+  const { files } = candidate.collected;
   if (!shouldSave) {
-    if (diagnostics.failedChecks.length > 0) process.exitCode = 1;
+    if (candidate.collected.failed) process.exitCode = 1;
     if (interactive) await showRunReport(result, config, false);
     report(candidate);
     if (json) emit({ ...runJson(result, config, false), crashes });
@@ -656,7 +688,7 @@ export async function runCLI(args: string[]) {
   saveResult(labsDir, result);
   const isFirstSave = !getBaseline(labsDir);
   let markedBaseline = false;
-  const checksFailed = diagnostics.failedChecks.length > 0 || crashes.length > 0;
+  const checksFailed = candidate.collected.failed || crashes.length > 0;
 
   // Failed checks cannot establish a baseline.
   if ((setAsBaseline || isFirstSave) && !checksFailed) {

@@ -442,7 +442,10 @@ describe('comparing memory', () => {
       iterations: 400,
       overlap: { min: 1600, max: 2000 },
     };
-    expect(eligible(compare(baseline, candidate, CONFIG)).gc).toBeUndefined();
+    expect(compare(baseline, candidate, CONFIG).benches[0]).toMatchObject({
+      kind: 'skipped',
+      reason: 'GC observation during sampling differs between runs',
+    });
     baseline.files[0].benchmarks[0].runs[0].stats!.gc = {
       ...stats.gc,
       total: 1000,

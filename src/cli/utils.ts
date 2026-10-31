@@ -3,6 +3,10 @@ import { RED, RESET } from '../utils/ansi.ts';
 
 const DEFAULT_NAME_RE = /^\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}$/;
 
+export function runtimeLabel(runtime: string | null): string {
+  return runtime === 'node' ? 'Node.js' : runtime === 'chrome' ? 'Chrome' : (runtime ?? 'unknown');
+}
+
 export function dateHint(r: { name: string; timestamp: string }): string | undefined {
   if (DEFAULT_NAME_RE.test(r.name)) return undefined;
   const d = new Date(r.timestamp);

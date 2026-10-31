@@ -5,6 +5,12 @@ export interface LabsConfig {
   benchMatch: string;
   /** Node.js CLI flags passed when running each bench worker. */
   nodeFlags: string[];
+  /** Runtime used to execute benchmark blocks. @default "node" */
+  runtime?: 'node' | 'chrome';
+  chrome?: {
+    executablePath?: string;
+    headless?: boolean;
+  };
   /** Directory for saved results and baseline pointer, relative to config file. @default ".labs" */
   resultsDir: string;
   /**
@@ -14,6 +20,8 @@ export interface LabsConfig {
   blockTime?: number;
   /** Minimum samples per block. @default 20 */
   minSamples?: number;
+  /** Observe GC during sampling. Omitted runtime settings default to true. */
+  gc?: boolean | Partial<Record<'node' | 'chrome', boolean>>;
   heap?: boolean;
   /** Mann-Whitney U significance level. @default 0.05 */
   alpha: number;
@@ -42,9 +50,11 @@ export function defineConfig(config: Partial<LabsConfig> & Pick<LabsConfig, 'ben
   return {
     benchMatch: '**/*.bench.ts',
     nodeFlags: ['--allow-natives-syntax', '--expose-gc'],
+    runtime: 'node',
     resultsDir: '.labs',
     blockTime: 0.5,
     minSamples: 20,
+    gc: true,
     heap: true,
     alpha: 0.05,
     minDelta: 0.05,

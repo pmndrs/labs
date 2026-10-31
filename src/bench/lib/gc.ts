@@ -1,20 +1,41 @@
-import {
-  constants,
-  performance,
-  PerformanceObserver,
-  type PerformanceEntry,
-  type PerformanceNodeEntry,
-} from 'node:perf_hooks';
-import { setImmediate as immediate } from 'node:timers/promises';
+import type { PerformanceEntry, PerformanceNodeEntry } from 'node:perf_hooks';
 import type { GcStats } from '../types.ts';
+
+export interface GcObserver {
+  start(): void;
+  finish(timed: number, iterations: number, comparable?: boolean): Promise<GcStats>;
+  cancel(): void;
+}
 
 /** Observe one sampling block without adding hooks around individual samples. */
 export class GcObservation {
   private entries: PerformanceEntry[] = [];
   private startTime = 0;
-  private observer = new PerformanceObserver((list) => {
-    for (const entry of list.getEntries()) this.entries.push(entry);
-  });
+  private observer: import('node:perf_hooks').PerformanceObserver;
+  private immediate: typeof import('node:timers/promises').setImmediate;
+  private constants: typeof import('node:perf_hooks').constants;
+
+  private constructor(
+    hooks: typeof import('node:perf_hooks'),
+    immediate: typeof import('node:timers/promises').setImmediate
+  ) {
+    this.immediate = immediate;
+    this.constants = hooks.constants;
+    this.observer = new hooks.PerformanceObserver((list) => {
+      for (const entry of list.getEntries()) this.entries.push(entry);
+    });
+  }
+
+  static async create(): Promise<GcObserver | undefined> {
+    if (!(globalThis as any).process?.versions?.node) {
+      return (globalThis as any).__LABS_GC_OBSERVER?.();
+    }
+    const [hooks, timers] = await Promise.all([
+      import('node:perf_hooks'),
+      import('node:timers/promises'),
+    ]);
+    return new GcObservation(hooks, timers.setImmediate);
+  }
 
   start(): void {
     this.observer.observe({ entryTypes: ['gc'] });
@@ -25,8 +46,8 @@ export class GcObservation {
     const endTime = performance.now();
     try {
       // Native GC notifications and observer delivery use separate event loop turns.
-      await immediate();
-      await immediate();
+      await this.immediate();
+      await this.immediate();
       for (const entry of this.observer.takeRecords()) this.entries.push(entry);
       const stats: GcStats = {
         total: 0,
@@ -53,19 +74,19 @@ export class GcObservation {
         stats.count++;
         let eventKind: NonNullable<GcStats['maxKind']>;
         switch ((entry as PerformanceNodeEntry).detail.kind) {
-          case constants.NODE_PERFORMANCE_GC_MINOR:
+          case this.constants.NODE_PERFORMANCE_GC_MINOR:
             stats.minor++;
             eventKind = 'minor';
             break;
-          case constants.NODE_PERFORMANCE_GC_MAJOR:
+          case this.constants.NODE_PERFORMANCE_GC_MAJOR:
             stats.major++;
             eventKind = 'major';
             break;
-          case constants.NODE_PERFORMANCE_GC_INCREMENTAL:
+          case this.constants.NODE_PERFORMANCE_GC_INCREMENTAL:
             stats.incremental++;
             eventKind = 'incremental';
             break;
-          case constants.NODE_PERFORMANCE_GC_WEAKCB:
+          case this.constants.NODE_PERFORMANCE_GC_WEAKCB:
             stats.weak++;
             eventKind = 'weak';
             break;
@@ -100,6 +121,7 @@ export class GcObservation {
 /** Pool GC totals across fresh process blocks. */
 export function mergeGc(list: GcStats[]): GcStats {
   return list.reduce((total, stats) => ({
+    ...(total.source === 'replay' && stats.source === 'replay' ? { source: 'replay' as const } : {}),
     total: total.total + stats.total,
     max: Math.max(total.max, stats.max),
     maxKind: stats.max > total.max ? stats.maxKind : total.maxKind,
