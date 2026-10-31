@@ -24,6 +24,19 @@ export function do_not_optimize(v: any): void {
   _sink._ = v;
 }
 
+/**
+ * Keeps `f` in the interpreter so nothing it calls is inlined into it. Needs
+ * natives syntax, which the CLI enables, and does nothing elsewhere.
+ */
+export const never_optimize: (f: (...args: any[]) => any) => void = (() => {
+  try {
+    // oxlint-disable-next-line typescript/no-implied-eval
+    return new Function('f', '%NeverOptimizeFunction(f)') as (f: unknown) => void;
+  } catch {
+    return () => {};
+  }
+})();
+
 /** Resolved `console.log` (or runtime-specific equivalent). */
 export const _print: (s: any) => void = (() => {
   if (globalThis.console?.log) return globalThis.console.log;

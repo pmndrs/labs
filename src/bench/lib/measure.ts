@@ -4,6 +4,7 @@ import {
   do_not_optimize,
   GeneratorFunction,
   kind,
+  never_optimize,
   now as runtimeNow,
 } from './runtime.ts';
 import { toSnapshot } from './snapshot.ts';
@@ -382,6 +383,13 @@ export async function benchFn(fn: (...args: any[]) => any, opts: any = {}): Prom
     };
   `
   );
+
+  // An unbatched sample calls the function once between clock reads. Once the
+  // engine optimizes this loop it inlines the function and times code compiled
+  // in the loop's context, which runs tight loops up to 2x slower than the
+  // function on its own. Each sample is long enough that interpreting the loop
+  // around it costs nothing measurable.
+  if (!batch) never_optimize(loop);
 
   try {
     return {
