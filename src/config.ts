@@ -12,6 +12,8 @@ export interface LabsConfig {
   chrome?: {
     executablePath?: string;
     headless?: boolean;
+    /** Extra Chrome command line flags, added to the Labs defaults. */
+    args?: string[];
   };
   firefox?: {
     executablePath?: string;

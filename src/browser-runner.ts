@@ -48,7 +48,10 @@ export async function runBrowser(options: {
             channel: 'chrome',
             args: [
               '--js-flags=--expose-gc --allow-natives-syntax',
+              // Dawn rounds GPU timestamps to 65536 ns against timing attacks, which a benchmark browser does not face.
+              '--disable-dawn-features=timestamp_quantization',
               ...(diagnostics && options.tune.heap !== false ? ['--enable-precise-memory-info'] : []),
+              ...(options.launch?.args ?? []),
             ],
           }
         : {}),

@@ -58,7 +58,7 @@ bench "@mytag" -n 'v1.0.0'
 
 In an interactive terminal, a live view shows each benchmark's progress while it runs, then a full-screen results view opens. Select a benchmark to inspect its timings, sample distribution, memory use, and run consistency. Quitting prints a short summary. Reopen saved results with `bench list`.
 
-Chrome requires a local installation and runs headlessly.
+Chrome requires a local installation and runs headlessly. Pass extra flags with `chrome: { args: [...] }` in `labs.config.ts`. GPU timestamp queries report full resolution since Labs disables Dawn's timestamp quantization.
 Bun requires a local installation. GC diagnostics require the CLI; heap allocation diagnostics are unavailable.
 Firefox and WebKit require `pnpm exec playwright-core install firefox webkit`. WebKit runs Safari's engine in a separate browser build. Heap allocation diagnostics are unavailable in these runtimes.
 
