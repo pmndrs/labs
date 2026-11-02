@@ -32,10 +32,15 @@ function running() {
 }
 
 describe('live progress', () => {
-  it.each(['chrome', 'bun'] as const)('shows the selected %s runtime', (runtime) => {
+  it.each([
+    ['chrome', 'Chrome'],
+    ['bun', 'Bun'],
+    ['firefox', 'Firefox'],
+    ['webkit', 'WebKit'],
+  ] as const)('shows the selected %s runtime', (runtime, label) => {
     const progress = createProgress('main', ['work.bench.ts'], 0, runtime);
     const text = renderProgress(progress, view).join('\n');
-    expect(text).toContain(runtime === 'bun' ? 'Bun' : 'Chrome');
+    expect(text).toContain(label);
     expect(text).not.toContain('Node.js');
   });
 

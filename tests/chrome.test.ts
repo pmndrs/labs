@@ -473,8 +473,8 @@ describe('Chrome benchmarks', () => {
 
   it('rejects an unsupported runtime before starting workers', () => {
     setup(`import { bench } from '@pmndrs/labs'; bench('test', () => 1);`);
-    const output = run('--runtime', 'firefox');
+    const output = run('--runtime', 'deno');
     expect(output.status).toBe(1);
-    expect(output.stderr).toContain('Invalid runtime "firefox"');
+    expect(output.stderr).toContain('Invalid runtime "deno"');
   });
 });

@@ -9,7 +9,7 @@ import type { BlockPlan, MeasureOptions, Stats } from '../src/bench/types.ts';
 import { chromeGcStats, type ChromeGcWindow } from '../src/bench/lib/chrome-gc.ts';
 import { measure } from '../src/bench/index.ts';
 import { runTrialAt } from '../src/bench/main.ts';
-import { startChromeServer } from '../src/chrome-server.ts';
+import { startBrowserServer } from '../src/browser-server.ts';
 import { observeChromeGc } from '../src/chrome-trace.ts';
 import { median } from '../src/stats.ts';
 
@@ -85,7 +85,7 @@ if (process.argv[2] === 'bun-host') {
   const runtimes = names as Pair['runtime'][];
   const tune: MeasureOptions = { heap: false, min_cpu_time: 2.5e8, min_samples: 30 };
   const server = runtimes.includes('chrome')
-    ? await startChromeServer(new URL('./fixtures/observe-gc.bench.ts', import.meta.url).href)
+    ? await startBrowserServer(new URL('./fixtures/observe-gc.bench.ts', import.meta.url).href)
     : undefined;
   const pairs: Pair[] = [];
   const plans = new Map<string, BlockPlan>();
@@ -158,7 +158,7 @@ if (process.argv[2] === 'bun-host') {
               input.tune,
               input.plan ? [input.plan] : undefined,
               calibration,
-              input.observe
+              input.observe ? 'chrome' : false
             ),
           { input, calibration }
         );

@@ -3,7 +3,9 @@ import { measure, run } from './bench/index.ts';
 import { runTrialAt } from './bench/main.ts';
 import type { BlockPlan, MeasureOptions, Trial } from './bench/types.ts';
 import { ChromeGcObservation } from './bench/lib/chrome-gc.ts';
+import { WebkitGcObservation } from './bench/lib/webkit-gc.ts';
 import { calibrateClock } from './bench/lib/clock.ts';
+import { gc } from './bench/lib/runtime.ts';
 
 export { assert, AssertionError, bench, defineConfig, getBenchRegistry, group } from './index.ts';
 
@@ -38,7 +40,7 @@ function jsonSafe<T>(value: T): T {
 
 export const browserHarness = {
   async run(tune: MeasureOptions) {
-    const clock = calibrateClock();
+    const clock = { ...calibrateClock(), ...(gc.fallback ? { gc: false as const } : {}) };
     const result = await run({
       format: 'quiet',
       calibrate: clock,
@@ -67,7 +69,7 @@ export const browserHarness = {
   },
 
   async calibrate(): Promise<BrowserCalibration> {
-    const clock = calibrateClock();
+    const clock = { ...calibrateClock(), ...(gc.fallback ? { gc: false as const } : {}) };
     const calibration = await measure(() => {}, { ...clock, batch_unroll: 1, min_cpu_time: 5e7 });
     return { clock, calibrationRate: 1 / calibration.avg };
   },
@@ -77,21 +79,22 @@ export const browserHarness = {
     tune: MeasureOptions,
     plans?: BlockPlan[],
     calibration?: BrowserCalibration,
-    observe = false
+    observe: false | 'chrome' | 'firefox' | 'webkit' = false
   ): Promise<BlockResult> {
     const prepared = calibration ?? (await browserHarness.calibrate());
     let sequence = 0;
     if (observe) {
       Object.assign(globalThis, {
         __LABS_GC_OBSERVER: async () => {
-          await (globalThis as any).__labsStartGc();
-          return new ChromeGcObservation(sequence++);
+          if (observe === 'chrome') await (globalThis as any).__labsStartGc();
+          return observe === 'webkit'
+            ? new WebkitGcObservation()
+            : new ChromeGcObservation(sequence++);
         },
       });
     }
     try {
       const trial = await runTrialAt(index, { ...prepared.clock, ...tune, heap: false }, plans);
-      if (!observe) trial.gcMode = false;
       return jsonSafe({ trial, calibrationRate: prepared.calibrationRate });
     } finally {
       delete (globalThis as any).__LABS_GC_OBSERVER;

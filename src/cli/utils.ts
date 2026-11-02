@@ -7,6 +7,8 @@ export function runtimeLabel(runtime: string | null): string {
   if (runtime === 'node') return 'Node.js';
   if (runtime === 'chrome') return 'Chrome';
   if (runtime === 'bun') return 'Bun';
+  if (runtime === 'firefox') return 'Firefox';
+  if (runtime === 'webkit') return 'WebKit';
   return runtime ?? 'unknown';
 }
 

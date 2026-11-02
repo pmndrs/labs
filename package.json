@@ -39,7 +39,7 @@
     "fast-string-width": "^3.0.2",
     "get-tsconfig": "^4.14.3",
     "import-meta-resolve": "^4.2.0",
-    "playwright-core": "^1.64.1",
+    "playwright-core": "1.64.1",
     "tsx": "^4.23.12"
   },
   "devDependencies": {

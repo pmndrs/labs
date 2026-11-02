@@ -1,5 +1,6 @@
 import { createRequire } from 'node:module';
 import type { WriteStream } from 'node:tty';
+import type { Runtime } from '../config.ts';
 import { median } from '../stats.ts';
 import { CYAN, DARK_GRAY, GRAY, GREEN, RED, YELLOW } from '../utils/ansi.ts';
 import { formatNs } from '../utils/units.ts';
@@ -54,7 +55,7 @@ interface FileProgress {
 
 export interface RunProgress {
   name: string;
-  runtime: 'node' | 'chrome' | 'bun';
+  runtime: Runtime;
   started: number;
   files: FileProgress[];
 }
