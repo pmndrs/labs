@@ -170,10 +170,11 @@ export async function benchFn(fn: (...args: any[]) => any, opts: any = {}): Prom
   defaults(opts);
   const now: () => number = opts.now;
   const consume = opts.$consume ?? do_not_optimize;
+  const started = now();
   const warmup = createWarmup(
-    now() + opts.warmup_time,
+    started + opts.warmup_time,
     opts.warmup_samples,
-    now() + opts.warmup_settle
+    started + opts.warmup_settle
   );
   let async = false;
   let batch = false;
@@ -210,7 +211,7 @@ export async function benchFn(fn: (...args: any[]) => any, opts: any = {}): Prom
 
     if (opts.after) await opts.after();
 
-    recordWarmup(warmup, t1 - t0, 1, opts);
+    recordWarmup(warmup, t1 - t0, 1, opts, now());
     workload = observeWorkload(optimization?.tier(fn), now());
     while (!isWarmupDone(warmup, opts, now())) {
       let duration = 0;
@@ -227,7 +228,7 @@ export async function benchFn(fn: (...args: any[]) => any, opts: any = {}): Prom
         if (opts.after) await opts.after();
         iterations++;
       }
-      if (iterations) recordWarmup(warmup, duration, iterations, opts);
+      if (iterations) recordWarmup(warmup, duration, iterations, opts, now());
       workload = observeWorkload(optimization?.tier(fn), now());
     }
     single = warmup.single;
@@ -508,6 +509,7 @@ export async function benchFn(fn: (...args: any[]) => any, opts: any = {}): Prom
       kind: 'fn' as const,
       debug: loop.toString(),
       ...(isWarmupUnsettled(warmup, opts) ? { unsettled: true } : {}),
+      ...(warmup.settledAt ? { warmup: { time: warmup.settledAt - started } } : {}),
       ...(opts.warmup_samples > 0
         ? {
             optimization: {
@@ -541,6 +543,7 @@ export async function benchIter(iter: (...args: any[]) => any, opts: any = {}): 
     next: null,
     batch: false,
     unsettled: false,
+    warmup: undefined,
     debug: '',
     count: 0,
     timed: 0,
@@ -573,10 +576,11 @@ export async function benchIter(iter: (...args: any[]) => any, opts: any = {}): 
 
   const gen: Generator = (function* () {
     let batch = false;
+    const started = now();
     const warmup = createWarmup(
-      now() + opts.warmup_time,
+      started + opts.warmup_time,
       opts.warmup_samples,
-      now() + opts.warmup_settle
+      started + opts.warmup_settle
     );
     do {
       let iterations = 0;
@@ -585,12 +589,13 @@ export async function benchIter(iter: (...args: any[]) => any, opts: any = {}): 
         yield void 0;
         iterations++;
       } while (iterations < warmup.iterations && now() < warmup.deadline);
-      recordWarmup(warmup, now() - t0, iterations, opts);
+      recordWarmup(warmup, now() - t0, iterations, opts, now());
       workload = observeWorkload(optimization?.tier(iter), now());
     } while (!isWarmupDone(warmup, opts, now()));
 
     const single = warmup.single;
     _.unsettled = isWarmupUnsettled(warmup, opts);
+    if (warmup.settledAt) _.warmup = { time: warmup.settledAt - started };
     batch = single <= opts.batch_threshold;
 
     if (opts.batch !== undefined) batch = !!opts.batch;
@@ -661,6 +666,7 @@ export async function benchIter(iter: (...args: any[]) => any, opts: any = {}): 
     },
     debug: _.debug,
     ...(_.unsettled ? { unsettled: true } : {}),
+    ...(_.warmup ? { warmup: _.warmup } : {}),
     ...(opts.warmup_samples > 0 ? { optimization: { workload: [workload] } } : {}),
     ticks: _.count * (!_.batch ? 1 : batchSamples),
     ...(_.gc ? { gc: _.gc } : {}),

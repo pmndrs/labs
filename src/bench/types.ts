@@ -76,6 +76,8 @@ export interface Stats {
   unsettled?: boolean;
   varyingOutput?: boolean;
   optimization?: OptimizationStats;
+  /** Time (ns) from the first call until warmup windows agreed, absent when they never did. */
+  warmup?: { time: number };
   /** Per-block summaries when the benchmark ran in multiple fresh processes. */
   blocks?: {
     medians: number[];

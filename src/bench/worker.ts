@@ -278,10 +278,20 @@ function mergeBlocks(parts: Array<{ trial: Trial; calibrationRate: number }>): T
           // A majority keeps one disturbed block from marking the bench
           unsettled: stats.filter((s) => s.unsettled).length > stats.length / 2,
           varyingOutput: snapshots.size > 1,
+          ...mergeWarmup(stats),
         },
       };
     }),
   };
+}
+
+/** Median warmup settle time across the blocks that settled. */
+function mergeWarmup(stats: Stats[]): Pick<Stats, 'warmup'> {
+  const times = stats
+    .map((s) => s.warmup?.time)
+    .filter((t): t is number => t !== undefined)
+    .sort((a, b) => a - b);
+  return times.length ? { warmup: { time: times[times.length >> 1] } } : {};
 }
 
 /**

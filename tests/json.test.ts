@@ -56,6 +56,23 @@ const steady = [100, 100.4, 99.7, 100.2, 99.9, 100.1, 99.8, 100.3];
 const scattered = [80, 130, 95, 120, 70, 110, 100, 90];
 
 describe('agent output', () => {
+  it('exports per-block tier times without changing the performance judgment', () => {
+    const run = result('tiers', steady);
+    const before = runJson(run, config, true).benches[0];
+    const stats = run.files[0].benchmarks[0].runs[0].stats!;
+    stats.optimization = {
+      workload: [{ tier: 'TurboFan', time: 12e6 }, null],
+      harness: [
+        { tier: 'TurboFan', time: 25e6 },
+        { tier: 'Maglev', time: 7e6 },
+      ],
+    };
+    const after = runJson(run, config, true).benches[0];
+    expect(after.optimization).toEqual(stats.optimization);
+    expect(after.timeNs).toEqual(before.timeNs);
+    expect(after.status).toBe(before.status);
+  });
+
   it('labels collection activity and omits duration comparisons with other GC event semantics', () => {
     const baseline = result('a', steady);
     const candidate = result('b', steady);

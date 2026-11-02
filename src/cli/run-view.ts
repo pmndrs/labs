@@ -1,6 +1,7 @@
 import { isLikelyOptimizedOut } from '../bench/diagnostics.ts';
 import * as histogramFmt from '../bench/format/histogram.ts';
 import { formatGcColumns } from '../bench/format/gc.ts';
+import { formatOptimization } from '../bench/format/optimization.ts';
 import type { LabsConfig } from '../config.ts';
 import { calibrationExplainedFraction, comparisonResolution } from '../stats.ts';
 import {
@@ -320,6 +321,15 @@ function details(entry: RunEntry | undefined, width: number, state: TerminalView
       putColumns(y, place(row));
       y += 3;
     }
+  }
+  if (stats.optimization || stats.warmup) {
+    y++;
+    for (const [label, samples] of Object.entries(stats.optimization ?? {})) {
+      for (const line of wrapText(`${label}  ${formatOptimization(samples)}`, width)) {
+        canvas.put(y++, 0, line, GRAY);
+      }
+    }
+    if (stats.warmup) canvas.put(y++, 0, `settled   ${duration(stats.warmup.time)}`, GRAY);
   }
   canvas.put(y++, 0, '─'.repeat(width), DARK_GRAY);
   consistency(canvas, entry, 0, y, width >= 53 ? Math.floor((width - 3) / 2) : width);

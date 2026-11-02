@@ -68,6 +68,37 @@ function render(result = fixture(), columns = 100, detailOffset = 0, rows = 30) 
 }
 
 describe('run report', () => {
+  it('shows time to native tiers separately from settled timings and preserves mixed blocks', () => {
+    const result = fixture();
+    const stats = result.files[0].benchmarks[0].runs[0].stats!;
+    stats.warmup = { time: 20e6 };
+    stats.optimization = {
+      workload: [{ tier: 'DFG', time: 2e6 }, { tier: 'DFG', time: 4e6 }, null],
+      harness: [
+        { tier: 'FTL', time: 10e6 },
+        { tier: 'FTL', time: 14e6 },
+        { tier: 'DFG', time: 5e6 },
+      ],
+    };
+    const text = render(result, 120, 0, 40).lines.join('\n');
+    expect(text).toContain('workload');
+    expect(text).toContain('3.00 ms → DFG (2/3)');
+    expect(text).toContain('unavailable (1/3)');
+    expect(text).toContain('harness');
+    expect(text).toContain('12.00 ms → FTL (2/3)');
+    expect(text).toContain('5.00 ms → DFG (1/3)');
+    expect(text).toContain('settled   20.00 ms');
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      replayReport(result, defineConfig({ benchDir: '.' }));
+      const report = stripVTControlCharacters(log.mock.calls.flat().join('\n'));
+      expect(report).toContain('12.00 ms → FTL (2/3)');
+      expect(report).toContain('unavailable (1/3)');
+    } finally {
+      log.mockRestore();
+    }
+  });
+
   it.each([
     ['fn', false, 'fn'],
     ['fn', true, 'fn_gc'],

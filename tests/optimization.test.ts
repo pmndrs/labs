@@ -66,7 +66,9 @@ describe('observed optimization tiers', () => {
       { cwd: project, encoding: 'utf8', timeout: 60_000 }
     );
     expect(output.status, output.stderr || output.error?.message).toBe(0);
-    return loadResult(join(project, '.labs'), 'tiers').files[0].benchmarks[0].runs[0].stats!;
+    const stats = loadResult(join(project, '.labs'), 'tiers').files[0].benchmarks[0].runs[0].stats!;
+    expect(JSON.parse(output.stdout).benches[0].optimization).toEqual(stats.optimization);
+    return stats;
   }
 
   it.each(runtimes.filter((runtime) => runtime.available))(

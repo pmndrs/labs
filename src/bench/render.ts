@@ -3,6 +3,7 @@ import { min as arrMin, max as arrMax } from '../utils/math.ts';
 import { truncate, formatNs, formatBytes, formatAmount } from '../utils/units.ts';
 import * as histogramFmt from './format/histogram.ts';
 import { formatGcColumns } from './format/gc.ts';
+import { formatOptimization } from './format/optimization.ts';
 import * as boxplotFmt from './format/boxplot.ts';
 import * as barplotFmt from './format/barplot.ts';
 import * as lineplotFmt from './format/lineplot.ts';
@@ -253,6 +254,33 @@ export function renderReport(
 
               print(l);
             }
+          }
+
+          for (const [phase, samples] of Object.entries(r.stats!.optimization ?? {})) {
+            prev_run_gap = true;
+            const label = ' '.repeat(k_legend - 12) + phase + ' ';
+            const value = formatOptimization(samples);
+            print(
+              opts.colors
+                ? ansi.gray + label + ansi.reset + ansi.blue + value + ansi.reset
+                : label + value
+            );
+          }
+
+          if (r.stats!.warmup) {
+            prev_run_gap = true;
+            const settled = formatNs(r.stats!.warmup.time).padStart(9);
+            if (!opts.colors) print(' '.repeat(k_legend - 12) + 'settled ' + settled);
+            else
+              print(
+                ' '.repeat(k_legend - 12) +
+                  ansi.gray +
+                  'settled ' +
+                  ansi.reset +
+                  ansi.blue +
+                  settled +
+                  ansi.reset
+              );
           }
 
           if (r.stats!.heap) {
