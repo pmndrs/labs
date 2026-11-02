@@ -1,4 +1,5 @@
 import { execFileSync, spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { readFile, writeFile } from 'node:fs/promises';
 import { cpus, platform, arch } from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -13,7 +14,7 @@ import { observeChromeGc } from '../src/chrome-trace.ts';
 import { median } from '../src/stats.ts';
 
 type BrowserGlobal = typeof globalThis & { __labs: typeof browserHarness };
-type Measurement = Pick<Stats, 'p50' | 'avg' | 'gc' | 'plan'>;
+type Measurement = Pick<Stats, 'p50' | 'avg' | 'gc' | 'plan'> & { sourceHash: string };
 interface Input {
   index: number;
   observe: boolean;
@@ -29,16 +30,48 @@ interface Pair {
 }
 
 // Run with pnpm exec tsx tests/observe-gc.experiment.ts [pairs] [output.json] [plan-source.json] [runtimes].
-if (process.argv[2] === 'worker') {
+if (process.argv[2] === 'bun-host') {
   const input = JSON.parse(process.argv[3]) as Input;
-  process.env.LABS_OBSERVE = input.observe ? '1' : '0';
-  await import('./fixtures/observe-gc.bench.ts');
-  await measure(() => {}, { batch_unroll: 1, min_cpu_time: 5e7 });
-  const trial = await runTrialAt(input.index, input.tune, input.plan ? [input.plan] : undefined);
-  const run = trial.runs[0];
-  if (run.error) throw run.error;
-  const { p50, avg, gc, plan } = run.stats!;
-  console.log(JSON.stringify({ p50, avg, gc, plan }));
+  const args = ['--no-install', fileURLToPath(import.meta.url), 'worker', process.argv[3]];
+  if (input.observe) {
+    const { observeBunGc } = await import('../src/bun-inspector.ts');
+    const child = spawn(process.execPath, ['--inspect=127.0.0.1:0', ...args], {
+      stdio: ['ignore', 'inherit', 'pipe', 'ipc'],
+      env: { ...process.env, LABS_BUN_GC: '1' },
+    });
+    await observeBunGc(child);
+  } else {
+    execFileSync(process.execPath, args, {
+      stdio: ['ignore', 'inherit', 'inherit'],
+      env: { ...process.env, LABS_BUN_GC: '0' },
+    });
+  }
+} else if (process.argv[2] === 'worker') {
+  const input = JSON.parse(process.argv[3]) as Input;
+  const dispose =
+    process.env.LABS_BUN_GC === '1'
+      ? await (await import('../src/bench/lib/bun-gc.ts')).prepareBunGc()
+      : undefined;
+  try {
+    process.env.LABS_OBSERVE = input.observe ? '1' : '0';
+    await import('./fixtures/observe-gc.bench.ts');
+    await measure(() => {}, { batch_unroll: 1, min_cpu_time: 5e7 });
+    const trial = await runTrialAt(input.index, input.tune, input.plan ? [input.plan] : undefined);
+    const run = trial.runs[0];
+    if (run.error) throw run.error;
+    const { p50, avg, gc, plan, debug } = run.stats!;
+    console.log(
+      JSON.stringify({
+        p50,
+        avg,
+        gc,
+        plan,
+        sourceHash: createHash('sha256').update(debug).digest('hex'),
+      })
+    );
+  } finally {
+    await dispose?.();
+  }
 } else {
   const count = Number(process.argv[2] ?? 24);
   if (!Number.isSafeInteger(count) || count < 2 || count % 2) {
@@ -77,7 +110,7 @@ if (process.argv[2] === 'worker') {
             ? ['--no-install']
             : ['--expose-gc', '--allow-natives-syntax', '--import', import.meta.resolve('tsx')]),
           fileURLToPath(import.meta.url),
-          'worker',
+          runtime === 'bun' ? 'bun-host' : 'worker',
           JSON.stringify(input),
         ],
         { env: process.env, stdio: ['ignore', 'pipe', 'pipe'] }
@@ -134,11 +167,11 @@ if (process.argv[2] === 'worker') {
         : { result: await run(), events: [] };
       const result = captured.result.trial.runs[0];
       if (result.error) throw result.error;
-      const { p50, avg, plan } = result.stats!;
+      const { p50, avg, plan, debug } = result.stats!;
       const gc = input.observe
         ? chromeGcStats(captured.events, result.stats!.gc as ChromeGcWindow)
         : undefined;
-      return { p50, avg, plan, gc };
+      return { p50, avg, plan, gc, sourceHash: createHash('sha256').update(debug).digest('hex') };
     } finally {
       await browser.close();
     }
@@ -185,6 +218,10 @@ if (process.argv[2] === 'worker') {
             throw new Error('Plan changed');
           pair[observe ? 'on' : 'off'] = value;
         }
+        if (pair.on.sourceHash !== pair.off.sourceHash)
+          throw new Error('Observation changed the generated sampling code');
+        if (pair.on.gc === undefined || pair.off.gc !== undefined)
+          throw new Error('GC observation did not follow the requested configuration');
         pairs.push(pair);
       }
       await writeFile(output, JSON.stringify({ count, tune, pairs }, null, 2));
@@ -231,7 +268,7 @@ if (process.argv[2] === 'worker') {
           count,
           tune,
           method: {
-            traceStart: 'after-warmup',
+            sampling: 'identical generated sampling code with observation on or off',
             order: 'balanced randomized adjacent pairs, fresh process per measurement',
             estimate: 'geometric mean of paired on/off ratios with 20000 paired bootstrap resamples',
             planSource: process.argv[4] || 'unobserved pilots',
