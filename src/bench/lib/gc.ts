@@ -7,6 +7,27 @@ export interface GcObserver {
   cancel(): void;
 }
 
+/** Share the same sampling hooks with and without a native observer. */
+export class GcScope {
+  private observer: GcObserver | undefined;
+
+  constructor(observer?: GcObserver) {
+    this.observer = observer;
+  }
+
+  start(): void {
+    this.observer?.start();
+  }
+
+  finish(timed: number, iterations: number, comparable = false): Promise<GcStats> | undefined {
+    return this.observer?.finish(timed, iterations, comparable);
+  }
+
+  cancel(): void {
+    this.observer?.cancel();
+  }
+}
+
 /** Observe one sampling block without adding hooks around individual samples. */
 export class GcObservation {
   private static bun = (globalThis as any).process?.versions?.bun
