@@ -2,7 +2,7 @@ import { execFileSync, spawn } from 'node:child_process';
 import { readFileSync, rmSync, writeFileSync, writeSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { runChrome } from '../chrome.ts';
+import type { runBrowser } from '../browser-runner.ts';
 import type { BlockJob, BlockResult } from '../browser.ts';
 import { getBenchRegistry } from '../index.ts';
 import { median, relativeSpread } from '../stats.ts';
@@ -338,14 +338,16 @@ async function main(): Promise<void> {
     label = undefined;
     _print(s);
   };
-  let result: Awaited<ReturnType<typeof runChrome>>;
-  if (process.env.LABS_RUNTIME === 'chrome') {
-    const { runChrome } = await import('../chrome.ts');
-    result = await runChrome({
+  let result: Awaited<ReturnType<typeof runBrowser>>;
+  const runtime = process.env.LABS_RUNTIME;
+  if (runtime === 'chrome' || runtime === 'firefox' || runtime === 'webkit') {
+    const { runBrowser } = await import('../browser-runner.ts');
+    result = await runBrowser({
       file: file!,
+      runtime,
       tune: parseTuneEnv(),
       grepTags: process.env.LABS_GREP_TAGS,
-      chrome: process.env.LABS_CHROME ? JSON.parse(process.env.LABS_CHROME) : undefined,
+      launch: process.env.LABS_BROWSER ? JSON.parse(process.env.LABS_BROWSER) : undefined,
       snapshotTolerance:
         process.env.LABS_SNAPSHOT_TOLERANCE === undefined
           ? undefined

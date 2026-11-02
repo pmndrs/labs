@@ -160,8 +160,8 @@ export class B {
       $counters,
       ..._tune,
       sample_gc: gcMode,
-      // Always request initial collection. Custom GC hooks remain supported.
-      gc: 'function' === typeof _tune.gc ? _tune.gc : undefined,
+      // Allow browser adapters to skip collection when no native hook exists.
+      gc: _tune.gc === false || 'function' === typeof _tune.gc ? _tune.gc : undefined,
 
       heap:
         _tune.heap ??

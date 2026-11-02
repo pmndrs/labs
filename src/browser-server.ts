@@ -31,7 +31,7 @@ function contentType(file: string): string {
 }
 
 /** Serve bundled benchmarks and source-relative assets without a development client. */
-export async function startChromeServer(file: string) {
+export async function startBrowserServer(file: string) {
   const [{ build }, { parse }] = await Promise.all([import('esbuild'), import('@babel/parser')]);
   const benchFile = await realpath(fileURLToPath(file));
   const roots = new Set([await realpath(process.cwd()), dirname(benchFile)]);

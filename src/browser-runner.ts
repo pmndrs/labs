@@ -6,17 +6,20 @@ import type { LabsConfig } from './config.ts';
 import { chromeGcStats, type ChromeGcWindow } from './bench/lib/chrome-gc.ts';
 import { median } from './stats.ts';
 import { snapshotsDiffer } from './bench/lib/snapshot.ts';
-import { startChromeServer } from './chrome-server.ts';
+import { startBrowserServer } from './browser-server.ts';
 import { observeChromeGc } from './chrome-trace.ts';
+import { observeWebkitGc } from './webkit-gc.ts';
+import { observeFirefoxGc, prepareFirefoxGc } from './firefox-gc.ts';
 
 type BrowserGlobal = typeof globalThis & { __labs: typeof browserHarness };
 
-/** Bundle browser benchmarks once and execute every block in a fresh Chrome process. */
-export async function runChrome(options: {
+/** Bundle browser benchmarks once and execute every block in a fresh browser process. */
+export async function runBrowser(options: {
   file: string;
+  runtime: 'chrome' | 'firefox' | 'webkit';
   tune: MeasureOptions;
   grepTags?: string;
-  chrome?: LabsConfig['chrome'];
+  launch?: LabsConfig['chrome'];
   snapshotTolerance?: number;
   beforeDiagnostics?: () => Promise<void>;
   execute: (
@@ -24,22 +27,31 @@ export async function runChrome(options: {
     runTrial: (index: number, plans?: BlockPlan[]) => Promise<BlockResult>
   ) => Promise<Map<number, Trial>>;
 }) {
-  const { chromium } = await import('playwright-core');
-  const server = await startChromeServer(options.file);
+  const { chromium, firefox, webkit } = await import('playwright-core');
+  const engine = { chrome: chromium, firefox, webkit }[options.runtime];
+  const server = await startBrowserServer(options.file);
   const url = server.url;
 
   const withPage = async <T>(
     use: (page: Page, browser: Browser) => Promise<T>,
-    diagnostics = false
+    diagnostics = false,
+    env?: NodeJS.ProcessEnv
   ): Promise<T> => {
-    const browser = await chromium.launch({
-      channel: 'chrome',
-      executablePath: options.chrome?.executablePath,
-      headless: options.chrome?.headless ?? true,
-      args: [
-        '--js-flags=--expose-gc --allow-natives-syntax',
-        ...(diagnostics && options.tune.heap !== false ? ['--enable-precise-memory-info'] : []),
-      ],
+    const browser = await engine.launch({
+      executablePath: options.launch?.executablePath,
+      headless: options.launch?.headless ?? true,
+      ...(options.runtime === 'firefox'
+        ? { env: env ?? { ...process.env, MOZ_PROFILER_STARTUP: '0', MOZ_PROFILER_SHUTDOWN: '' } }
+        : {}),
+      ...(options.runtime === 'chrome'
+        ? {
+            channel: 'chrome',
+            args: [
+              '--js-flags=--expose-gc --allow-natives-syntax',
+              ...(diagnostics && options.tune.heap !== false ? ['--enable-precise-memory-info'] : []),
+            ],
+          }
+        : {}),
     });
     let pageError: Error | undefined;
     try {
@@ -71,46 +83,70 @@ export async function runChrome(options: {
     const result = await withPage(async (page, browser) => {
       await page.exposeFunction('__labsExecute', async (jobs: BlockJob[]) => {
         indices = jobs.map((job) => job.index);
-        const results = await options.execute(jobs, (index, plans) =>
-          withPage(async (child) => {
-            await load(child);
-            const calibration = await child.evaluate(() =>
-              (globalThis as BrowserGlobal).__labs.calibrate()
+        const results = await options.execute(jobs, (index, plans) => {
+          const observe =
+            options.tune.sample_gc !== false && jobs.find((job) => job.index === index)!.gc;
+          const execute = (env?: NodeJS.ProcessEnv) =>
+            withPage(
+              async (child) => {
+                await load(child);
+                const calibration = await child.evaluate(() =>
+                  (globalThis as BrowserGlobal).__labs.calibrate()
+                );
+                if (options.runtime !== 'chrome') await child.requestGC();
+                const measure = () =>
+                  child.evaluate(
+                    ({ index, tune, plans, calibration, observe }) =>
+                      (globalThis as BrowserGlobal).__labs.trial(
+                        index,
+                        tune,
+                        plans,
+                        calibration,
+                        observe
+                      ),
+                    {
+                      index,
+                      tune: options.tune,
+                      plans,
+                      calibration,
+                      observe: observe ? options.runtime : (false as const),
+                    }
+                  );
+                let measured: BlockResult;
+                if (observe && options.runtime === 'chrome') {
+                  const captured = await observeChromeGc(child, measure);
+                  measured = captured.result;
+                  if (
+                    measured.trial.runs.some((run) => run.stats?.gc) &&
+                    !captured.events.some(
+                      (event) => event.name === 'MajorGC' || event.name === 'MinorGC'
+                    )
+                  )
+                    throw new Error('Chrome GC trace did not capture collector events');
+                  for (const run of measured.trial.runs) {
+                    if (run.stats?.gc)
+                      run.stats.gc = chromeGcStats(captured.events, run.stats.gc as ChromeGcWindow);
+                  }
+                } else if (observe && options.runtime === 'webkit') {
+                  measured = await observeWebkitGc(child, measure);
+                } else if (observe) {
+                  const finish = await prepareFirefoxGc(child);
+                  try {
+                    measured = await measure();
+                  } finally {
+                    await finish();
+                  }
+                } else measured = await measure();
+                let recorded = blocks.get(index);
+                if (!recorded) blocks.set(index, (recorded = []));
+                recorded.push(measured);
+                return measured;
+              },
+              false,
+              env
             );
-            const observe =
-              options.tune.sample_gc !== false && jobs.find((job) => job.index === index)!.gc;
-            const measure = () =>
-              child.evaluate(
-                ({ index, tune, plans, calibration, observe }) =>
-                  (globalThis as BrowserGlobal).__labs.trial(
-                    index,
-                    tune,
-                    plans,
-                    calibration,
-                    observe
-                  ),
-                { index, tune: options.tune, plans, calibration, observe }
-              );
-            let measured: BlockResult;
-            if (observe) {
-              const captured = await observeChromeGc(child, measure);
-              measured = captured.result;
-              if (
-                measured.trial.runs.some((run) => run.stats?.gc) &&
-                !captured.events.some((event) => event.name === 'MajorGC' || event.name === 'MinorGC')
-              )
-                throw new Error('Chrome GC trace did not capture collector events');
-              for (const run of measured.trial.runs) {
-                if (run.stats?.gc)
-                  run.stats.gc = chromeGcStats(captured.events, run.stats.gc as ChromeGcWindow);
-              }
-            } else measured = await measure();
-            let recorded = blocks.get(index);
-            if (!recorded) blocks.set(index, (recorded = []));
-            recorded.push(measured);
-            return measured;
-          })
-        );
+          return observe && options.runtime === 'firefox' ? observeFirefoxGc(execute) : execute();
+        });
         return [...results];
       });
       await load(page);
@@ -118,7 +154,7 @@ export async function runChrome(options: {
         (tune) => (globalThis as BrowserGlobal).__labs.run(tune),
         options.tune
       );
-      result.context.runtime = 'chrome';
+      result.context.runtime = options.runtime;
       result.context.version = browser.version();
       result.context.arch = `${arch()}-${platform()}`;
       result.context.cpu.name = cpus()[0]?.model ?? null;
@@ -126,6 +162,7 @@ export async function runChrome(options: {
     });
     const replayable = [...blocks].filter(
       ([, parts]) =>
+        options.runtime === 'chrome' &&
         parts.every(({ trial }) => trial.runs.every((run) => run.stats?.plan)) &&
         options.tune.heap !== false
     );
