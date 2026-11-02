@@ -57,7 +57,7 @@ export function checkOptions(command: string, args: string[]): void {
         '--candidate',
       ],
     },
-    compare: { flags: ['-l', '--last', '--json'], values: [] },
+    compare: { flags: ['-l', '--last', '--json', '--fail-on-slower'], values: [] },
   };
   const { flags, values } = accepted[command] ?? { flags: [], values: [] };
   for (let i = 0; i < args.length; i++) {
