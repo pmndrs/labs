@@ -1,5 +1,11 @@
 import { snapshotsDiffer } from './bench/lib/snapshot.ts';
-import { formatGcCost, formatGcEvents, formatGcSpike, observedGcCost } from './bench/format/gc.ts';
+import {
+  formatGcCost,
+  formatGcEvents,
+  formatGcSpike,
+  gcLabel,
+  observedGcCost,
+} from './bench/format/gc.ts';
 import { type GcStats, type Snapshot, isAssertionError } from './bench/types.ts';
 import type { LabsConfig } from './config.ts';
 import { renderDistributions } from './histogram.ts';
@@ -590,7 +596,9 @@ export function compare(
         }
 
         const gc =
-          base.gcObserved === run.gcObserved && base.gcStats?.source === run.gcStats?.source
+          base.gcObserved === run.gcObserved &&
+          base.gcStats?.source === run.gcStats?.source &&
+          base.gcStats?.durationKind === run.gcStats?.durationKind
             ? metricChange(base.gcValue, run.gcValue)
             : undefined;
         const heap =
@@ -742,11 +750,7 @@ export function printCompareReport(result: CompareResult, config: LabsConfig): v
       {
         gc: bench.gc
           ? metricTag(
-              bench.gc.candidateStats?.source === 'replay'
-                ? 'gc replay'
-                : bench.gc.observed
-                  ? 'gc/iter'
-                  : 'gc',
+              gcLabel(bench.gc.candidateStats, bench.gc.observed ? 'perIteration' : undefined),
               formatTime(bench.gc.candidate),
               bench.gc.delta
             )
@@ -896,7 +900,9 @@ export function printCompareReport(result: CompareResult, config: LabsConfig): v
                   spike.slice(0, -stats.maxKind.length) + DARK_GRAY + stats.maxKind + GRAY
                 )
               : events;
-          console.log(`${GRAY}    ${side} GC: ${share} ✦ ${colored}${RESET}`);
+          console.log(
+            `${GRAY}    ${side} ${stats.durationKind === 'collection' ? 'GC activity' : 'GC'}: ${share} ✦ ${colored}${RESET}`
+          );
         }
       }
       console.log('');

@@ -1,4 +1,4 @@
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { readFileSync, rmSync, writeFileSync, writeSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -96,16 +96,24 @@ function errorReplacer(_: string, v: any): any {
  * calibration rate for the clock gate and replays the pilot's plan when given.
  */
 async function childMain(index: number): Promise<void> {
-  await import(file!);
-  const calibrationRate = await probeCalibrationRate();
-  const plans = process.env.LABS_BLOCK_PLANS
-    ? (JSON.parse(process.env.LABS_BLOCK_PLANS) as BlockPlan[])
-    : undefined;
-  const trial = await runTrialAt(index, parseTuneEnv(), plans);
-  writeFileSync(
-    process.env.LABS_RESULT_FILE!,
-    JSON.stringify({ trial, calibrationRate }, errorReplacer)
-  );
+  const dispose =
+    process.env.LABS_BUN_GC === '1'
+      ? await (await import('./lib/bun-gc.ts')).prepareBunGc()
+      : undefined;
+  try {
+    await import(file!);
+    const calibrationRate = await probeCalibrationRate();
+    const plans = process.env.LABS_BLOCK_PLANS
+      ? (JSON.parse(process.env.LABS_BLOCK_PLANS) as BlockPlan[])
+      : undefined;
+    const trial = await runTrialAt(index, parseTuneEnv(), plans);
+    writeFileSync(
+      process.env.LABS_RESULT_FILE!,
+      JSON.stringify({ trial, calibrationRate }, errorReplacer)
+    );
+  } finally {
+    await dispose?.();
+  }
 }
 
 let childSeq = 0;
@@ -115,22 +123,37 @@ let childSeq = 0;
  * `LABS_ONLY_INDEX` selecting the trial) so each bench measures against a
  * pristine engine with no JIT or heap contamination from earlier benches in the file.
  */
-function runTrialChild(
+async function runTrialChild(
   trial: any,
   index: number,
-  extraEnv: Record<string, string> = {}
-): { trial: Trial; calibrationRate: number } {
+  extraEnv: Record<string, string> = {},
+  observeGc = true
+): Promise<{ trial: Trial; calibrationRate: number }> {
   const resultFile = join(tmpdir(), `labs-trial-${process.pid}-${index}-${childSeq++}.json`);
   try {
-    execFileSync(process.execPath, [...process.execArgv, process.argv[1]], {
-      stdio: ['ignore', 'inherit', 'inherit'],
-      env: {
-        ...process.env,
-        ...extraEnv,
-        LABS_ONLY_INDEX: String(index),
-        LABS_RESULT_FILE: resultFile,
-      },
-    });
+    const env = {
+      ...process.env,
+      ...extraEnv,
+      LABS_ONLY_INDEX: String(index),
+      LABS_RESULT_FILE: resultFile,
+    };
+    if ((globalThis as any).Bun && observeGc && process.env.LABS_GC !== '0') {
+      const { observeBunGc } = await import('../bun-inspector.ts');
+      const child = spawn(
+        process.execPath,
+        ['--inspect=127.0.0.1:0', ...process.execArgv, process.argv[1]],
+        {
+          stdio: ['ignore', 'inherit', 'pipe', 'ipc'],
+          env: { ...env, LABS_BUN_GC: '1' },
+        }
+      );
+      await observeBunGc(child);
+    } else {
+      execFileSync(process.execPath, [...process.execArgv, process.argv[1]], {
+        stdio: ['ignore', 'inherit', 'inherit'],
+        env,
+      });
+    }
     return JSON.parse(readFileSync(resultFile, 'utf-8'));
   } catch (err) {
     throw new Error(`isolated bench "${trial?._name ?? index}" failed: ${String(err)}`, {
@@ -258,7 +281,7 @@ function mergeBlocks(parts: Array<{ trial: Trial; calibrationRate: number }>): T
  */
 function makeBlockExecutor(
   blocks: number,
-  runTrial: (index: number, plans?: BlockPlan[]) => Promise<BlockResult>
+  runTrial: (index: number, plans?: BlockPlan[], observeGc?: boolean) => Promise<BlockResult>
 ) {
   return async (jobs: BlockJob[]): Promise<Map<number, Trial>> => {
     const collected = new Map<number, Array<{ trial: Trial; calibrationRate: number }>>();
@@ -270,13 +293,13 @@ function makeBlockExecutor(
     });
 
     for (let block = 0; block < blocks; block++) {
-      for (const { index } of jobs) {
+      for (const { index, gc } of jobs) {
         // A pilot without a full set of plans (errored runs) is not replayable
         if (block > 0 && !plans.has(index)) continue;
         await takeTurn();
         emit({ type: 'bench', index, block });
         const started = performance.now();
-        const out = await runTrial(index, block === 0 ? undefined : plans.get(index));
+        const out = await runTrial(index, block === 0 ? undefined : plans.get(index), gc);
         const runs = out.trial.runs;
         const failed = runs.find((run) => run.error !== undefined);
         emit({
@@ -350,11 +373,12 @@ async function main(): Promise<void> {
   } else {
     await import(file!);
     const registry = getBenchRegistry();
-    const execute = makeBlockExecutor(blockCount(), async (index, plans) =>
+    const execute = makeBlockExecutor(blockCount(), async (index, plans, observeGc) =>
       runTrialChild(
         { _name: registry[index]?.alias },
         index,
-        plans ? { LABS_BLOCK_PLANS: JSON.stringify(plans) } : {}
+        plans ? { LABS_BLOCK_PLANS: JSON.stringify(plans) } : {},
+        observeGc
       )
     );
     const measured = await run({
