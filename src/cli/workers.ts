@@ -2,7 +2,8 @@ import { type ChildProcess, spawn } from 'node:child_process';
 import type { ProgressEvent } from './progress.ts';
 
 export interface WorkerSpec {
-  /** Arguments for the node executable, ending with the worker script. */
+  execPath?: string;
+  /** Arguments for the runtime executable, ending with the worker script. */
   args: string[];
   env: NodeJS.ProcessEnv;
   cwd?: string;
@@ -60,7 +61,7 @@ export function runWorkers(specs: WorkerSpec[]): Promise<void> {
     };
 
     for (const spec of specs) {
-      const child = spawn(process.execPath, spec.args, {
+      const child = spawn(spec.execPath ?? process.execPath, spec.args, {
         cwd: spec.cwd,
         stdio: spec.live
           ? ['ignore', 'pipe', 'pipe', 'pipe', 'ipc']

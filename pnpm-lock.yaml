@@ -23,6 +23,9 @@ importers:
       fast-string-width:
         specifier: ^3.0.2
         version: 3.0.2
+      get-tsconfig:
+        specifier: ^4.14.3
+        version: 4.14.3
       import-meta-resolve:
         specifier: ^4.2.0
         version: 4.2.0
@@ -1149,6 +1152,9 @@ packages:
     engines: {node: ^8.16.0 || ^10.6.0 || >=11.0.0}
     os: [darwin]
 
+  get-tsconfig@4.14.3:
+    resolution: {integrity: sha512-++QEw4DIY7WGoukz+/+A/8dGYPT9l9yIadnmSgZ8Rjr3YVSVDipQSO9CdnJo9ePqFqUUqh+wk9uIaoiAwsiPkA==}
+
   get-tsconfig@5.0.0-beta.5:
     resolution: {integrity: sha512-/6gFNr0N04nob252sTQxyFLi3eKFRqIg1I87YcqAMT1i6SQrSF6KujUEQrtrjMV0H/eejTCltLdDSTEMzHbnsQ==}
     engines: {node: '>=20.20.0'}
@@ -2200,6 +2206,10 @@ snapshots:
 
   fsevents@2.3.3:
     optional: true
+
+  get-tsconfig@4.14.3:
+    dependencies:
+      resolve-pkg-maps: 1.0.0
 
   get-tsconfig@5.0.0-beta.5:
     dependencies:

@@ -2,7 +2,7 @@ import * as module from 'node:module';
 import * as labs from './index.ts';
 
 // Benchmarks and the worker must register trials in the same Labs instance.
-if (process.env.LABS_BENCH_FILE) {
+if (process.env.LABS_BENCH_FILE && !(globalThis as any).Bun) {
   const entry = new URL(
     import.meta.url.endsWith('.ts') ? './index.ts' : './index.mjs',
     import.meta.url

@@ -9,6 +9,12 @@ export interface GcObserver {
 
 /** Observe one sampling block without adding hooks around individual samples. */
 export class GcObservation {
+  private static bun = (globalThis as any).process?.versions?.bun
+    ? Promise.all([import('node:v8'), import('./bun-gc.ts')]).then(
+        ([{ GCProfiler }, { BunGcObservation }]) =>
+          typeof GCProfiler === 'function' ? () => new BunGcObservation(new GCProfiler()) : undefined
+      )
+    : undefined;
   private entries: PerformanceEntry[] = [];
   private startTime = 0;
   private observer: import('node:perf_hooks').PerformanceObserver;
@@ -30,10 +36,15 @@ export class GcObservation {
     if (!(globalThis as any).process?.versions?.node) {
       return (globalThis as any).__LABS_GC_OBSERVER?.();
     }
+    if (GcObservation.bun) {
+      const create = await GcObservation.bun;
+      return create?.();
+    }
     const [hooks, timers] = await Promise.all([
       import('node:perf_hooks'),
       import('node:timers/promises'),
     ]);
+    if (!hooks.PerformanceObserver.supportedEntryTypes.includes('gc')) return;
     return new GcObservation(hooks, timers.setImmediate);
   }
 

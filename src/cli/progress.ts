@@ -54,7 +54,7 @@ interface FileProgress {
 
 export interface RunProgress {
   name: string;
-  runtime: 'node' | 'chrome';
+  runtime: 'node' | 'chrome' | 'bun';
   started: number;
   files: FileProgress[];
 }

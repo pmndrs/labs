@@ -6,10 +6,13 @@ export interface LabsConfig {
   /** Node.js CLI flags passed when running each bench worker. */
   nodeFlags: string[];
   /** Runtime used to execute benchmark blocks. @default "node" */
-  runtime?: 'node' | 'chrome';
+  runtime?: 'node' | 'chrome' | 'bun';
   chrome?: {
     executablePath?: string;
     headless?: boolean;
+  };
+  bun?: {
+    executablePath?: string;
   };
   /** Directory for saved results and baseline pointer, relative to config file. @default ".labs" */
   resultsDir: string;
@@ -21,7 +24,7 @@ export interface LabsConfig {
   /** Minimum samples per block. @default 20 */
   minSamples?: number;
   /** Observe GC during sampling. Omitted runtime settings default to true. */
-  gc?: boolean | Partial<Record<'node' | 'chrome', boolean>>;
+  gc?: boolean | Partial<Record<'node' | 'chrome' | 'bun', boolean>>;
   heap?: boolean;
   /** Mann-Whitney U significance level. @default 0.05 */
   alpha: number;
