@@ -17,7 +17,7 @@ import type { CLIContext } from '../types.ts';
 import { dateHint, error, gitHint } from '../utils.ts';
 
 export async function runCompareCommand(ctx: CLIContext, args: string[]): Promise<void> {
-  const candidateArg = args.find((arg) => !arg.startsWith('--') || arg === '--last');
+  const names = args.filter((arg) => !arg.startsWith('-'));
   const json = args.includes('--json');
   // In JSON mode stdout carries only the JSON document, so messages go to stderr
   if (json) console.log = console.error;
@@ -26,7 +26,8 @@ export async function runCompareCommand(ctx: CLIContext, args: string[]): Promis
 
   // Replaying needs no baseline pointer: the stored pair may come from a
   // `--against` run, which never sets one.
-  if (candidateArg === '--last' || args.includes('-l')) {
+  if (names.length > 2) error('bench compare takes at most two result names');
+  if (args.includes('--last') || args.includes('-l')) {
     const last = getLastComparison(ctx.labsDir);
     if (!last) error('No previous comparison found');
     compareBaselineName = last.baselineName;
@@ -34,11 +35,13 @@ export async function runCompareCommand(ctx: CLIContext, args: string[]): Promis
     console.log(
       `${CYAN}labs${RESET} ${DIM}(replaying last compare: ${compareBaselineName} -> ${candidateName})${RESET}`
     );
-  } else if (candidateArg) {
+  } else if (names.length === 2) {
+    [compareBaselineName, candidateName] = names;
+  } else if (names.length === 1) {
     const baselineName = getBaseline(ctx.labsDir);
     if (!baselineName) error('No baseline set. Run: bench baseline <name>');
     compareBaselineName = baselineName;
-    candidateName = candidateArg;
+    candidateName = names[0];
   } else {
     const baselineName = getBaseline(ctx.labsDir);
     if (!baselineName) error('No baseline set. Run: bench baseline <name>');
