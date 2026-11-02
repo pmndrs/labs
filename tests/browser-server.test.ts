@@ -3,11 +3,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { expect, it } from 'vitest';
-import { startChromeServer } from '../src/chrome-server.ts';
+import { startBrowserServer } from '../src/browser-server.ts';
 
 it('serves local fixtures while rejecting filesystem paths and symlinks outside the asset roots', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'labs-assets-'));
-  let server: Awaited<ReturnType<typeof startChromeServer>> | undefined;
+  let server: Awaited<ReturnType<typeof startBrowserServer>> | undefined;
   try {
     mkdirSync(join(directory, 'project'));
     mkdirSync(join(directory, 'outside'));
@@ -47,7 +47,7 @@ it('serves local fixtures while rejecting filesystem paths and symlinks outside 
     writeFileSync(join(directory, 'project', 'fixture.json'), '{"value":42}');
     writeFileSync(join(directory, 'outside', 'file.txt'), 'outside');
     symlinkSync(join(directory, 'outside'), join(directory, 'project', 'escape'), 'junction');
-    server = await startChromeServer(pathToFileURL(file).href);
+    server = await startBrowserServer(pathToFileURL(file).href);
     const bundle = await (await fetch(`${server.url}/bench.js`)).text();
     const imageUrl = bundle.match(/"([^"\n]+\.svg)"/)![1];
     const image = await fetch(new URL(imageUrl, server.url));

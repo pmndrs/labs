@@ -1,3 +1,5 @@
+export type Runtime = 'node' | 'chrome' | 'bun' | 'firefox' | 'webkit';
+
 export interface LabsConfig {
   /** Directory to search for bench files, relative to the config file. */
   benchDir: string;
@@ -6,8 +8,16 @@ export interface LabsConfig {
   /** Node.js CLI flags passed when running each bench worker. */
   nodeFlags: string[];
   /** Runtime used to execute benchmark blocks. @default "node" */
-  runtime?: 'node' | 'chrome' | 'bun';
+  runtime?: Runtime;
   chrome?: {
+    executablePath?: string;
+    headless?: boolean;
+  };
+  firefox?: {
+    executablePath?: string;
+    headless?: boolean;
+  };
+  webkit?: {
     executablePath?: string;
     headless?: boolean;
   };
@@ -24,7 +34,7 @@ export interface LabsConfig {
   /** Minimum samples per block. @default 20 */
   minSamples?: number;
   /** Observe GC during sampling. Omitted runtime settings default to true. */
-  gc?: boolean | Partial<Record<'node' | 'chrome' | 'bun', boolean>>;
+  gc?: boolean | Partial<Record<Runtime, boolean>>;
   heap?: boolean;
   /** Mann-Whitney U significance level. @default 0.05 */
   alpha: number;

@@ -137,6 +137,8 @@ type WorkerTune = Pick<
   | 'counters'
   | 'runtime'
   | 'chrome'
+  | 'firefox'
+  | 'webkit'
   | 'snapshotTolerance'
 > & { gc?: boolean };
 
@@ -159,7 +161,9 @@ function workerEnv(
     ...(tune.snapshotTolerance !== undefined
       ? { LABS_SNAPSHOT_TOLERANCE: String(tune.snapshotTolerance) }
       : {}),
-    ...(tune.chrome ? { LABS_CHROME: JSON.stringify(tune.chrome) } : {}),
+    ...(tune.runtime === 'chrome' || tune.runtime === 'firefox' || tune.runtime === 'webkit'
+      ? { LABS_BROWSER: JSON.stringify(tune[tune.runtime] ?? {}) }
+      : {}),
     ...(tune.blockTime !== undefined ? { LABS_BLOCK_TIME: String(tune.blockTime * 1e9) } : {}),
     ...(tune.minSamples !== undefined ? { LABS_MIN_SAMPLES: String(tune.minSamples) } : {}),
     ...(tune.gc === false ? { LABS_GC: '0' } : {}),
@@ -425,8 +429,14 @@ export async function runCLI(args: string[]) {
   }
   const blocks = blocksFlag !== undefined ? Number(blocksFlag) : (config.blocks ?? 8);
   const runtime = flagValue(benchArgs, '--runtime') ?? config.runtime ?? 'node';
-  if (runtime !== 'node' && runtime !== 'chrome' && runtime !== 'bun') {
-    error(`Invalid runtime "${runtime}". Expected node, chrome, or bun`);
+  if (
+    runtime !== 'node' &&
+    runtime !== 'chrome' &&
+    runtime !== 'bun' &&
+    runtime !== 'firefox' &&
+    runtime !== 'webkit'
+  ) {
+    error(`Invalid runtime "${runtime}". Expected node, chrome, bun, firefox, or webkit`);
   }
   if (runtime !== 'node' && config.counters) {
     error('Hardware counters are only supported with the node runtime');
@@ -440,6 +450,8 @@ export async function runCLI(args: string[]) {
     blocks,
     runtime,
     chrome: config.chrome,
+    firefox: config.firefox,
+    webkit: config.webkit,
     snapshotTolerance: config.snapshotTolerance,
     counters: config.counters && resolveCounters(config.counters, configPath),
   };

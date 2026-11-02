@@ -3,7 +3,7 @@ import type { GeneratorBench } from './bench/types.ts';
 
 export { assert, AssertionError } from './assert.ts';
 export { defineConfig } from './config.ts';
-export type { LabsConfig } from './config.ts';
+export type { LabsConfig, Runtime } from './config.ts';
 
 const tagStack: string[][] = [];
 const groupNameStack: string[] = [];
