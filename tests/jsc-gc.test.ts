@@ -1,18 +1,18 @@
 import { describe, expect, it } from 'vitest';
-import { bunGcStats, type BunGcEvent, type BunGcWindow } from '../src/bench/lib/bun-gc.ts';
+import { jscGcStats, type JscGcEvent, type JscGcWindow } from '../src/bench/lib/jsc-gc.ts';
 import { formatGcColumns, formatGcEvents } from '../src/bench/format/gc.ts';
 
-function window(): BunGcWindow {
+function window(): JscGcWindow {
   return { start: 100, end: 200, timed: 60, iterations: 4, comparable: true };
 }
 
-function event(type: 'full' | 'partial', start: number, end: number): BunGcEvent {
+function event(type: 'full' | 'partial', start: number, end: number): JscGcEvent {
   return { type, startTime: start / 1e9, endTime: end / 1e9 };
 }
 
-describe('Bun GC activity', () => {
+describe('JavaScriptCore GC activity', () => {
   it('counts collections crossing either sampling boundary and clips their durations', () => {
-    const stats = bunGcStats(
+    const stats = jscGcStats(
       [
         event('full', 10, 50),
         event('partial', 80, 130),
@@ -40,7 +40,7 @@ describe('Bun GC activity', () => {
   });
 
   it('reports ambiguous boundary events without losing short collections wholly inside sampling', () => {
-    const stats = bunGcStats(
+    const stats = jscGcStats(
       [event('full', 70, 95), event('partial', 130, 135), event('full', 205, 240)],
       window(),
       { min: -10, max: 10 }
@@ -48,7 +48,7 @@ describe('Bun GC activity', () => {
     expect(stats).toMatchObject({ count: 1, minor: 1, major: 0, total: 5, boundaryUncertain: 2 });
     expect(stats.overlap).toEqual({ min: 0, max: 15 });
     expect(formatGcEvents(stats)).toContain('2 boundary uncertain');
-    const uncertain = bunGcStats([event('full', 70, 95)], window(), { min: -10, max: 10 });
+    const uncertain = jscGcStats([event('full', 70, 95)], window(), { min: -10, max: 10 });
     expect(formatGcColumns(uncertain)[0].value).toBe('—');
     expect(formatGcEvents(uncertain)).toBe('1 boundary uncertain');
   });

@@ -1,5 +1,5 @@
 import type { ChildProcess } from 'node:child_process';
-import { bunGcClock, bunGcStats, type BunGcClock, type BunGcEvent } from './bench/lib/bun-gc.ts';
+import { jscGcClock, jscGcStats, type JscGcClock, type JscGcEvent } from './bench/lib/jsc-gc.ts';
 import type { GcStats } from './bench/types.ts';
 
 /** Record an isolated Bun process externally, keeping event decoding outside sampling. */
@@ -9,7 +9,7 @@ export async function observeBunGc(child: ChildProcess): Promise<void> {
   let failure: Error | undefined;
   let finished = false;
   let socket: WebSocket | undefined;
-  let clock: BunGcClock | undefined;
+  let clock: JscGcClock | undefined;
   let sequence = 0;
   let chain = Promise.resolve();
   const frames: string[] = [];
@@ -43,7 +43,7 @@ export async function observeBunGc(child: ChildProcess): Promise<void> {
     }
   };
   const readEvents = () =>
-    frames.splice(0).map((frame) => JSON.parse(frame).params.collection as BunGcEvent);
+    frames.splice(0).map((frame) => JSON.parse(frame).params.collection as JscGcEvent);
   let stderr = '';
   let banner = false;
   child.stderr!.setEncoding('utf8');
@@ -97,14 +97,14 @@ export async function observeBunGc(child: ChildProcess): Promise<void> {
         let value: GcStats | undefined;
         if (message.type === 'labs:bun-gc:clock') {
           await send('Console.disable');
-          clock = bunGcClock(message.probes, readEvents());
+          clock = jscGcClock(message.probes, readEvents());
           clearTimeout(timeout);
         } else if (message.type === 'labs:bun-gc:window') {
           if (!clock) throw new Error('Bun GC inspector clock is unavailable');
           // Complete concurrent work after the end marker, then drain its notifications.
           await send('Heap.gc');
           await send('Console.disable');
-          value = bunGcStats(readEvents(), message.window, clock);
+          value = jscGcStats(readEvents(), message.window, clock);
         } else if (message.type === 'labs:bun-gc:done') {
           socket?.close();
         }
