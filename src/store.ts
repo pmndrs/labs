@@ -148,7 +148,8 @@ export interface SavedResult {
     };
   };
   files: SavedFile[];
-  environment?: { freqs: FreqSample[] };
+  /** Clock readings, with the partner's readings from the same minutes for interleaved runs. */
+  environment?: { freqs: FreqSample[]; paired?: FreqSample[] };
 }
 
 export interface LastComparison {
@@ -162,14 +163,35 @@ function freqReadings(freqs: FreqSample[]): number[] {
   return freqs.flatMap((s) => [s.runFreq, s.postFreq]);
 }
 
-/** Returns true if the CPU clock was stable during the run (drift ≤ threshold). */
+/**
+ * Largest relative difference between a run's readings and those its
+ * interleaved partner took in the same minutes. Slow drift moves both sides
+ * together and cancels here, so only drift the pairing failed to absorb remains.
+ */
+export function pairedFreqDrift(freqs: FreqSample[], paired: FreqSample[]): number {
+  let drift = 0;
+  for (const sample of freqs) {
+    const partner = paired.find((p) => p.file === sample.file);
+    if (!partner) continue;
+    for (const [a, b] of [
+      [sample.runFreq, partner.runFreq],
+      [sample.postFreq, partner.postFreq],
+    ]) {
+      drift = Math.max(drift, Math.abs(a - b) / ((a + b) / 2));
+    }
+  }
+  return drift;
+}
+
+/**
+ * Returns true if the CPU clock was stable during the run (drift ≤ threshold).
+ * Interleaved runs are judged by the drift between paired blocks instead.
+ */
 export function isEnvironmentStable(result: SavedResult, threshold = 0.05): boolean {
-  const freqs = result.environment?.freqs ?? [];
-  if (freqs.length === 0) return true;
-  const all = freqReadings(freqs);
-  const min = Math.min(...all);
-  const max = Math.max(...all);
-  return (max - min) / ((max + min) / 2) <= threshold;
+  const env = result.environment;
+  if (!env || env.freqs.length === 0) return true;
+  if (env.paired) return pairedFreqDrift(env.freqs, env.paired) <= threshold;
+  return resultFreqDrift(result) <= threshold;
 }
 
 /** Median CPU frequency across all freq samples, falling back to the hardware snapshot. */

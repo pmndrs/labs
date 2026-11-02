@@ -17,7 +17,13 @@ import {
   median,
   minMannWhitneyP,
 } from './stats.ts';
-import { type FreqSample, type GitInfo, type SavedResult, isEnvironmentStable } from './store.ts';
+import {
+  type FreqSample,
+  type GitInfo,
+  type SavedResult,
+  isEnvironmentStable,
+  pairedFreqDrift,
+} from './store.ts';
 import { gitHint } from './cli/utils.ts';
 import { BOLD, CYAN, DARK_GRAY, DIM, GRAY, GREEN, RED, RESET, WHITE, YELLOW } from './utils/ansi.ts';
 import { formatDelta, formatP, formatTime, visibleLength } from './utils/format.ts';
@@ -81,13 +87,20 @@ export const warnClockDrift: EnvironmentWarning = (baseline, candidate) => {
   const bFreqs = baseline.environment?.freqs ?? [];
   const cFreqs = candidate.environment?.freqs ?? [];
 
-  if (!isEnvironmentStable(baseline)) {
-    const drift = freqDrift(bFreqs);
-    warnings.push(`baseline CPU clock drifted ${(drift * 100).toFixed(1)}% during its run`);
-  }
-  if (!isEnvironmentStable(candidate)) {
-    const drift = freqDrift(cFreqs);
-    warnings.push(`candidate CPU clock drifted ${(drift * 100).toFixed(1)}% during its run`);
+  // Interleaved runs drift together, so only the drift between paired blocks counts.
+  if (baseline.environment?.paired && candidate.environment?.paired) {
+    const drift = pairedFreqDrift(bFreqs, cFreqs);
+    if (drift > CLOCK_COMPARE_THRESHOLD)
+      warnings.push(`CPU clock drifted ${(drift * 100).toFixed(1)}% between paired blocks`);
+  } else {
+    if (!isEnvironmentStable(baseline)) {
+      const drift = freqDrift(bFreqs);
+      warnings.push(`baseline CPU clock drifted ${(drift * 100).toFixed(1)}% during its run`);
+    }
+    if (!isEnvironmentStable(candidate)) {
+      const drift = freqDrift(cFreqs);
+      warnings.push(`candidate CPU clock drifted ${(drift * 100).toFixed(1)}% during its run`);
+    }
   }
 
   let bFreq = 0;

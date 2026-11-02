@@ -208,4 +208,19 @@ describe('run summary', () => {
     expect(text).toContain('Saved  abc1234  baseline');
     expect(text).not.toContain('┌');
   });
+
+  it('reports the drift between paired blocks for interleaved runs', () => {
+    const lines = captureReport(() =>
+      printRunSummary({
+        envData: [{ file: 'a.bench.ts', runFreq: 1.55, postFreq: 1.81 }],
+        paired: [{ file: 'a.bench.ts', runFreq: 1.56, postFreq: 1.8 }],
+        cpu: 'Apple M5',
+        blocks: 8,
+        minDelta: 0.05,
+        diagnostics: emptyDiagnostics(),
+        counts: { passed: 1, warned: 0, failed: 0 },
+      })
+    );
+    expect(lines.join('\n')).toContain('CPU  speed varied 15%  paired 1%  stable');
+  });
 });
