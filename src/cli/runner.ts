@@ -27,6 +27,7 @@ import {
 import { BLUE, CYAN, DIM, GREEN, RED, RESET, YELLOW } from '../utils/ansi.ts';
 import { runBaselineCommand } from './commands/baseline.ts';
 import { runCompareCommand } from './commands/compare.ts';
+import { checkOptions, usage } from './help.ts';
 import { runDeleteCommand } from './commands/delete.ts';
 import { runListCommand } from './commands/list.ts';
 import { runPruneCommand } from './commands/prune.ts';
@@ -277,6 +278,15 @@ function flagValue(args: string[], flag: string): string | undefined {
 }
 
 export async function runCLI(args: string[]) {
+  if (args.includes('-h') || args.includes('--help')) {
+    console.log(usage());
+    return;
+  }
+  const command = ['list', 'clear', 'delete', 'prune', 'baseline', 'compare', 'run'].includes(args[0])
+    ? args[0]
+    : 'run';
+  checkOptions(command, command === args[0] ? args.slice(1) : args);
+
   const cwd = process.cwd();
   const configCandidates = ['labs.config.ts', 'benches/labs.config.ts'].map((p) => resolve(cwd, p));
   const configPath = configCandidates.find(existsSync);
@@ -336,9 +346,6 @@ export async function runCLI(args: string[]) {
   // In JSON mode stdout carries only the JSON document, so messages go to stderr
   if (json) console.log = console.error;
   const interactive = !json && isInteractiveTerminal();
-  if (benchArgs.includes('--run') || benchArgs.includes('--runs')) {
-    error('`--run`/`--runs` are no longer supported; labs is single-run only');
-  }
 
   const benchDir = resolve(dirname(configPath), config.benchDir);
   if (!existsSync(benchDir)) error(`benchDir not found: ${benchDir}`);
