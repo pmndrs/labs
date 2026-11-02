@@ -11,7 +11,7 @@ import { toSnapshot } from './snapshot.ts';
 import { batchSize, defaults } from './constants.ts';
 import { createWarmup, isWarmupDone, isWarmupUnsettled, recordWarmup } from './warmup.ts';
 import { memoryPass } from './memory.ts';
-import { GcObservation } from './gc.ts';
+import { GcObservation, GcScope } from './gc.ts';
 
 /** Range and median of the per-sample values, sorted in place. */
 function summarize(values: Float64Array): { min: number; max: number; p50: number } {
@@ -312,7 +312,9 @@ export async function benchFn(fn: (...args: any[]) => any, opts: any = {}): Prom
   `;
   const collect = !!(opts.gc && !opts.gc.fallback);
   const samples = createSamples(opts.max_samples);
-  const observation = opts.sample_gc ? await GcObservation.create() : undefined;
+  const observer = opts.sample_gc ? await GcObservation.create() : undefined;
+  const observation = new GcScope(observer);
+  const awaitGcOutsideLoop = !opts.heap;
   const after = !opts.after ? '' : 'await $after();';
 
   const loop: (...args: any[]) => Promise<any> = new AsyncFunction(
@@ -344,7 +346,7 @@ export async function benchFn(fn: (...args: any[]) => any, opts: any = {}): Prom
     ).join('\n')}
 
     ${!opts.gc ? '' : '$gc();'}
-    ${!observation ? '' : '$observation.start();'}
+    $observation.start();
 
     for (; _ < ${samples.length}; _++) {
       if (_ >= ${opts.min_samples} && t >= ${opts.min_cpu_time}) break;
@@ -361,7 +363,7 @@ export async function benchFn(fn: (...args: any[]) => any, opts: any = {}): Prom
       ${after}
     }
 
-    ${!observation ? '' : `const gc = await $observation.finish(t, _ * ${batch ? batchSamples : 1}, ${now === runtimeNow && !opts.manual});`}
+    const gc = ${awaitGcOutsideLoop ? '' : 'await '}$observation.finish(t, _ * ${batch ? batchSamples : 1}, ${now === runtimeNow && !opts.manual});
     ${
       !opts.$counters
         ? ''
@@ -382,7 +384,7 @@ export async function benchFn(fn: (...args: any[]) => any, opts: any = {}): Prom
       ticks: _ ${!batch ? '' : `* ${batchSamples}`},
       plan: { batch: ${batch}, batch_samples: ${batchSamples}, batch_unroll: ${opts.batch_unroll}, samples: _ },
       ${!opts.heap ? '' : 'heap: $summary(heap),'}
-      ${!observation ? '' : 'gc,'}
+      gc,
       ${!opts.$counters ? '' : '...(!_hc ? {} : { counters }),'}
     };
   `
@@ -396,7 +398,7 @@ export async function benchFn(fn: (...args: any[]) => any, opts: any = {}): Prom
   if (!batch) never_optimize(loop);
 
   try {
-    return {
+    const measured = {
       kind: 'fn' as const,
       debug: loop.toString(),
       ...(isWarmupUnsettled(warmup, opts) ? { unsettled: true } : {}),
@@ -415,8 +417,11 @@ export async function benchFn(fn: (...args: any[]) => any, opts: any = {}): Prom
         summarizeSamples
       )),
     };
+    if (observer && awaitGcOutsideLoop) measured.gc = await measured.gc;
+    if (!observer) delete measured.gc;
+    return measured;
   } finally {
-    observation?.cancel();
+    observation.cancel();
   }
 }
 
@@ -444,7 +449,7 @@ export async function benchIter(iter: (...args: any[]) => any, opts: any = {}): 
   const now: () => number = opts.now;
   let batchSamples = 0;
   const samples = createSamples(opts.max_samples);
-  const observation = opts.sample_gc ? await GcObservation.create() : undefined;
+  const observation = new GcScope(opts.sample_gc ? await GcObservation.create() : undefined);
   const _i = {
     next() {
       return _.next();
@@ -506,7 +511,7 @@ export async function benchIter(iter: (...args: any[]) => any, opts: any = {}): 
       (_.debug = `
       let _ = 0; let t = 0;
       ${!opts.gc ? '' : '$gc();'}
-      ${!observation ? '' : '$observation.start();'}
+      $observation.start();
 
       for (; _ < ${samples.length}; _++) {
         if (_ >= ${opts.min_samples} && t >= ${opts.min_cpu_time}) break;
@@ -520,7 +525,7 @@ export async function benchIter(iter: (...args: any[]) => any, opts: any = {}): 
       $state.count = _;
       $state.timed = t;
       $state.iterations = _ * ${batch ? batchSamples : 1};
-      ${!observation ? '' : `$state.gc = $observation.finish(t, $state.iterations, ${now === runtimeNow});`}
+      $state.gc = $observation.finish(t, $state.iterations, ${now === runtimeNow});
     `)
     )(opts.gc, opts.now, samples, _, observation);
 
@@ -533,7 +538,7 @@ export async function benchIter(iter: (...args: any[]) => any, opts: any = {}): 
     await iter(((_.next = gen.next.bind(gen)), ctx));
     if (_.gc) _.gc = await _.gc;
   } finally {
-    observation?.cancel();
+    observation.cancel();
   }
   if (_.iterations === undefined)
     throw new TypeError('expected iterator to consume all measurement iterations');
