@@ -37,6 +37,25 @@ export const never_optimize: (f: (...args: any[]) => any) => void = (() => {
   }
 })();
 
+/**
+ * Top-tier compilation of `f` on demand. `prepare` goes before the calls that
+ * collect type feedback and `next` compiles `f` for its following call. Needs
+ * natives syntax, which the CLI enables, and is undefined elsewhere.
+ */
+export const force_optimize: { prepare(f: Function): void; next(f: Function): void } | undefined =
+  (() => {
+    try {
+      return {
+        // oxlint-disable-next-line typescript/no-implied-eval
+        prepare: new Function('f', '%PrepareFunctionForOptimization(f)') as (f: Function) => void,
+        // oxlint-disable-next-line typescript/no-implied-eval
+        next: new Function('f', '%OptimizeFunctionOnNextCall(f)') as (f: Function) => void,
+      };
+    } catch {
+      return undefined;
+    }
+  })();
+
 /** Resolved `console.log` (or runtime-specific equivalent). */
 export const _print: (s: any) => void = (() => {
   if (globalThis.console?.log) return globalThis.console.log;
@@ -113,14 +132,12 @@ export const now: () => number = (() => {
  * @param _ - When `true`, skip the zero-arg check (allows parameterised fns).
  */
 export function kind(fn: any, _: boolean = false): FnKind | undefined {
-  if (
-    !(
-      fn instanceof Function ||
-      fn instanceof AsyncFunction ||
-      fn instanceof GeneratorFunction ||
-      fn instanceof AsyncGeneratorFunction
-    )
-  )
+  if (!(
+    fn instanceof Function ||
+    fn instanceof AsyncFunction ||
+    fn instanceof GeneratorFunction ||
+    fn instanceof AsyncGeneratorFunction
+  ))
     return;
 
   if (fn instanceof GeneratorFunction || fn instanceof AsyncGeneratorFunction) return 'yield';
