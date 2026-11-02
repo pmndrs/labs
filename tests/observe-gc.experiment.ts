@@ -3,14 +3,16 @@ import { createHash } from 'node:crypto';
 import { readFile, writeFile } from 'node:fs/promises';
 import { cpus, platform, arch } from 'node:os';
 import { fileURLToPath } from 'node:url';
-import { chromium } from 'playwright-core';
-import type { browserHarness, BrowserCalibration } from '../src/browser.ts';
+import { chromium, firefox, webkit } from 'playwright-core';
+import type { browserHarness, BrowserCalibration, BlockResult } from '../src/browser.ts';
 import type { BlockPlan, MeasureOptions, Stats } from '../src/bench/types.ts';
 import { chromeGcStats, type ChromeGcWindow } from '../src/bench/lib/chrome-gc.ts';
 import { measure } from '../src/bench/index.ts';
 import { runTrialAt } from '../src/bench/main.ts';
 import { startBrowserServer } from '../src/browser-server.ts';
 import { observeChromeGc } from '../src/chrome-trace.ts';
+import { observeWebkitGc } from '../src/webkit-gc.ts';
+import { observeFirefoxGc, prepareFirefoxGc } from '../src/firefox-gc.ts';
 import { median } from '../src/stats.ts';
 
 type BrowserGlobal = typeof globalThis & { __labs: typeof browserHarness };
@@ -22,7 +24,7 @@ interface Input {
   tune: MeasureOptions;
 }
 interface Pair {
-  runtime: 'node' | 'chrome' | 'bun';
+  runtime: 'node' | 'chrome' | 'bun' | 'firefox' | 'webkit';
   index: number;
   order: boolean[];
   on: Measurement;
@@ -79,12 +81,14 @@ if (process.argv[2] === 'bun-host') {
   }
   const output = process.argv[3] ?? '/tmp/labs-gc-overhead.json';
   const names = process.argv[5]?.split(',') ?? ['node', 'chrome'];
-  if (names.some((name) => !['node', 'chrome', 'bun'].includes(name))) {
-    throw new Error('Runtimes must be a comma-separated list of node, chrome, or bun');
+  if (names.some((name) => !['node', 'chrome', 'bun', 'firefox', 'webkit'].includes(name))) {
+    throw new Error(
+      'Runtimes must be a comma-separated list of node, chrome, bun, firefox, or webkit'
+    );
   }
   const runtimes = names as Pair['runtime'][];
   const tune: MeasureOptions = { heap: false, min_cpu_time: 2.5e8, min_samples: 30 };
-  const server = runtimes.includes('chrome')
+  const server = runtimes.some((runtime) => ['chrome', 'firefox', 'webkit'].includes(runtime))
     ? await startBrowserServer(new URL('./fixtures/observe-gc.bench.ts', import.meta.url).href)
     : undefined;
   const pairs: Pair[] = [];
@@ -95,7 +99,7 @@ if (process.argv[2] === 'bun-host') {
       plans.set(`${pair.runtime}:${pair.index}`, pair.off.plan!);
     }
   }
-  let chromeVersion = '';
+  const browserVersions: Partial<Record<'chrome' | 'firefox' | 'webkit', string>> = {};
   let seed = 314159;
   const random = () => {
     seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
@@ -131,56 +135,85 @@ if (process.argv[2] === 'bun-host') {
         }
       });
     });
-  const chrome = async (input: Input): Promise<Measurement> => {
-    const browser = await chromium.launch({
-      channel: 'chrome',
-      executablePath: process.env.LABS_CHROME_EXECUTABLE,
-      headless: true,
-      args: ['--js-flags=--expose-gc --allow-natives-syntax'],
-    });
-    try {
-      chromeVersion = browser.version();
-      const page = await browser.newPage();
-      await page.addInitScript(
-        (observe) => Object.assign(globalThis, { __LABS_OBSERVE: observe }),
-        input.observe
-      );
-      await page.goto(server!.url);
-      await page.waitForFunction(() => !!(globalThis as BrowserGlobal).__labs);
-      const calibration: BrowserCalibration = await page.evaluate(() =>
-        (globalThis as BrowserGlobal).__labs.calibrate()
-      );
-      const run = () =>
-        page.evaluate(
-          ({ input, calibration }) =>
-            (globalThis as BrowserGlobal).__labs.trial(
-              input.index,
-              input.tune,
-              input.plan ? [input.plan] : undefined,
-              calibration,
-              input.observe ? 'chrome' : false
-            ),
-          { input, calibration }
+  const browser = async (
+    runtime: 'chrome' | 'firefox' | 'webkit',
+    input: Input
+  ): Promise<Measurement> => {
+    const take = async (env?: NodeJS.ProcessEnv): Promise<BlockResult> => {
+      const engine = { chrome: chromium, firefox, webkit }[runtime];
+      const instance = await engine.launch({
+        headless: true,
+        ...(runtime === 'chrome'
+          ? {
+              channel: 'chrome',
+              executablePath: process.env.LABS_CHROME_EXECUTABLE,
+              args: ['--js-flags=--expose-gc --allow-natives-syntax'],
+            }
+          : {}),
+        ...(runtime === 'firefox'
+          ? {
+              env: env ?? { ...process.env, MOZ_PROFILER_STARTUP: '0', MOZ_PROFILER_SHUTDOWN: '' },
+            }
+          : {}),
+      });
+      try {
+        browserVersions[runtime] = instance.version();
+        const page = await instance.newPage();
+        await page.addInitScript(
+          (observe) => Object.assign(globalThis, { __LABS_OBSERVE: observe }),
+          input.observe
         );
-      const captured = input.observe
-        ? await observeChromeGc(page, run)
-        : { result: await run(), events: [] };
-      const result = captured.result.trial.runs[0];
-      if (result.error) throw result.error;
-      const { p50, avg, plan, debug } = result.stats!;
-      const gc = input.observe
-        ? chromeGcStats(captured.events, result.stats!.gc as ChromeGcWindow)
-        : undefined;
-      return { p50, avg, plan, gc, sourceHash: createHash('sha256').update(debug).digest('hex') };
-    } finally {
-      await browser.close();
-    }
+        await page.goto(server!.url);
+        await page.waitForFunction(() => !!(globalThis as BrowserGlobal).__labs);
+        const calibration: BrowserCalibration = await page.evaluate(() =>
+          (globalThis as BrowserGlobal).__labs.calibrate()
+        );
+        if (runtime !== 'chrome') await page.requestGC();
+        const measure = () =>
+          page.evaluate(
+            ({ input, calibration, runtime }) =>
+              (globalThis as BrowserGlobal).__labs.trial(
+                input.index,
+                input.tune,
+                input.plan ? [input.plan] : undefined,
+                calibration,
+                input.observe ? runtime : false
+              ),
+            { input, calibration, runtime }
+          );
+        if (!input.observe) return await measure();
+        if (runtime === 'webkit') return await observeWebkitGc(page, measure);
+        if (runtime === 'firefox') {
+          const finish = await prepareFirefoxGc(page);
+          try {
+            return await measure();
+          } finally {
+            await finish();
+          }
+        }
+        const captured = await observeChromeGc(page, measure);
+        for (const run of captured.result.trial.runs) {
+          if (run.stats?.gc)
+            run.stats.gc = chromeGcStats(captured.events, run.stats.gc as ChromeGcWindow);
+        }
+        return captured.result;
+      } finally {
+        await instance.close();
+      }
+    };
+    const measured =
+      runtime === 'firefox' && input.observe ? await observeFirefoxGc(take) : await take();
+    const run = measured.trial.runs[0];
+    if (run.error) throw run.error;
+    const { p50, avg, plan, gc, debug } = run.stats!;
+    return { p50, avg, plan, gc, sourceHash: createHash('sha256').update(debug).digest('hex') };
   };
   const run = (runtime: Pair['runtime'], input: Input) =>
-    runtime === 'chrome' ? chrome(input) : local(runtime, input);
+    runtime === 'node' || runtime === 'bun' ? local(runtime, input) : browser(runtime, input);
   const tasks: Array<{ runtime: Pair['runtime']; index: number }> = [];
   for (const runtime of runtimes) {
-    for (let index = 0; index < 4; index++) tasks.push({ runtime, index });
+    for (let index = 0; index < (runtime === 'firefox' || runtime === 'webkit' ? 3 : 4); index++)
+      tasks.push({ runtime, index });
   }
   const shuffled = <T>(items: T[]) => {
     const result = [...items];
@@ -276,7 +309,7 @@ if (process.argv[2] === 'bun-host') {
           },
           versions: {
             node: process.version,
-            ...(chromeVersion ? { chrome: chromeVersion } : {}),
+            ...browserVersions,
             ...(runtimes.includes('bun')
               ? {
                   bun: execFileSync(process.env.LABS_BUN_EXECUTABLE ?? 'bun', ['--version'], {
