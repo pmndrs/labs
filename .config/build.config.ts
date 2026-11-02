@@ -40,6 +40,6 @@ export default defineConfig([
     tsconfig: './tsconfig.build.json',
     dts: false,
     clean: false,
-    deps: { neverBundle: ['node:perf_hooks', 'node:timers/promises', 'bun:jsc'] },
+    deps: { neverBundle: ['node:perf_hooks', 'node:timers/promises', 'node:v8', 'bun:jsc'] },
   },
 ]);

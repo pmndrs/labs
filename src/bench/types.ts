@@ -10,7 +10,7 @@ export interface BlockPlan {
   samples: number;
 }
 
-/** GC pauses during sampling or a diagnostic replay, with durations in nanoseconds. */
+/** GC events during sampling or a diagnostic replay, with durations in nanoseconds. */
 export interface GcStats {
   source?: 'replay';
   total: number;

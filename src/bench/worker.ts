@@ -111,9 +111,9 @@ async function childMain(index: number): Promise<void> {
 let childSeq = 0;
 
 /**
- * Runs one trial in a fresh child process (same script, same node flags,
+ * Runs one trial in a fresh child process (same script, same runtime flags,
  * `LABS_ONLY_INDEX` selecting the trial) so each bench measures against a
- * pristine V8 — no IC/heap contamination from earlier benches in the file.
+ * pristine engine with no JIT or heap contamination from earlier benches in the file.
  */
 function runTrialChild(
   trial: any,

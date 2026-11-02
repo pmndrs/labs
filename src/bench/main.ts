@@ -169,14 +169,8 @@ export class B {
           if ((globalThis.performance as any)?.memory) {
             return () => (performance as any).memory.usedJSHeapSize;
           }
-          if ((globalThis as any).Bun) {
-            const _m = 'bun:jsc';
-            const { memoryUsage } = await import(_m);
-            return () => {
-              const m = memoryUsage();
-              return m.current;
-            };
-          }
+          // Bun exposes process memory and the last collection's heap, not live allocations.
+          if ((globalThis as any).Bun) return;
 
           try {
             const _v8 = 'node:v8';

@@ -1,4 +1,5 @@
 import { bench } from '../../src/index.ts';
+import { gc } from '../../src/bench/lib/runtime.ts';
 
 const observe = (globalThis as any).__LABS_OBSERVE ?? process.env.LABS_OBSERVE === '1';
 
@@ -31,6 +32,6 @@ bench('retained objects', function* () {
 }).gc(observe);
 
 bench('forced major GC', () => {
-  (globalThis as any).gc();
+  gc();
   return 1;
 }).gc(observe);

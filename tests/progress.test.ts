@@ -32,6 +32,13 @@ function running() {
 }
 
 describe('live progress', () => {
+  it.each(['chrome', 'bun'] as const)('shows the selected %s runtime', (runtime) => {
+    const progress = createProgress('main', ['work.bench.ts'], 0, runtime);
+    const text = renderProgress(progress, view).join('\n');
+    expect(text).toContain(runtime === 'bun' ? 'Bun' : 'Chrome');
+    expect(text).not.toContain('Node.js');
+  });
+
   it('shows each bench with completed blocks and its median so far', () => {
     const progress = running();
     applyEvent(progress, 0, { type: 'bench', index: 0, block: 0 });

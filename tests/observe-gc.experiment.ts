@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { readFile, writeFile } from 'node:fs/promises';
 import { cpus, platform, arch } from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -21,14 +21,14 @@ interface Input {
   tune: MeasureOptions;
 }
 interface Pair {
-  runtime: 'node' | 'chrome';
+  runtime: 'node' | 'chrome' | 'bun';
   index: number;
   order: boolean[];
   on: Measurement;
   off: Measurement;
 }
 
-// Run with pnpm exec tsx tests/observe-gc.experiment.ts [pairs] [output.json] [plan-source.json].
+// Run with pnpm exec tsx tests/observe-gc.experiment.ts [pairs] [output.json] [plan-source.json] [runtimes].
 if (process.argv[2] === 'worker') {
   const input = JSON.parse(process.argv[3]) as Input;
   process.env.LABS_OBSERVE = input.observe ? '1' : '0';
@@ -45,10 +45,15 @@ if (process.argv[2] === 'worker') {
     throw new Error('Pair count must be a positive even integer of at least two');
   }
   const output = process.argv[3] ?? '/tmp/labs-gc-overhead.json';
+  const names = process.argv[5]?.split(',') ?? ['node', 'chrome'];
+  if (names.some((name) => !['node', 'chrome', 'bun'].includes(name))) {
+    throw new Error('Runtimes must be a comma-separated list of node, chrome, or bun');
+  }
+  const runtimes = names as Pair['runtime'][];
   const tune: MeasureOptions = { heap: false, min_cpu_time: 2.5e8, min_samples: 30 };
-  const server = await startChromeServer(
-    new URL('./fixtures/observe-gc.bench.ts', import.meta.url).href
-  );
+  const server = runtimes.includes('chrome')
+    ? await startChromeServer(new URL('./fixtures/observe-gc.bench.ts', import.meta.url).href)
+    : undefined;
   const pairs: Pair[] = [];
   const plans = new Map<string, BlockPlan>();
   if (process.argv[4]) {
@@ -63,15 +68,14 @@ if (process.argv[2] === 'worker') {
     seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
     return seed / 2 ** 32;
   };
-  const node = (input: Input) =>
+  const local = (runtime: 'node' | 'bun', input: Input) =>
     new Promise<Measurement>((resolve, reject) => {
       const child = spawn(
-        process.execPath,
+        runtime === 'bun' ? (process.env.LABS_BUN_EXECUTABLE ?? 'bun') : process.execPath,
         [
-          '--expose-gc',
-          '--allow-natives-syntax',
-          '--import',
-          import.meta.resolve('tsx'),
+          ...(runtime === 'bun'
+            ? ['--no-install']
+            : ['--expose-gc', '--allow-natives-syntax', '--import', import.meta.resolve('tsx')]),
           fileURLToPath(import.meta.url),
           'worker',
           JSON.stringify(input),
@@ -84,7 +88,7 @@ if (process.argv[2] === 'worker') {
       child.stderr.on('data', (data) => (stderr += data));
       child.on('error', reject);
       child.on('close', (code) => {
-        if (code !== 0) reject(new Error(stderr || `Node exited ${code}`));
+        if (code !== 0) reject(new Error(stderr || `${runtime} exited ${code}`));
         else {
           try {
             resolve(JSON.parse(stdout));
@@ -108,7 +112,7 @@ if (process.argv[2] === 'worker') {
         (observe) => Object.assign(globalThis, { __LABS_OBSERVE: observe }),
         input.observe
       );
-      await page.goto(server.url);
+      await page.goto(server!.url);
       await page.waitForFunction(() => !!(globalThis as BrowserGlobal).__labs);
       const calibration: BrowserCalibration = await page.evaluate(() =>
         (globalThis as BrowserGlobal).__labs.calibrate()
@@ -139,8 +143,10 @@ if (process.argv[2] === 'worker') {
       await browser.close();
     }
   };
+  const run = (runtime: Pair['runtime'], input: Input) =>
+    runtime === 'chrome' ? chrome(input) : local(runtime, input);
   const tasks: Array<{ runtime: Pair['runtime']; index: number }> = [];
-  for (const runtime of ['node', 'chrome'] as const) {
+  for (const runtime of runtimes) {
     for (let index = 0; index < 4; index++) tasks.push({ runtime, index });
   }
   const shuffled = <T>(items: T[]) => {
@@ -160,8 +166,7 @@ if (process.argv[2] === 'worker') {
   try {
     for (const task of shuffled(tasks)) {
       if (plans.has(`${task.runtime}:${task.index}`)) continue;
-      const run = task.runtime === 'node' ? node : chrome;
-      const pilot = await run({ index: task.index, observe: false, tune });
+      const pilot = await run(task.runtime, { index: task.index, observe: false, tune });
       plans.set(`${task.runtime}:${task.index}`, pilot.plan!);
     }
     for (let round = 0; round < count; round++) {
@@ -170,8 +175,12 @@ if (process.argv[2] === 'worker') {
         const first = orders.get(key)![round];
         const pair = { ...task, order: [first, !first] } as Pair;
         for (const observe of pair.order) {
-          const run = task.runtime === 'node' ? node : chrome;
-          const value = await run({ index: task.index, observe, plan: plans.get(key), tune });
+          const value = await run(task.runtime, {
+            index: task.index,
+            observe,
+            plan: plans.get(key),
+            tune,
+          });
           if (JSON.stringify(value.plan) !== JSON.stringify(plans.get(key)))
             throw new Error('Plan changed');
           pair[observe ? 'on' : 'off'] = value;
@@ -225,10 +234,20 @@ if (process.argv[2] === 'worker') {
             traceStart: 'after-warmup',
             order: 'balanced randomized adjacent pairs, fresh process per measurement',
             estimate: 'geometric mean of paired on/off ratios with 20000 paired bootstrap resamples',
-            planSource: process.argv[4] ?? 'unobserved pilots',
+            planSource: process.argv[4] || 'unobserved pilots',
             seed: 314159,
           },
-          versions: { node: process.version, chrome: chromeVersion },
+          versions: {
+            node: process.version,
+            ...(chromeVersion ? { chrome: chromeVersion } : {}),
+            ...(runtimes.includes('bun')
+              ? {
+                  bun: execFileSync(process.env.LABS_BUN_EXECUTABLE ?? 'bun', ['--version'], {
+                    encoding: 'utf8',
+                  }).trim(),
+                }
+              : {}),
+          },
           hardware: { cpu: cpus()[0]?.model, platform: platform(), arch: arch() },
           summaries,
           pairs,
@@ -250,6 +269,6 @@ if (process.argv[2] === 'worker') {
     );
     console.log(output);
   } finally {
-    await server.close();
+    await server?.close();
   }
 }

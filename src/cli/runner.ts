@@ -83,6 +83,30 @@ function resolveCounters(specifier: string, configPath: string): string {
   }
 }
 
+/** Keep project aliases while loading benchmarks into the worker's Labs instance. */
+async function writeBunConfig(file: string, output: string): Promise<void> {
+  const { getTsconfig, createPathsMatcher } = await import('get-tsconfig');
+  const config = getTsconfig(file);
+  const match = config && createPathsMatcher(config);
+  writeFileSync(
+    output,
+    JSON.stringify({
+      ...(config ? { extends: config.path } : {}),
+      compilerOptions: {
+        ...(config?.config.compilerOptions?.baseUrl
+          ? { baseUrl: resolve(dirname(config.path), config.config.compilerOptions.baseUrl) }
+          : {}),
+        paths: {
+          ...Object.fromEntries(
+            Object.keys(config?.config.compilerOptions?.paths ?? {}).map((key) => [key, match!(key)])
+          ),
+          '@pmndrs/labs': [join(dirname(WORKER), `index.${WORKER_EXT}`)],
+        },
+      },
+    })
+  );
+}
+
 async function loadConfig(configPath: string): Promise<LabsConfig> {
   const mod = await import(pathToFileURL(configPath).href);
   return (mod.default ?? mod) as LabsConfig;
@@ -401,10 +425,10 @@ export async function runCLI(args: string[]) {
   }
   const blocks = blocksFlag !== undefined ? Number(blocksFlag) : (config.blocks ?? 8);
   const runtime = flagValue(benchArgs, '--runtime') ?? config.runtime ?? 'node';
-  if (runtime !== 'node' && runtime !== 'chrome') {
-    error(`Invalid runtime "${runtime}". Expected node or chrome`);
+  if (runtime !== 'node' && runtime !== 'chrome' && runtime !== 'bun') {
+    error(`Invalid runtime "${runtime}". Expected node, chrome, or bun`);
   }
-  if (runtime === 'chrome' && config.counters) {
+  if (runtime !== 'node' && config.counters) {
     error('Hardware counters are only supported with the node runtime');
   }
 
@@ -528,6 +552,7 @@ export async function runCLI(args: string[]) {
   if (checkouts.length) process.once('SIGINT', () => process.exit(130));
   for (const [index, f] of selected.entries()) {
     const specs: WorkerSpec[] = [];
+    const bunConfigs: string[] = [];
     const absent: string[] = [];
     const ran: Array<{ side: Side; entry: number; file: string; resultFile: string }> = [];
     for (const [i, s] of sides.entries()) {
@@ -541,8 +566,17 @@ export async function runCLI(args: string[]) {
       const resultFile = join(tmpDir, `${basename(f, '.ts')}-${i}-${Date.now()}.json`);
       ran.push({ side: s, entry, file, resultFile });
       if (view) startFile(progress, entry, Date.now());
+      const bunConfig = runtime === 'bun' ? `${resultFile}.tsconfig.json` : undefined;
+      if (bunConfig) {
+        await writeBunConfig(file, bunConfig);
+        bunConfigs.push(bunConfig);
+      }
       specs.push({
-        args: ['--import', TSX_LOADER, ...config.nodeFlags, WORKER],
+        ...(runtime === 'bun' ? { execPath: config.bun?.executablePath ?? 'bun' } : {}),
+        args:
+          runtime === 'bun'
+            ? ['--no-install', `--tsconfig-override=${bunConfig}`, WORKER]
+            : ['--import', TSX_LOADER, ...config.nodeFlags, WORKER],
         cwd: s.cwd,
         env: {
           ...workerEnv(file, benchTune, tagEnv, resultFile),
@@ -568,6 +602,8 @@ export async function runCLI(args: string[]) {
       process.exitCode = 1;
       crash = (err as Error).message;
       crashes.push({ file: suiteName(f), error: crash });
+    } finally {
+      for (const config of bunConfigs) rmSync(config, { force: true });
     }
     for (const { side: s, entry, file, resultFile } of ran) {
       const saved = s.collected.collect(file, resultFile);
