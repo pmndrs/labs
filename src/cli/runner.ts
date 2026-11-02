@@ -114,22 +114,6 @@ async function loadConfig(configPath: string): Promise<LabsConfig> {
   return (mod.default ?? mod) as LabsConfig;
 }
 
-const CACHE_FILE = join(process.cwd(), 'node_modules', '.cache', 'labs-last.json');
-
-function loadLastSelection(): string[] {
-  try {
-    return JSON.parse(readFileSync(CACHE_FILE, 'utf-8'));
-  } catch {
-    return [];
-  }
-}
-
-function saveSelection(files: string[]) {
-  const dir = dirname(CACHE_FILE);
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-  writeFileSync(CACHE_FILE, JSON.stringify(files));
-}
-
 type WorkerTune = Pick<
   Partial<LabsConfig>,
   | 'blockTime'
@@ -362,11 +346,7 @@ export async function runCLI(args: string[]) {
   let selected: string[];
   let tagEnv: string | undefined;
 
-  if (benchArgs.includes('--last')) {
-    selected = loadLastSelection().filter(existsSync);
-    if (selected.length === 0) error('No previous selection found');
-    console.log(`${CYAN}labs${RESET} ${DIM}(replaying last)${RESET}`);
-  } else {
+  {
     const flagTakesValue = new Set([
       '-n',
       '--name',
@@ -377,18 +357,17 @@ export async function runCLI(args: string[]) {
       '--against',
       '--candidate',
     ]);
-    let filterArg: string | undefined;
+    // Every positional is a filter token, so quoting the whole filter is optional.
+    const tokens: string[] = [];
     for (let i = 0; i < benchArgs.length; i++) {
       const a = benchArgs[i];
       if (a.startsWith('-')) {
         if (flagTakesValue.has(a)) i++;
         continue;
       }
-      filterArg = a;
-      break;
+      tokens.push(...a.split(/\s+/).filter(Boolean));
     }
 
-    const tokens = filterArg ? filterArg.split(/\s+/).filter(Boolean) : [];
     const tagFilters = tokens.filter((t) => t.startsWith('@'));
     const nameFilters = tokens.filter((t) => !t.startsWith('@'));
     tagEnv = tagFilters.length > 0 ? tagFilters.join(',') : undefined;
@@ -428,7 +407,6 @@ export async function runCLI(args: string[]) {
       );
     }
 
-    saveSelection(selected);
     if (!interactive) console.log(`${CYAN}labs${RESET}`);
   }
 

@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -15,6 +15,21 @@ describe('CLI options', () => {
 
   function run(...args: string[]) {
     cwd = mkdtempSync(join(tmpdir(), 'labs-cli-'));
+    writeFileSync(join(cwd, 'package.json'), JSON.stringify({ type: 'module' }));
+    writeFileSync(
+      join(cwd, 'labs.config.ts'),
+      `import { defineConfig } from ${JSON.stringify(new URL('../src/index.ts', import.meta.url).href)};
+      export default defineConfig({ benchDir: '.', blockTime: 1e-9, minSamples: 2, blocks: 1 });`
+    );
+    for (const [name, tag] of [
+      ['alpha', '@fast'],
+      ['beta', '@fast'],
+      ['gamma', '@slow'],
+    ])
+      writeFileSync(
+        join(cwd, `${name}.bench.ts`),
+        `import { bench } from '@pmndrs/labs'; bench('${name} ${tag}', () => 1);`
+      );
     return spawnSync(
       process.execPath,
       [
@@ -38,6 +53,13 @@ describe('CLI options', () => {
     const output = run('--blcoks', '4');
     expect(output.status).toBe(1);
     expect(output.stderr).toContain('Unknown option "--blcoks" for bench run');
+  });
+
+  it('takes every positional as a filter token', () => {
+    const output = run('--no-save', '--json', 'alpha', 'beta @fast');
+    expect(output.status, output.stderr).toBe(0);
+    const files = JSON.parse(output.stdout).benches.map((bench: { file: string }) => bench.file);
+    expect(files).toEqual(['alpha.bench.ts', 'beta.bench.ts']);
   });
 
   it('rejects run options on subcommands', () => {

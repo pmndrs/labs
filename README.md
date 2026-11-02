@@ -44,8 +44,9 @@ Run your benchmarks with the `bench` command.
 bench
 # Or choose another runtime
 bench --runtime chrome # bun | webkit | firefox
-# Or filter by tag
+# Or filter by file name and tag
 bench "@mytag"
+bench vec3 matrix @mytag
 # Save with a name for easier reading
 bench "@mytag" -n 'v1.0.0'
 ```
@@ -195,6 +196,7 @@ pnpm bench "relation"                   # partial match on file name, save
 pnpm bench "relation churn"             # separator-agnostic match, save
 pnpm bench "@relation"                  # filter by tag, save
 pnpm bench "churn @relation"            # name + tag combined, save
+pnpm bench churn @relation              # the same, unquoted
 pnpm bench --help                       # show usage
 pnpm bench -n "v1.2.0"                 # save with explicit name (prompts if it exists)
 pnpm bench -n "v1.2.0" -f              # overwrite existing without prompting
@@ -208,7 +210,6 @@ pnpm bench --blocks 12                  # save with 12 fresh-process blocks per 
 pnpm bench --against main               # run the working tree and main interleaved, save both, compare
 pnpm bench --against ../a --candidate ../b  # run two existing checkouts interleaved and compare
 pnpm bench -c                           # shorthand for --compare
-pnpm bench --last                       # rerun previous selection, save
 ```
 
 Results are saved to `<benchDir>/.labs/results/<name>.json` and include hardware metadata (CPU, arch, runtime) for like-for-like comparisons.
@@ -220,7 +221,6 @@ pnpm bench --no-save                    # run all, no save
 pnpm bench run --no-save "relation"    # filtered, no save
 pnpm bench --no-save "@relation"       # filtered by tag, no save
 pnpm bench --no-save --blocks 3        # no save, with 3 blocks for faster feedback
-pnpm bench --no-save --last            # replay last selection, no save
 ```
 
 ## Managing Results
