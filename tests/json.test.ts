@@ -53,6 +53,62 @@ const steady = [100, 100.4, 99.7, 100.2, 99.9, 100.1, 99.8, 100.3];
 const scattered = [80, 130, 95, 120, 70, 110, 100, 90];
 
 describe('agent output', () => {
+  it('labels collection activity and omits duration comparisons with other GC event semantics', () => {
+    const baseline = result('a', steady);
+    const candidate = result('b', steady);
+    for (const run of [baseline, candidate]) {
+      run.files[0].benchmarks[0].runs[0].stats!.gc = {
+        total: 1000,
+        max: 1000,
+        count: 1,
+        minor: 0,
+        major: 1,
+        incremental: 0,
+        weak: 0,
+        other: 0,
+        elapsed: 10000,
+        timed: 10000,
+        iterations: 10,
+      };
+    }
+    const gc = candidate.files[0].benchmarks[0].runs[0].stats!.gc!;
+    if ('total' in gc) gc.durationKind = 'collection';
+    expect(runJson(candidate, config, true).benches[0].gc).toMatchObject({
+      durationKind: 'collection',
+      perIterationNs: 100,
+    });
+    const compared = compare(baseline, candidate, config).benches[0];
+    expect(compared.kind).toBe('eligible');
+    if (compared.kind === 'eligible') expect(compared.gc).toBeUndefined();
+  });
+
+  it('keeps uncertain boundary activity distinct from zero GC time', () => {
+    const run = result('a', steady);
+    run.files[0].benchmarks[0].runs[0].stats!.gc = {
+      durationKind: 'collection',
+      clockUncertaintyNs: 100,
+      boundaryUncertain: 1,
+      total: 0,
+      max: 0,
+      count: 0,
+      minor: 0,
+      major: 0,
+      incremental: 0,
+      weak: 0,
+      other: 0,
+      elapsed: 10000,
+      timed: 10000,
+      iterations: 10,
+    };
+    expect(runJson(run, config, true).benches[0].gc).toMatchObject({
+      durationKind: 'collection',
+      boundaryUncertain: 1,
+      perIterationNs: null,
+      share: null,
+      maxNs: null,
+    });
+  });
+
   it('labels replay diagnostics and keeps performance verdicts independent of their cost', () => {
     const baseline = result('a', steady);
     const candidate = result('b', steady);

@@ -1,4 +1,4 @@
-import { formatGcCost, formatGcEvents, formatGcSpike } from '../bench/format/gc.ts';
+import { formatGcCost, formatGcEvents, formatGcSpike, gcLabel } from '../bench/format/gc.ts';
 import type { BenchResult, CompareResult, EligibleBench } from '../compare.ts';
 import type { LabsConfig } from '../config.ts';
 import { renderDistributions } from '../histogram.ts';
@@ -170,12 +170,7 @@ function measurements(canvas: TerminalCanvas, bench: EligibleBench, y: number): 
       delta: change(bench.deltaP99),
     },
     {
-      label:
-        bench.gc?.candidateStats?.source === 'replay'
-          ? 'gc replay'
-          : bench.gc?.observed
-            ? 'gc/iter'
-            : 'gc',
+      label: gcLabel(bench.gc?.candidateStats, bench.gc?.observed ? 'perIteration' : undefined),
       base: bench.gc ? formatNs(bench.gc.baseline) : '—',
       cand: bench.gc ? formatNs(bench.gc.candidate) : '—',
       delta: change(bench.gc?.delta),
@@ -279,7 +274,10 @@ function detailLines(
       ] as const) {
         if (!stats) continue;
         const share = formatGcCost(stats)?.share ?? '—';
-        for (const line of wrapMetrics(`${side} GC: ${share} ✦ ${formatGcEvents(stats)}`, width)) {
+        for (const line of wrapMetrics(
+          `${side} ${stats.durationKind === 'collection' ? 'GC activity' : 'GC'}: ${share} ✦ ${formatGcEvents(stats)}`,
+          width
+        )) {
           canvas.put(y, 0, line, GRAY);
           const spike = formatGcSpike(stats);
           const start = line.indexOf(spike);

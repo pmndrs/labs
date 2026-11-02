@@ -14,13 +14,17 @@ function cpuSpeedVaried(result: SavedResult): number {
 }
 
 function gcJson(gc: GcStats) {
+  const uncertain = !gc.count && !!gc.boundaryUncertain;
   return {
     ...(gc.source ? { source: gc.source } : {}),
-    perIterationNs: gc.iterations > 0 ? gc.total / gc.iterations : null,
-    share: gc.elapsed > 0 ? gc.total / gc.elapsed : null,
+    ...(gc.durationKind ? { durationKind: gc.durationKind } : {}),
+    ...(gc.clockUncertaintyNs !== undefined ? { clockUncertaintyNs: gc.clockUncertaintyNs } : {}),
+    ...(gc.boundaryUncertain ? { boundaryUncertain: gc.boundaryUncertain } : {}),
+    perIterationNs: gc.iterations > 0 && !uncertain ? gc.total / gc.iterations : null,
+    share: gc.elapsed > 0 && !uncertain ? gc.total / gc.elapsed : null,
     events: gc.count,
     major: gc.major,
-    maxNs: gc.max,
+    maxNs: uncertain ? null : gc.max,
     maxKind: gc.maxKind ?? null,
   };
 }

@@ -30,12 +30,6 @@ export class GcScope {
 
 /** Observe one sampling block without adding hooks around individual samples. */
 export class GcObservation {
-  private static bun = (globalThis as any).process?.versions?.bun
-    ? Promise.all([import('node:v8'), import('./bun-gc.ts')]).then(
-        ([{ GCProfiler }, { BunGcObservation }]) =>
-          typeof GCProfiler === 'function' ? () => new BunGcObservation(new GCProfiler()) : undefined
-      )
-    : undefined;
   private entries: PerformanceEntry[] = [];
   private startTime = 0;
   private observer: import('node:perf_hooks').PerformanceObserver;
@@ -54,13 +48,11 @@ export class GcObservation {
   }
 
   static async create(): Promise<GcObserver | undefined> {
-    if (!(globalThis as any).process?.versions?.node) {
+    if ((globalThis as any).__LABS_GC_OBSERVER) {
       return (globalThis as any).__LABS_GC_OBSERVER?.();
     }
-    if (GcObservation.bun) {
-      const create = await GcObservation.bun;
-      return create?.();
-    }
+    if (!(globalThis as any).process?.versions?.node || (globalThis as any).process?.versions?.bun)
+      return;
     const [hooks, timers] = await Promise.all([
       import('node:perf_hooks'),
       import('node:timers/promises'),
@@ -153,6 +145,15 @@ export class GcObservation {
 /** Pool GC totals across fresh process blocks. */
 export function mergeGc(list: GcStats[]): GcStats {
   return list.reduce((total, stats) => ({
+    ...(total.durationKind === 'collection' && stats.durationKind === 'collection'
+      ? { durationKind: 'collection' as const }
+      : {}),
+    ...(total.clockUncertaintyNs !== undefined || stats.clockUncertaintyNs !== undefined
+      ? { clockUncertaintyNs: Math.max(total.clockUncertaintyNs ?? 0, stats.clockUncertaintyNs ?? 0) }
+      : {}),
+    ...(total.boundaryUncertain || stats.boundaryUncertain
+      ? { boundaryUncertain: (total.boundaryUncertain ?? 0) + (stats.boundaryUncertain ?? 0) }
+      : {}),
     ...(total.source === 'replay' && stats.source === 'replay' ? { source: 'replay' as const } : {}),
     total: total.total + stats.total,
     max: Math.max(total.max, stats.max),

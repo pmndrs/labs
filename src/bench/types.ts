@@ -13,6 +13,9 @@ export interface BlockPlan {
 /** GC events during sampling or a diagnostic replay, with durations in nanoseconds. */
 export interface GcStats {
   source?: 'replay';
+  durationKind?: 'collection';
+  clockUncertaintyNs?: number;
+  boundaryUncertain?: number;
   total: number;
   max: number;
   maxKind?: 'minor' | 'major' | 'incremental' | 'weak' | 'other';

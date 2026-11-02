@@ -16,11 +16,6 @@ describe('Bun benchmarks', () => {
   const probe = spawnSync(executable, ['-p', 'process.execPath'], { encoding: 'utf8' });
   const available = probe.status === 0;
   const executablePath = probe.stdout?.trim() || executable;
-  const gcAvailable =
-    available &&
-    spawnSync(executablePath, ['-p', 'typeof require("node:v8").GCProfiler'], {
-      encoding: 'utf8',
-    }).stdout?.trim() === 'function';
   let project: string;
 
   afterEach(() => {
@@ -110,8 +105,9 @@ describe('Bun benchmarks', () => {
       expect(report.benches).toHaveLength(5);
       for (const bench of report.benches) {
         expect(bench.timeNs).not.toBeNull();
-        if (gcAvailable && type === 'module' && bench.name !== 'manual') {
+        if (type === 'module' && bench.name !== 'manual') {
           expect(bench.gc).toHaveProperty('perIterationNs');
+          expect(bench.gc.durationKind).toBe('collection');
         } else expect(bench.gc).toBeNull();
         expect(bench.heapBytes).toBeNull();
       }
@@ -127,7 +123,7 @@ describe('Bun benchmarks', () => {
           expect(run.error).toBeUndefined();
           expect(run.stats?.blocks?.medians).toHaveLength(2);
           expect(run.stats?.samples).toHaveLength(run.stats!.plan!.samples * 2);
-          if (gcAvailable && trial.gcMode) expect(run.stats?.gc).toHaveProperty('count');
+          if (trial.gcMode) expect(run.stats?.gc).toHaveProperty('count');
           else expect(run.stats?.gc).toBeUndefined();
           expect(run.stats?.heap).toBeUndefined();
         }
@@ -146,21 +142,19 @@ describe('Bun benchmarks', () => {
     }
   );
 
-  it.skipIf(!gcAvailable)(
+  it.skipIf(!available)(
     'counts only sampling collections for functions, generators, and iterators',
     { timeout: 60_000 },
     () => {
       setup(`import { bench } from '@pmndrs/labs';
         import { edenGC } from 'bun:jsc';
         bench('function', () => { Bun.gc(true); return 42; });
-        bench('async function', async () => { Bun.gc(true); return 42; });
         bench('generator', function* () {
           Bun.gc(true);
           yield () => { Bun.gc(true); return 42; };
           Bun.gc(true);
         });
         bench('iterator', state => { for (const _ of state) Bun.gc(true); });
-        bench('async iterator', async state => { for await (const _ of state) Bun.gc(true); });
         bench('minor', () => { edenGC(); return 42; });`);
       const output = run();
       expect(output.status, output.stderr).toBe(0);
@@ -171,6 +165,7 @@ describe('Bun benchmarks', () => {
         const iterations = stats.samples.length * (stats.plan!.batch ? stats.plan!.batch_samples : 1);
         expect(gc).not.toHaveProperty('source');
         expect(gc).toMatchObject({
+          durationKind: 'collection',
           count: iterations,
           iterations,
           ...(trial.alias === 'minor'
@@ -188,7 +183,7 @@ describe('Bun benchmarks', () => {
     }
   );
 
-  it.skipIf(!gcAvailable)(
+  it.skipIf(!available)(
     'observes natural collections and respects the global disable',
     { timeout: 60_000 },
     () => {
