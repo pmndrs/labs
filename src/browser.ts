@@ -1,6 +1,7 @@
 import { getBenchRegistry } from './index.ts';
 import { measure, run } from './bench/index.ts';
-import { runTrialAt } from './bench/main.ts';
+import { runTrialAt, trialAt } from './bench/main.ts';
+import { gpuDevice, probeGpuRate } from './bench/lib/gpu.ts';
 import type { BlockPlan, MeasureOptions, Trial } from './bench/types.ts';
 import { ChromeGcObservation } from './bench/lib/chrome-gc.ts';
 import { WebkitGcObservation } from './bench/lib/webkit-gc.ts';
@@ -102,8 +103,12 @@ export const browserHarness = {
       });
     }
     try {
+      // A GPU bench's blocks are judged against the GPU's speed, not the CPU's
+      const calibrationRate = trialAt(index)._gpu
+        ? await probeGpuRate(await gpuDevice())
+        : prepared.calibrationRate;
       const trial = await runTrialAt(index, { ...prepared.clock, ...tune, heap: false }, plans);
-      return jsonSafe({ trial, calibrationRate: prepared.calibrationRate });
+      return jsonSafe({ trial, calibrationRate });
     } finally {
       delete (globalThis as any).__LABS_GC_OBSERVER;
     }

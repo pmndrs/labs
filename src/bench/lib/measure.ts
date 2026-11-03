@@ -19,6 +19,7 @@ import { toSnapshot } from './snapshot.ts';
 import { batchSize, defaults } from './constants.ts';
 import { createWarmup, isWarmupDone, isWarmupUnsettled, recordWarmup } from './warmup.ts';
 import { memoryPass } from './memory.ts';
+import { computePass, freshShader, gpuDevice, renderPass } from './gpu.ts';
 import { GcObservation, GcScope } from './gc.ts';
 import { optimization, optimizationClock } from './optimization.ts';
 
@@ -90,14 +91,27 @@ export async function measure(f: (...args: any[]) => any, opts: MeasureOptions =
  * the yielded object's `snapshot` hook or the generator's return value.
  */
 export async function benchGenerator(gen: (...args: any[]) => any, opts: any = {}): Promise<Stats> {
+  const device = opts.$gpu ? await gpuDevice() : undefined;
   const ctx = {
     get(name: string) {
       return opts.args?.[name];
     },
+    ...(device ? { device, fresh: freshShader } : {}),
   };
 
   const g = gen(ctx);
   const n = await g.next();
+
+  // A GPU bench yields a pass to fill, which runs timed on the GPU. A plain
+  // function stays on the CPU clock like any other bench.
+  let gpuTimed = false;
+  if (device && n.value && 'object' === typeof n.value) {
+    if (n.value.compute) n.value = { ...n.value, time: computePass(device, n.value.compute) };
+    else if (n.value.render) {
+      n.value = { ...n.value, time: renderPass(device, n.value.render, n.value.draw) };
+    }
+    gpuTimed = !!n.value.time;
+  }
 
   let $fn = n.value;
   if (!n.value?.heap && null != n.value?.heap) opts.heap = false;
@@ -120,12 +134,15 @@ export async function benchGenerator(gen: (...args: any[]) => any, opts: any = {
   };
 
   if (n.done || 'fn' !== kind($fn)) {
-    $fn = n.value?.bench || n.value?.manual;
+    // Manual benches time themselves and return durations. `time` is the
+    // documented name, `manual` with a budget the earlier one.
+    const manual = n.value?.time || n.value?.manual;
+    $fn = n.value?.bench || manual;
     if ('fn' !== kind($fn, true)) throw new TypeError('expected benchmarkable yield from generator');
 
     opts.params ??= {};
     const params: number = $fn.length;
-    opts.manual = !n.value.manual ? false : 'manual' !== n.value.budget ? 'real' : 'manual';
+    opts.manual = !manual ? false : 'manual' !== n.value.budget ? 'real' : 'manual';
 
     for (let o = 0; o < params; o++) {
       opts.params[o] = n.value[o];
@@ -145,7 +162,7 @@ export async function benchGenerator(gen: (...args: any[]) => any, opts: any = {
 
   return {
     ...stats,
-    kind: 'yield' as const,
+    kind: gpuTimed ? ('gpu' as const) : ('yield' as const),
     ...(snapshot !== undefined ? { snapshot } : {}),
   };
 }

@@ -325,6 +325,36 @@ group('my-group @mytag', () => {
 })
 ```
 
+## GPU benches
+
+`bench.gpu` hands the generator a WebGPU device. What it yields names the clock. A pass is timed on the GPU with timestamp queries. A plain function is timed on the CPU like any other bench, which is how to measure encoding or shader compilation.
+
+```ts
+import { bench } from '@pmndrs/labs'
+
+bench.gpu('blur dispatch', function* ({ device }) {
+  const { pipeline, bind } = build(device)
+  yield {
+    compute: (pass) => {
+      pass.setPipeline(pipeline)
+      pass.setBindGroup(0, bind)
+      pass.dispatchWorkgroups(4096)
+    },
+  }
+})
+
+bench.gpu('blur compile', function* ({ device, fresh }) {
+  yield async () => {
+    const module = device.createShaderModule({ code: fresh(blurSource) })
+    await device.createComputePipelineAsync({ layout: 'auto', compute: { module } })
+  }
+})
+```
+
+Render passes take their attachments: `yield { render: descriptor, draw: (pass) => ... }`. Work labs cannot wrap, such as WebGL timer queries, returns its own nanoseconds through `yield { time: async () => ns }`.
+
+GPU benches run on the `chrome` and `webkit` runtimes, which expose the machine's GPU headlessly. Headless Firefox has no WebGPU adapter. Each block records the GPU's speed from a fixed probe dispatch, the way CPU benches record a calibration rate, so the clock gate judges GPU blocks against the GPU. The GPU clock climbs under load and drops after idle gaps, so the warm-up runs until pass timings agree. Drivers cache compiled pipelines by source, so compile benches pass their source through `fresh`, which makes every sample a cache miss. Results and JSON output carry `clock: 'gpu'` for GPU-timed benches.
+
 ## Dead Code Elimination
 
 Engines may remove pure computations whose results are never used, making a benchmark appear impossibly fast. When benchmarking pure work, return its result; Labs consumes non-`undefined` returns from automatically timed function benchmarks inside the timed region. The returned value must depend on the measured work—no return is needed when the work already has observable side effects.

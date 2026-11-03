@@ -60,6 +60,7 @@ export function runJson(result: SavedResult, config: LabsConfig, saved: boolean)
             message: status.message,
             advice: status.advice,
             minDetectableChange: status.minDetectableChange ?? null,
+            clock: stats?.kind === 'gpu' ? 'gpu' : 'cpu',
             timeNs: stats
               ? { avg: stats.avg, p75: stats.p75, p99: stats.p99, min: stats.min, max: stats.max }
               : null,

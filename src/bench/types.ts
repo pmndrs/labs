@@ -1,3 +1,4 @@
+/// <reference types="@webgpu/types" />
 /**
  * Measurement decisions made once by a pilot block and replayed verbatim by
  * every later block, so all blocks of a bench do identical work.
@@ -69,7 +70,7 @@ export interface Stats {
   samples: number[];
   /** Hardware counters supplied by the runtime backend. */
   counters?: any;
-  kind: 'fn' | 'iter' | 'yield';
+  kind: 'fn' | 'iter' | 'yield' | 'gpu';
   min: number;
   max: number;
   avg: number;
@@ -115,6 +116,14 @@ export function isAssertionError(error: unknown): boolean {
 }
 
 export type GeneratorBench = (state: any) => Generator<any, any, any>;
+
+/** What a GPU bench's generator receives: the shared device and a shader cache buster. */
+export interface GpuState {
+  device: GPUDevice;
+  fresh(code: string): string;
+  get(name: string): any;
+}
+export type GpuGeneratorBench = (state: GpuState) => Generator<any, any, any>;
 
 export interface MeasureOptions {
   now?: () => number;
