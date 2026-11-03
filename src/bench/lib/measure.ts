@@ -461,7 +461,7 @@ export async function benchFn(fn: (...args: any[]) => any, opts: any = {}): Prom
     // be told, it then compiles the loop at the top tier for the recorded
     // pass. Elsewhere the passes repeat until their timings agree.
     if (warmed) {
-      const loopWarmup: WarmupState = createWarmup(
+      let loopWarmup: WarmupState = createWarmup(
         now() + opts.warmup_time,
         opts.warmup_samples,
         now() + opts.warmup_settle
@@ -473,9 +473,13 @@ export async function benchFn(fn: (...args: any[]) => any, opts: any = {}): Prom
       }
       let wait: number | undefined;
       while (now() < loopWarmup.deadline) {
+        const previousTier = harness?.tier;
         const pass = await run(true);
         harness = readHarness();
         workload = observeWorkload(optimization?.tier(fn), now());
+        if (optimization?.frame && harness?.tier !== previousTier) {
+          loopWarmup = createWarmup(loopWarmup.deadline, opts.warmup_samples, loopWarmup.settled);
+        }
         recordWarmup(loopWarmup, pass, 1, opts);
         if (wait === undefined) {
           wait = dollar_vm ? (2e6 * pass) / batchSamples : 0;
