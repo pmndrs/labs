@@ -246,6 +246,16 @@ describe('agent output', () => {
     expect(code(disturbed)).toBe(2);
   });
 
+  it('judges interleaved runs from different sessions on their own drift', () => {
+    const apart = [{ file: 'a.bench.ts', runFreq: 3.6, postFreq: 3.2 }];
+    const disturbed = result('c', steady, 0.2, apart);
+    const other = result('d', steady, 0.2, apart);
+    expect(compare(other, disturbed, config).environmentWarnings).toEqual([
+      expect.stringContaining('baseline CPU clock drifted'),
+      expect.stringContaining('candidate CPU clock drifted'),
+    ]);
+  });
+
   it.each([
     { name: 'no change', candidate: steady, flag: true, code: 0 },
     { name: 'slower without the flag', candidate: steady.map((m) => m * 1.2), flag: false, code: 0 },

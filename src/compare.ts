@@ -21,6 +21,7 @@ import {
   type FreqSample,
   type GitInfo,
   type SavedResult,
+  arePaired,
   isEnvironmentStable,
   pairedFreqDrift,
 } from './store.ts';
@@ -87,8 +88,9 @@ export const warnClockDrift: EnvironmentWarning = (baseline, candidate) => {
   const bFreqs = baseline.environment?.freqs ?? [];
   const cFreqs = candidate.environment?.freqs ?? [];
 
-  // Interleaved runs drift together, so only the drift between paired blocks counts.
-  if (baseline.environment?.paired && candidate.environment?.paired) {
+  // The two sides of an interleaved run drift together, so only the drift
+  // between their paired blocks counts. Other runs are judged on their own.
+  if (arePaired(baseline, candidate)) {
     const drift = pairedFreqDrift(bFreqs, cFreqs);
     if (drift > CLOCK_COMPARE_THRESHOLD)
       warnings.push(`CPU clock drifted ${(drift * 100).toFixed(1)}% between paired blocks`);

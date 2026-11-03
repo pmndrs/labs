@@ -183,6 +183,21 @@ export function pairedFreqDrift(freqs: FreqSample[], paired: FreqSample[]): numb
   return drift;
 }
 
+/** Whether two saved results are the two sides of one interleaved run. */
+export function arePaired(a: SavedResult, b: SavedResult): boolean {
+  const same = (x?: FreqSample[], y?: FreqSample[]) =>
+    !!x &&
+    !!y &&
+    x.length === y.length &&
+    x.every(
+      (s, i) => s.file === y[i].file && s.runFreq === y[i].runFreq && s.postFreq === y[i].postFreq
+    );
+  return (
+    same(a.environment?.paired, b.environment?.freqs) &&
+    same(b.environment?.paired, a.environment?.freqs)
+  );
+}
+
 /**
  * Returns true if the CPU clock was stable during the run (drift ≤ threshold).
  * Interleaved runs are judged by the drift between paired blocks instead.
