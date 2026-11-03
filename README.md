@@ -43,10 +43,7 @@ Run your benchmarks with the `bench` command.
 # Run all benches, save named after the current commit
 bench
 # Or choose another runtime
-bench --runtime chrome
-bench --runtime firefox
-bench --runtime webkit
-bench --runtime bun
+bench --runtime chrome # bun | webkit | firefox
 # Or filter by tag
 bench "@mytag"
 # Save with a name for easier reading
