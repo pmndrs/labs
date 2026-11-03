@@ -52,9 +52,16 @@ bench "@mytag" -n 'v1.0.0'
 
 In an interactive terminal, a live view shows each benchmark's progress while it runs, then a full-screen results view opens. Select a benchmark to inspect its timings, sample distribution, memory use, and run consistency. Quitting prints a short summary. Reopen saved results with `bench list`.
 
-Chrome requires a local installation and runs headlessly. Set extra flags with `chrome.args`.
-Bun requires a local installation. GC diagnostics require the CLI; heap allocation diagnostics are unavailable.
-Firefox and WebKit require `pnpm exec playwright-core install firefox webkit`. WebKit runs Safari's engine in a separate browser build. Heap allocation diagnostics are unavailable in these runtimes.
+<details>
+<summary>Runtime info</summary>
+
+- **Node.js** is the default runtime.
+- **Chrome** requires a local installation and runs headlessly. Set extra flags with `chrome.args`.
+- **Bun** requires a local installation. GC diagnostics require the Labs CLI. Heap allocation diagnostics are unavailable.
+- **Firefox** requires `pnpm exec playwright-core install firefox`. Heap allocation diagnostics are unavailable.
+- **WebKit** requires `pnpm exec playwright-core install webkit`. It runs Safari's engine in a separate browser build. Heap allocation diagnostics are unavailable.
+
+</details>
 
 <img src="docs/images/bench.png" width="760" alt="Labs run view with a benchmark list, timing measurements, sample histogram, garbage collection, heap per iteration, and run consistency" />
 
