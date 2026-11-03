@@ -72,7 +72,7 @@ In an interactive terminal, a live view shows each benchmark's progress while it
 - **✓, ⚠, ✗**: A warning shows one line with the most serious problem and what to do. `likely optimized out` means the work was removed by the JIT. `results change between runs` means warmup never settled or the output differed between fresh processes. `min detectable change ±N%` is the smallest change a comparison could detect, shown when it is larger than `minDelta`.
 - **avg, p75, p99**: Average time per iteration and the 75th and 99th percentiles. For batched work, percentiles describe batch averages rather than individual calls.
 - **settled**: Time from the first call until warmup timings agree.
-- **workload, harness**: Time until each reported optimization tier was first observed during warmup. Batched work can be inlined into the harness. Mixed tiers show block counts, and unavailable tiers are marked explicitly.
+- **workload, harness**: Time until each reported entry tier was first observed during warmup. Batched work can be inlined into the harness. Mixed tiers show block counts, and unavailable tiers are marked explicitly.
 - **Histogram**: The fastest 99% of timing samples, with the minimum and upper cutoff below. Cyan marks samples below the average, yellow the average bin, and magenta samples above it.
 - **gc**: Observed GC time per iteration and its share of sampling time, including gaps between calls. Below is average GC event frequency. The share is not an exact GC contribution to `avg`.
 - **gc max**: Longest observed GC event, marked `major` when applicable. Below is the number of major GC events observed.
