@@ -2,18 +2,21 @@ import { describe, expect, it } from 'vitest';
 import { compareJson, comparisonExitCode, runJson } from '../src/cli/json.ts';
 import { compare } from '../src/compare.ts';
 import { defineConfig } from '../src/config.ts';
-import type { SavedResult } from '../src/store.ts';
+import type { FreqSample, SavedResult } from '../src/store.ts';
 
 const config = defineConfig({ benchDir: '.' });
 
-function result(name: string, medians: number[], drift = 0): SavedResult {
+function result(name: string, medians: number[], drift = 0, paired?: FreqSample[]): SavedResult {
   const samples = medians.flatMap((m) => [m * 0.99, m, m * 1.01]).sort((a, b) => a - b);
   return {
     name,
     timestamp: '2026-01-01T00:00:00.000Z',
     hardware: { cpu: 'test cpu', arch: 'arm64', runtime: 'node', freq: 4 },
     blocks: medians.length,
-    environment: { freqs: [{ file: 'a.bench.ts', runFreq: 4, postFreq: 4 * (1 - drift) }] },
+    environment: {
+      freqs: [{ file: 'a.bench.ts', runFreq: 4, postFreq: 4 * (1 - drift) }],
+      ...(paired ? { paired } : {}),
+    },
     files: [
       {
         file: 'a.bench.ts',
@@ -215,6 +218,42 @@ describe('agent output', () => {
     expect(verdict(steady).verdict).toBe('neutral');
     expect(verdict(scattered).verdict).toBe('inconclusive');
     expect(verdict(steady.map((m) => m * 1.2)).verdict).toBe('slower');
+  });
+
+  it('judges interleaved runs by the drift between paired blocks', () => {
+    const together = [{ file: 'a.bench.ts', runFreq: 4, postFreq: 3.2 }];
+    const apart = [{ file: 'a.bench.ts', runFreq: 3.6, postFreq: 3.2 }];
+    const paired = result('b', steady, 0.2, together);
+    const disturbed = result('c', steady, 0.2, apart);
+    expect(runJson(paired, config, true).environment).toMatchObject({
+      stable: true,
+      pairedDrift: 0,
+    });
+    expect(runJson(disturbed, config, true).environment.stable).toBe(false);
+    // The partner of an interleaved run holds the readings the run stores as paired
+    const partnerOf = (run: SavedResult) => {
+      const partner = result('a', steady, 0, run.environment!.freqs);
+      partner.environment!.freqs = run.environment!.paired!;
+      return partner;
+    };
+    expect(compare(partnerOf(paired), paired, config).environmentWarnings).toEqual([]);
+    expect(compare(partnerOf(disturbed), disturbed, config).environmentWarnings).toContainEqual(
+      expect.stringContaining('between paired blocks')
+    );
+    const code = (run: SavedResult) =>
+      comparisonExitCode(compare(partnerOf(run), run, config), config, run, true);
+    expect(code(paired)).toBe(0);
+    expect(code(disturbed)).toBe(2);
+  });
+
+  it('judges interleaved runs from different sessions on their own drift', () => {
+    const apart = [{ file: 'a.bench.ts', runFreq: 3.6, postFreq: 3.2 }];
+    const disturbed = result('c', steady, 0.2, apart);
+    const other = result('d', steady, 0.2, apart);
+    expect(compare(other, disturbed, config).environmentWarnings).toEqual([
+      expect.stringContaining('baseline CPU clock drifted'),
+      expect.stringContaining('candidate CPU clock drifted'),
+    ]);
   });
 
   it.each([

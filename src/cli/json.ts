@@ -1,7 +1,7 @@
 import type { GcStats } from '../bench/types.ts';
 import { type CompareResult, compareFailed } from '../compare.ts';
 import type { LabsConfig } from '../config.ts';
-import { type SavedResult, isEnvironmentStable } from '../store.ts';
+import { type SavedResult, isEnvironmentStable, pairedFreqDrift } from '../store.ts';
 import { runStatus } from './run-view.ts';
 
 /** How much the CPU speed probes varied across the run, as a fraction of their mean. */
@@ -34,7 +34,13 @@ export function runJson(result: SavedResult, config: LabsConfig, saved: boolean)
   return {
     name: result.name,
     saved,
-    environment: { stable: isEnvironmentStable(result), cpuSpeedVaried: cpuSpeedVaried(result) },
+    environment: {
+      stable: isEnvironmentStable(result),
+      cpuSpeedVaried: cpuSpeedVaried(result),
+      ...(result.environment?.paired
+        ? { pairedDrift: pairedFreqDrift(result.environment.freqs, result.environment.paired) }
+        : {}),
+    },
     benches: result.files.flatMap((file) =>
       file.benchmarks.flatMap((trial) =>
         trial.runs.map((run) => {
