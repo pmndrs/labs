@@ -140,6 +140,7 @@ type WorkerTune = Pick<
   | 'chrome'
   | 'firefox'
   | 'webkit'
+  | 'bun'
   | 'snapshotTolerance'
 > & { gc?: boolean };
 
@@ -150,7 +151,7 @@ function workerEnv(
   resultFile?: string
 ): NodeJS.ProcessEnv {
   // Worker behavior is determined only by the current run configuration.
-  const env = { ...process.env };
+  const env = { ...process.env, ...(tune.runtime === 'bun' ? tune.bun?.env : {}) };
   for (const key of Object.keys(env)) {
     if (key.startsWith('LABS_')) delete env[key];
   }
@@ -453,6 +454,7 @@ export async function runCLI(args: string[]) {
     chrome: config.chrome,
     firefox: config.firefox,
     webkit: config.webkit,
+    bun: config.bun,
     snapshotTolerance: config.snapshotTolerance,
     counters: config.counters && resolveCounters(config.counters, configPath),
   };
@@ -588,7 +590,12 @@ export async function runCLI(args: string[]) {
         ...(runtime === 'bun' ? { execPath: config.bun?.executablePath ?? 'bun' } : {}),
         args:
           runtime === 'bun'
-            ? ['--no-install', `--tsconfig-override=${bunConfig}`, WORKER]
+            ? [
+                '--no-install',
+                `--tsconfig-override=${bunConfig}`,
+                ...(config.bun?.args ?? []),
+                WORKER,
+              ]
             : ['--import', TSX_LOADER, ...config.nodeFlags, WORKER],
         cwd: s.cwd,
         env: {

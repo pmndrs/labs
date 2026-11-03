@@ -61,6 +61,8 @@ In an interactive terminal, a live view shows each benchmark's progress while it
 - **Firefox** requires `pnpm dlx playwright-core@1.64.1 install firefox`. Heap allocation diagnostics are unavailable.
 - **WebKit** requires `pnpm dlx playwright-core@1.64.1 install webkit`. It runs Safari's engine in a separate browser build. Heap allocation diagnostics are unavailable.
 
+Set JSC options through `bun.env` with `BUN_JSC_*` names or `webkit.env` with `JSC_*` names. WebKit forwards these to its content process on macOS. Set `DEBUG=pw:browser` to see WebKit's diagnostic output.
+
 </details>
 
 <img src="docs/images/bench.png" width="760" alt="Labs run view with a benchmark list, timing measurements, sample histogram, garbage collection, heap per iteration, and run consistency" />
@@ -396,8 +398,9 @@ export default defineConfig({
 | `nodeFlags`         | `['--allow-natives-syntax', '--expose-gc']` | Node flags per worker process                                                                                                                   |
 | `runtime`           | `'node'`                                    | Benchmark runtime: `'node'`, `'chrome'`, `'bun'`, `'firefox'`, or `'webkit'`. Override per run with `--runtime`                                 |
 | `chrome`            | `{ headless: true }`                        | Chrome options: `headless`, `executablePath`, and extra `args`. GPU timestamps use full resolution.                                             |
-| `firefox`, `webkit` | `{ headless: true }`                        | Playwright browser launch options: `headless` and optional `executablePath`                                                                     |
-| `bun`               | `{}`                                        | Bun launch options: optional `executablePath`                                                                                                   |
+| `firefox`           | `{ headless: true }`                        | Firefox launch options: `headless` and optional `executablePath`                                                                                |
+| `webkit`            | `{ headless: true }`                        | WebKit launch options: `headless`, `executablePath`, extra `args`, and `env`                                                                    |
+| `bun`               | `{}`                                        | Bun launch options: `executablePath`, extra `args`, and `env`                                                                                   |
 | `resultsDir`        | `.labs`                                     | Directory for saved results, relative to config                                                                                                 |
 | `blockTime`         | `0.5`                                       | Pilot block's timed work budget in seconds, excluding warmup and heap diagnostics. Later blocks replay its sample count                         |
 | `minSamples`        | `20`                                        | Minimum samples per block                                                                                                                       |

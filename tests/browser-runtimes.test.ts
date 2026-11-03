@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { firefox, webkit } from 'playwright-core';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { defineConfig } from '../src/config.ts';
 import { renderRunView } from '../src/cli/run-view.ts';
 import { loadResult } from '../src/store.ts';
@@ -18,6 +18,7 @@ describe.each([
   let project: string;
 
   afterEach(() => {
+    vi.unstubAllEnvs();
     if (project) rmSync(project, { recursive: true, force: true });
   });
 
@@ -129,6 +130,36 @@ describe.each([
           colors: false,
         }).lines.join('\n')
       ).toContain(label);
+    }
+  );
+
+  it.skipIf(runtime !== 'webkit' || !existsSync(engine.executablePath()))(
+    'passes WebKit arguments and JSC settings to every content process',
+    { timeout: 60_000 },
+    () => {
+      vi.stubEnv('DEBUG', 'pw:browser');
+      vi.stubEnv('__XPC_JSC_useDollarVM', '0');
+      setup(
+        `import { assert, bench } from '@pmndrs/labs';
+        assert.equal(typeof globalThis.$vm.ftlTrue, 'function');
+        bench('JSC options', () => document.createElement('div').tagName);`,
+        {
+          webkit: {
+            headless: false,
+            args: ['--headless'],
+            env: { JSC_useDollarVM: '1' },
+          },
+        }
+      );
+      const output = run();
+      expect(output.status, output.stderr).toBe(0);
+      expect(output.stderr).toMatch(/<launching>[^\n]*--headless/);
+      const report = JSON.parse(output.stdout);
+      expect(report.crashes).toEqual([]);
+      expect(report.benches).toHaveLength(1);
+      expect(report.benches[0].gc).not.toBeNull();
+      const saved = loadResult(join(project, '.labs'), 'browser-test');
+      expect(saved.files[0].benchmarks[0].runs[0].stats!.blocks!.medians).toHaveLength(2);
     }
   );
 

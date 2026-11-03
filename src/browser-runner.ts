@@ -20,7 +20,7 @@ export async function runBrowser(options: {
   runtime: 'chrome' | 'firefox' | 'webkit';
   tune: MeasureOptions;
   grepTags?: string;
-  launch?: LabsConfig['chrome'];
+  launch?: LabsConfig['chrome'] & LabsConfig['webkit'];
   snapshotTolerance?: number;
   beforeDiagnostics?: () => Promise<void>;
   execute: (
@@ -38,10 +38,21 @@ export async function runBrowser(options: {
     diagnostics = false,
     env?: NodeJS.ProcessEnv
   ): Promise<T> => {
+    const launchEnv = { ...process.env, ...options.launch?.env, ...env };
+    if (options.runtime === 'webkit' && process.platform === 'darwin') {
+      // macOS forwards __XPC_ variables into the WebKit content process.
+      for (const [name, value] of Object.entries(options.launch?.env ?? {})) {
+        if (name.startsWith('JSC_')) {
+          launchEnv[`__XPC_${name}`] = options.launch?.env?.[`__XPC_${name}`] ?? value;
+        }
+      }
+    }
     const browser = await engine
       .launch({
         executablePath: options.launch?.executablePath,
         headless: options.launch?.headless ?? true,
+        args: options.launch?.args,
+        env: launchEnv,
         ...(options.runtime === 'firefox'
           ? { env: env ?? { ...process.env, MOZ_PROFILER_STARTUP: '0', MOZ_PROFILER_SHUTDOWN: '' } }
           : {}),

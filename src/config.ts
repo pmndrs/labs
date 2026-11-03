@@ -22,9 +22,13 @@ export interface LabsConfig {
   webkit?: {
     executablePath?: string;
     headless?: boolean;
+    args?: string[];
+    env?: Record<string, string>;
   };
   bun?: {
     executablePath?: string;
+    args?: string[];
+    env?: Record<string, string>;
   };
   /** Directory for saved results and baseline pointer, relative to config file. @default ".labs" */
   resultsDir: string;
