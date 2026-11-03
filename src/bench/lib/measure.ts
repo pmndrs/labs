@@ -3,13 +3,20 @@ import {
   AsyncFunction,
   do_not_optimize,
   GeneratorFunction,
+  force_optimize,
   kind,
   never_optimize,
   now as runtimeNow,
 } from './runtime.ts';
 import { toSnapshot } from './snapshot.ts';
 import { batchSize, defaults } from './constants.ts';
-import { createWarmup, isWarmupDone, isWarmupUnsettled, recordWarmup } from './warmup.ts';
+import {
+  createWarmup,
+  isWarmupDone,
+  isWarmupUnsettled,
+  recordWarmup,
+  type WarmupState,
+} from './warmup.ts';
 import { memoryPass } from './memory.ts';
 import { GcObservation, GcScope } from './gc.ts';
 
@@ -330,6 +337,9 @@ export async function benchFn(fn: (...args: any[]) => any, opts: any = {}): Prom
     '$observation',
     '$samples',
     '$summarize',
+    '$minSamples',
+    '$minTime',
+    '$warm',
     `
     ${!opts.$counters ? '' : 'let _hc = false;'}
     ${!opts.$counters ? '' : 'try { $counters.init(); _hc = true; } catch {}'}
@@ -345,11 +355,8 @@ export async function benchFn(fn: (...args: any[]) => any, opts: any = {}): Prom
       ).join('\n')
     ).join('\n')}
 
-    ${!opts.gc ? '' : '$gc();'}
-    $observation.start();
-
     for (; _ < ${samples.length}; _++) {
-      if (_ >= ${opts.min_samples} && t >= ${opts.min_cpu_time}) break;
+      if (_ >= $minSamples && t >= $minTime) break;
       ${prepare}
       ${!opts.$counters ? '' : 'if (_hc) try { $counters.before(); } catch {};'}
       const t0 = $now();
@@ -362,6 +369,7 @@ export async function benchFn(fn: (...args: any[]) => any, opts: any = {}): Prom
       $samples[_] = diff ${!batch ? '' : `/ ${batchSamples}`};
       ${after}
     }
+    if ($warm) return t / _;
 
     const gc = ${awaitGcOutsideLoop ? '' : 'await '}$observation.finish(t, _ * ${batch ? batchSamples : 1}, ${now === runtimeNow && !opts.manual});
     ${
@@ -397,25 +405,53 @@ export async function benchFn(fn: (...args: any[]) => any, opts: any = {}): Prom
   // around it costs nothing measurable.
   if (!batch) never_optimize(loop);
 
+  const run = (warm: boolean) =>
+    loop(
+      fn,
+      opts.gc,
+      opts.now,
+      opts.heap,
+      opts.params,
+      opts.$counters,
+      consume,
+      opts.after,
+      summarize,
+      observation,
+      samples,
+      summarizeSamples,
+      warm ? opts.warmup_samples : opts.min_samples,
+      warm ? 0 : opts.min_cpu_time,
+      warm
+    );
+
   try {
+    // The batched loop is fresh code that inlines the workload. Entered once,
+    // it would tier up through on-stack replacement while recording, with the
+    // engine dropping back to slower code at every batch for a while. Warm
+    // passes over the same loop collect feedback first. Where the engine can
+    // be told, it then compiles the loop at the top tier for the recorded
+    // pass. Elsewhere the passes repeat until their timings agree.
+    if (batch && opts.warmup_samples > 0 && !opts.$counters) {
+      const loopWarmup: WarmupState = createWarmup(
+        now() + opts.warmup_time,
+        opts.warmup_samples,
+        now() + opts.warmup_settle
+      );
+      force_optimize?.prepare(loop);
+      while (now() < loopWarmup.deadline) {
+        recordWarmup(loopWarmup, await run(true), 1, opts);
+        if (force_optimize || loopWarmup.stable) break;
+      }
+      force_optimize?.next(loop);
+    }
+    if (opts.gc) opts.gc();
+    observation.start();
+
     const measured = {
       kind: 'fn' as const,
       debug: loop.toString(),
       ...(isWarmupUnsettled(warmup, opts) ? { unsettled: true } : {}),
-      ...(await loop(
-        fn,
-        opts.gc,
-        opts.now,
-        opts.heap,
-        opts.params,
-        opts.$counters,
-        consume,
-        opts.after,
-        summarize,
-        observation,
-        samples,
-        summarizeSamples
-      )),
+      ...(await run(false)),
     };
     if (observer && awaitGcOutsideLoop) measured.gc = await measured.gc;
     if (!observer) delete measured.gc;

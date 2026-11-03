@@ -94,8 +94,12 @@ describe('adaptive warmup', () => {
       }
     );
 
-    expect(warmupCalls * cost).toBeGreaterThanOrEqual(5_000_000);
-    expect(warmupCalls * cost).toBeLessThan(7_000_000);
+    // Batched work also warms the generated sampling loop, with its own settle floor
+    const floors = cost < 65_536 ? 2 : 1;
+    expect(warmupCalls * cost).toBeGreaterThanOrEqual(floors * 5_000_000);
+    expect(warmupCalls * cost).toBeLessThan(floors * 7_000_000);
+    // Every warm call precedes the initial collection, so only the recorded sample follows it
+    expect(calls - warmupCalls).toBe(stats.plan!.batch ? stats.plan!.batch_samples : 1);
     expect(stats.p50).toBe(cost);
     expect(stats.plan?.batch).toBe(cost < 65_536);
   });
