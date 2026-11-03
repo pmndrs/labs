@@ -4,8 +4,8 @@ export function usage(): string {
   return `labs runs the benchmarks under benchDir and saves the result.
 
 Usage
-  bench [filter] [options]      Run benches, filtered by file name or @tag
-  bench run [filter] [options]  Same as bench
+  bench [filter...] [options]   Run benches, filtered by file name or @tag
+  bench run [filter...]         Same as bench
   bench list                    List saved results
   bench compare [name] [-l]     Compare a saved result against the baseline
   bench baseline [name]         Set the baseline result
@@ -23,7 +23,7 @@ Options
       --runtime <name>          node, chrome, firefox, webkit, or bun
       --against <rev|dir>       Run that tree interleaved with the working tree and compare
       --candidate <rev|dir>     Measure that tree instead of the working checkout
-  -l, --last                    Rerun the previous selection, or replay the last compare
+  -l, --last                    Replay the last compared pair, compare only
       --no-save                 Run without saving
       --json                    Print judged results as JSON
       --fail-on-slower          Exit 1 when a compared bench is slower
@@ -41,7 +41,6 @@ export function checkOptions(command: string, args: string[]): void {
         '--baseline',
         '-c',
         '--compare',
-        '--last',
         '--no-save',
         '--json',
         '--fail-on-slower',
