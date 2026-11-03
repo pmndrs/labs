@@ -118,7 +118,7 @@ Labs promises to give results you can trust. To do this a number of guarantees a
 
 - Each bench block runs in its own isolated worker process, preventing benches in the same file from contaminating each other's JIT state, heap layout, or GC history. Reordering benches can otherwise skew results by 2x or more.
 - Every block warms the workload before measurement. Warmup runs for at least 5 ms, so the engine can finish optimizing, and exits once consecutive timing windows agree, with a 100 ms budget for slow or unstable work. The pilot chooses batching from the warmed timings.
-- The sampling loop is warmed too. It is generated code that inlines the workload, and an engine entering it cold would optimize it mid-recording, dropping to slower code at every batch for a while. Warm passes over the loop collect type feedback first, and on V8 the loop is then compiled at the top tier before the recorded pass.
+- The sampling loop is warmed before recording.
 - Samples run consecutively after one initial GC. Natural GC remains in timing, all samples are retained, and heap diagnostics run separately afterward.
 - Every bench is run in isolated blocks that are interleaved: `A₁ B₁ C₁ → A₂ B₂ C₂ → … → A₈ B₈ C₈`. This reduces bias from gradual changes such as CPU throttling or even boosting.
 - Timing overhead is controlled. If a sample's measurement time is so fast that the overhead of the timing itself would bias the results, then it is run in a batch sized so each sample lasts about a millisecond.
