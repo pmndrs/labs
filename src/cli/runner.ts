@@ -643,6 +643,8 @@ export async function runCLI(args: string[]) {
     return;
   }
 
+  // The other side of an interleaved run, whose readings share the same minutes.
+  const partnerOf = (s: Side) => (reference ? (s === candidate ? reference : candidate) : undefined);
   const buildResult = (s: Side, name: string, description?: string): SavedResult => ({
     name,
     ...(description ? { description } : {}),
@@ -652,7 +654,10 @@ export async function runCLI(args: string[]) {
     blocks,
     context: s.collected.noop,
     files: s.collected.files,
-    environment: { freqs: s.collected.envData },
+    environment: {
+      freqs: s.collected.envData,
+      ...(partnerOf(s) ? { paired: partnerOf(s)!.collected.envData } : {}),
+    },
   });
   const result = buildResult(candidate, saveName, description);
 
@@ -662,6 +667,7 @@ export async function runCLI(args: string[]) {
     const { files, hardware, envData, diagnostics, noop } = s.collected;
     const input = {
       envData,
+      ...(partnerOf(s) ? { paired: partnerOf(s)!.collected.envData } : {}),
       cpu: hardware.cpu,
       saveMsg,
       blocks,

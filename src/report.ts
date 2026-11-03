@@ -8,7 +8,13 @@ import {
   minDetectableEffect,
   relativeSpread,
 } from './stats.ts';
-import type { SavedBenchmarkTrial, SavedFile, SavedResult, FreqSample } from './store.ts';
+import {
+  type SavedBenchmarkTrial,
+  type SavedFile,
+  type SavedResult,
+  type FreqSample,
+  pairedFreqDrift,
+} from './store.ts';
 import { BLUE, BOLD, DIM, GREEN, RED, RESET, YELLOW } from './utils/ansi.ts';
 import { visibleLength } from './utils/format.ts';
 
@@ -91,6 +97,8 @@ export function collectDiagnostics(
 
 export interface ReportInput {
   envData: FreqSample[];
+  /** Readings the interleaved partner took in the same minutes. */
+  paired?: FreqSample[];
   cpu?: string | null;
   saveMsg?: string;
   blocks: number;
@@ -99,7 +107,7 @@ export interface ReportInput {
 }
 
 export function printReportBox(input: ReportInput): void {
-  const { envData, cpu, saveMsg, blocks, minDelta, diagnostics } = input;
+  const { envData, paired, cpu, saveMsg, blocks, minDelta, diagnostics } = input;
   const lines: string[] = [];
 
   if (saveMsg) {
@@ -121,10 +129,14 @@ export function printReportBox(input: ReportInput): void {
     const max = Math.max(...allFreqs);
     const drift = (max - min) / ((max + min) / 2);
     const rangeStr = `${min.toFixed(2)}–${max.toFixed(2)} GHz`;
+    const pairDrift = paired && pairedFreqDrift(envData, paired);
+    const detail =
+      `${(drift * 100).toFixed(1)}% drift` +
+      (pairDrift === undefined ? '' : `, ${(pairDrift * 100).toFixed(1)}% between paired blocks`);
 
-    if (drift > 0.05) {
+    if ((pairDrift ?? drift) > 0.05) {
       lines.push(
-        `${YELLOW}⚠ Unstable clock:${RESET} ${DIM}Readings ranged ${rangeStr} (${(drift * 100).toFixed(1)}% drift).${RESET}`
+        `${YELLOW}⚠ Unstable clock:${RESET} ${DIM}Readings ranged ${rangeStr} (${detail}).${RESET}`
       );
       if (cpu && /apple/i.test(cpu)) {
         lines.push(`  ${DIM}Apple Silicon does not support CPU controls.${RESET}`);
@@ -135,7 +147,9 @@ export function printReportBox(input: ReportInput): void {
         );
       }
     } else {
-      lines.push(`${GREEN}✔ Stable clock:${RESET} ${DIM}Readings ranged ${rangeStr}.${RESET}`);
+      lines.push(
+        `${GREEN}✔ Stable clock:${RESET} ${DIM}Readings ranged ${rangeStr} (${detail}).${RESET}`
+      );
     }
     lines.push('');
   }
@@ -232,9 +246,13 @@ export function printRunSummary(
     const max = Math.max(...freqs);
     // The empty-call probe tracks available CPU speed, not a hardware clock
     const drift = (max - min) / ((max + min) / 2);
+    const pairDrift = input.paired && pairedFreqDrift(envData, input.paired);
+    const stable = (pairDrift ?? drift) <= 0.05;
     rows.push([
       'CPU',
-      `speed varied ${(drift * 100).toFixed(0)}%  ${drift <= 0.05 ? `${GREEN}stable` : `${YELLOW}unstable`}${RESET}`,
+      `speed varied ${(drift * 100).toFixed(0)}%  ` +
+        (pairDrift === undefined ? '' : `paired ${(pairDrift * 100).toFixed(0)}%  `) +
+        `${stable ? `${GREEN}stable` : `${YELLOW}unstable`}${RESET}`,
     ]);
   }
   if (diagnostics.medianSpreads.length > 0) {
