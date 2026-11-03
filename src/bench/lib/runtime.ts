@@ -56,6 +56,17 @@ export const force_optimize: { prepare(f: Function): void; next(f: Function): vo
     }
   })();
 
+/**
+ * JavaScriptCore's function entry code, available with useDollarVM, which the
+ * CLI enables for Bun and WebKit.
+ */
+export const dollar_vm:
+  | {
+      codeBlockFor(fn: Function): string | undefined;
+    }
+  | undefined =
+  typeof (globalThis as any).$vm?.codeBlockFor === 'function' ? (globalThis as any).$vm : undefined;
+
 /** Resolved `console.log` (or runtime-specific equivalent). */
 export const _print: (s: any) => void = (() => {
   if (globalThis.console?.log) return globalThis.console.log;

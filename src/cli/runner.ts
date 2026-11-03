@@ -136,7 +136,11 @@ function workerEnv(
   resultFile?: string
 ): NodeJS.ProcessEnv {
   // Worker behavior is determined only by the current run configuration.
-  const env = { ...process.env, ...(tune.runtime === 'bun' ? tune.bun?.env : {}) };
+  const env: NodeJS.ProcessEnv = {
+    ...(tune.runtime === 'bun' ? { BUN_JSC_useDollarVM: '1' } : {}),
+    ...process.env,
+    ...(tune.runtime === 'bun' ? tune.bun?.env : {}),
+  };
   for (const key of Object.keys(env)) {
     if (key.startsWith('LABS_')) delete env[key];
   }
