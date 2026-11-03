@@ -471,6 +471,24 @@ describe('Chrome benchmarks', () => {
     }
   );
 
+  it.skipIf(!executablePath)(
+    'passes configured Chrome flags to the browser',
+    { timeout: 60_000 },
+    () => {
+      setup(
+        `import { assert, bench } from '@pmndrs/labs';
+      bench('flags', function* () {
+        assert.equal(navigator.userAgent, 'labs-flags');
+        yield () => 1;
+      });`,
+        { chrome: { executablePath, args: ['--user-agent=labs-flags'] } }
+      );
+      const output = run('--runtime', 'chrome');
+      expect(output.status, output.stderr).toBe(0);
+      expect(JSON.parse(output.stdout).benches[0].name).toBe('flags');
+    }
+  );
+
   it('rejects an unsupported runtime before starting workers', () => {
     setup(`import { bench } from '@pmndrs/labs'; bench('test', () => 1);`);
     const output = run('--runtime', 'deno');

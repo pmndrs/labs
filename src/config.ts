@@ -12,6 +12,8 @@ export interface LabsConfig {
   chrome?: {
     executablePath?: string;
     headless?: boolean;
+    /** Extra Chrome command line flags, added to the Labs defaults. */
+    args?: string[];
   };
   firefox?: {
     executablePath?: string;
@@ -20,9 +22,13 @@ export interface LabsConfig {
   webkit?: {
     executablePath?: string;
     headless?: boolean;
+    args?: string[];
+    env?: Record<string, string>;
   };
   bun?: {
     executablePath?: string;
+    args?: string[];
+    env?: Record<string, string>;
   };
   /** Directory for saved results and baseline pointer, relative to config file. @default ".labs" */
   resultsDir: string;

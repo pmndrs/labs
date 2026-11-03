@@ -10,6 +10,7 @@ import { startBrowserServer } from './browser-server.ts';
 import { observeChromeGc } from './chrome-trace.ts';
 import { observeWebkitGc } from './webkit-gc.ts';
 import { observeFirefoxGc, prepareFirefoxGc } from './firefox-gc.ts';
+import { RuntimeLaunchError } from './runtime-error.ts';
 
 type BrowserGlobal = typeof globalThis & { __labs: typeof browserHarness };
 
@@ -19,7 +20,7 @@ export async function runBrowser(options: {
   runtime: 'chrome' | 'firefox' | 'webkit';
   tune: MeasureOptions;
   grepTags?: string;
-  launch?: LabsConfig['chrome'];
+  launch?: LabsConfig['chrome'] & LabsConfig['webkit'];
   snapshotTolerance?: number;
   beforeDiagnostics?: () => Promise<void>;
   execute: (
@@ -37,22 +38,42 @@ export async function runBrowser(options: {
     diagnostics = false,
     env?: NodeJS.ProcessEnv
   ): Promise<T> => {
-    const browser = await engine.launch({
-      executablePath: options.launch?.executablePath,
-      headless: options.launch?.headless ?? true,
-      ...(options.runtime === 'firefox'
-        ? { env: env ?? { ...process.env, MOZ_PROFILER_STARTUP: '0', MOZ_PROFILER_SHUTDOWN: '' } }
-        : {}),
-      ...(options.runtime === 'chrome'
-        ? {
-            channel: 'chrome',
-            args: [
-              '--js-flags=--expose-gc --allow-natives-syntax',
-              ...(diagnostics && options.tune.heap !== false ? ['--enable-precise-memory-info'] : []),
-            ],
-          }
-        : {}),
-    });
+    const launchEnv = { ...process.env, ...options.launch?.env, ...env };
+    if (options.runtime === 'webkit' && process.platform === 'darwin') {
+      // macOS forwards __XPC_ variables into the WebKit content process.
+      for (const [name, value] of Object.entries(options.launch?.env ?? {})) {
+        if (name.startsWith('JSC_')) {
+          launchEnv[`__XPC_${name}`] = options.launch?.env?.[`__XPC_${name}`] ?? value;
+        }
+      }
+    }
+    const browser = await engine
+      .launch({
+        executablePath: options.launch?.executablePath,
+        headless: options.launch?.headless ?? true,
+        args: options.launch?.args,
+        env: launchEnv,
+        ...(options.runtime === 'firefox'
+          ? { env: env ?? { ...process.env, MOZ_PROFILER_STARTUP: '0', MOZ_PROFILER_SHUTDOWN: '' } }
+          : {}),
+        ...(options.runtime === 'chrome'
+          ? {
+              channel: 'chrome',
+              args: [
+                '--js-flags=--expose-gc --allow-natives-syntax',
+                // Dawn rounds GPU timestamps to 65536 ns against timing attacks, which a benchmark browser does not face.
+                '--disable-dawn-features=timestamp_quantization',
+                ...(diagnostics && options.tune.heap !== false
+                  ? ['--enable-precise-memory-info']
+                  : []),
+                ...(options.launch?.args ?? []),
+              ],
+            }
+          : {}),
+      })
+      .catch((error: unknown) => {
+        throw new RuntimeLaunchError(options.runtime, error, options.launch?.executablePath);
+      });
     let pageError: Error | undefined;
     try {
       const page = await browser.newPage();

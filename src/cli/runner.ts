@@ -5,6 +5,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { resolve as resolveModule } from 'import-meta-resolve';
 import { compare } from '../compare.ts';
 import type { LabsConfig } from '../config.ts';
+import { RuntimeLaunchError } from '../runtime-error.ts';
 import { collectDiagnostics, emptyDiagnostics, printReportBox, printRunSummary } from '../report.ts';
 import {
   type FreqSample,
@@ -139,6 +140,7 @@ type WorkerTune = Pick<
   | 'chrome'
   | 'firefox'
   | 'webkit'
+  | 'bun'
   | 'snapshotTolerance'
 > & { gc?: boolean };
 
@@ -149,7 +151,7 @@ function workerEnv(
   resultFile?: string
 ): NodeJS.ProcessEnv {
   // Worker behavior is determined only by the current run configuration.
-  const env = { ...process.env };
+  const env = { ...process.env, ...(tune.runtime === 'bun' ? tune.bun?.env : {}) };
   for (const key of Object.keys(env)) {
     if (key.startsWith('LABS_')) delete env[key];
   }
@@ -452,6 +454,7 @@ export async function runCLI(args: string[]) {
     chrome: config.chrome,
     firefox: config.firefox,
     webkit: config.webkit,
+    bun: config.bun,
     snapshotTolerance: config.snapshotTolerance,
     counters: config.counters && resolveCounters(config.counters, configPath),
   };
@@ -587,7 +590,12 @@ export async function runCLI(args: string[]) {
         ...(runtime === 'bun' ? { execPath: config.bun?.executablePath ?? 'bun' } : {}),
         args:
           runtime === 'bun'
-            ? ['--no-install', `--tsconfig-override=${bunConfig}`, WORKER]
+            ? [
+                '--no-install',
+                `--tsconfig-override=${bunConfig}`,
+                ...(config.bun?.args ?? []),
+                WORKER,
+              ]
             : ['--import', TSX_LOADER, ...config.nodeFlags, WORKER],
         cwd: s.cwd,
         env: {
@@ -612,8 +620,12 @@ export async function runCLI(args: string[]) {
       if (specs.length) await runWorkers(specs);
     } catch (err) {
       process.exitCode = 1;
-      crash = (err as Error).message;
+      crash =
+        runtime === 'bun' && (err as NodeJS.ErrnoException).syscall?.startsWith('spawn')
+          ? new RuntimeLaunchError('bun', err, config.bun?.executablePath).message
+          : (err as Error).message;
       crashes.push({ file: suiteName(f), error: crash });
+      if (!view) console.error(`${RED}✖${RESET} ${crash}`);
     } finally {
       for (const config of bunConfigs) rmSync(config, { force: true });
     }
