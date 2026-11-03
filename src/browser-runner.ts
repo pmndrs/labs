@@ -38,7 +38,12 @@ export async function runBrowser(options: {
     diagnostics = false,
     env?: NodeJS.ProcessEnv
   ): Promise<T> => {
-    const launchEnv = { ...process.env, ...options.launch?.env, ...env };
+    const launchEnv: NodeJS.ProcessEnv = {
+      ...(options.runtime === 'webkit' ? { __XPC_JSC_useDollarVM: '1', JSC_useDollarVM: '1' } : {}),
+      ...process.env,
+      ...options.launch?.env,
+      ...env,
+    };
     if (options.runtime === 'webkit' && process.platform === 'darwin') {
       // macOS forwards __XPC_ variables into the WebKit content process.
       for (const [name, value] of Object.entries(options.launch?.env ?? {})) {

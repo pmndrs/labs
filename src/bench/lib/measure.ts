@@ -1,9 +1,16 @@
-import type { GeneratorBench, MeasureOptions, Snapshot, Stats } from '../types.ts';
+import type {
+  GeneratorBench,
+  MeasureOptions,
+  OptimizationSample,
+  Snapshot,
+  Stats,
+} from '../types.ts';
 import {
   AsyncFunction,
   do_not_optimize,
   GeneratorFunction,
   force_optimize,
+  dollar_vm,
   kind,
   never_optimize,
   now as runtimeNow,
@@ -19,6 +26,7 @@ import {
 } from './warmup.ts';
 import { memoryPass } from './memory.ts';
 import { GcObservation, GcScope } from './gc.ts';
+import { optimization, optimizationClock } from './optimization.ts';
 
 /** Range and median of the per-sample values, sorted in place. */
 function summarize(values: Float64Array): { min: number; max: number; p50: number } {
@@ -170,6 +178,8 @@ export async function benchFn(fn: (...args: any[]) => any, opts: any = {}): Prom
   let batch = false;
   let single = 0;
   const params: string[] = Object.keys(opts.params);
+  let workload: OptimizationSample | null = null;
+  let observeWorkload: ReturnType<typeof optimizationClock>;
 
   {
     const $p = Array.from({ length: params.length }, () => 0);
@@ -178,6 +188,7 @@ export async function benchFn(fn: (...args: any[]) => any, opts: any = {}): Prom
       $p[o] = await opts.params[o]();
     }
 
+    observeWorkload = optimizationClock(now());
     const t0 = now();
     const r = fn(...$p);
     let t1: number;
@@ -199,6 +210,7 @@ export async function benchFn(fn: (...args: any[]) => any, opts: any = {}): Prom
     if (opts.after) await opts.after();
 
     recordWarmup(warmup, t1 - t0, 1, opts);
+    workload = observeWorkload(optimization?.tier(fn), now());
     while (!isWarmupDone(warmup, opts, now())) {
       let duration = 0;
       let iterations = 0;
@@ -215,6 +227,7 @@ export async function benchFn(fn: (...args: any[]) => any, opts: any = {}): Prom
         iterations++;
       }
       if (iterations) recordWarmup(warmup, duration, iterations, opts);
+      workload = observeWorkload(optimization?.tier(fn), now());
     }
     single = warmup.single;
     batch = single <= opts.batch_threshold;
@@ -405,7 +418,7 @@ export async function benchFn(fn: (...args: any[]) => any, opts: any = {}): Prom
   // around it costs nothing measurable.
   if (!batch) never_optimize(loop);
 
-  const run = (warm: boolean) =>
+  const run = (warm: boolean, minSamples = warm ? opts.warmup_samples : opts.min_samples) =>
     loop(
       fn,
       opts.gc,
@@ -419,39 +432,77 @@ export async function benchFn(fn: (...args: any[]) => any, opts: any = {}): Prom
       observation,
       samples,
       summarizeSamples,
-      warm ? opts.warmup_samples : opts.min_samples,
+      minSamples,
       warm ? 0 : opts.min_cpu_time,
       warm
     );
 
   try {
+    const warmed = batch && opts.warmup_samples > 0 && !opts.$counters;
+    const observeHarness = optimizationClock(now());
+    let harness: OptimizationSample | null = null;
     // The batched loop is fresh code that inlines the workload. Entered once,
     // it would tier up through on-stack replacement while recording, with the
     // engine dropping back to slower code at every batch for a while. Warm
     // passes over the same loop collect feedback first. Where the engine can
     // be told, it then compiles the loop at the top tier for the recorded
     // pass. Elsewhere the passes repeat until their timings agree.
-    if (batch && opts.warmup_samples > 0 && !opts.$counters) {
+    if (warmed) {
       const loopWarmup: WarmupState = createWarmup(
         now() + opts.warmup_time,
         opts.warmup_samples,
         now() + opts.warmup_settle
       );
       force_optimize?.prepare(loop);
-      while (now() < loopWarmup.deadline) {
-        recordWarmup(loopWarmup, await run(true), 1, opts);
-        if (force_optimize || loopWarmup.stable) break;
+      for (let i = 0; i < 3; i++) {
+        await run(true, 0);
+        harness = observeHarness(optimization?.tier(loop), now());
       }
-      force_optimize?.next(loop);
+      let tier = optimization?.tier(loop);
+      let wait: number | undefined;
+      while (now() < loopWarmup.deadline) {
+        const entered = tier;
+        const pass = await run(true);
+        tier = optimization?.tier(loop);
+        harness = observeHarness(tier, now());
+        workload = observeWorkload(optimization?.tier(fn), now());
+        recordWarmup(loopWarmup, pass, 1, opts);
+        if (wait === undefined) {
+          wait = dollar_vm ? (2e6 * pass) / batchSamples : 0;
+          if (wait <= 1e9) loopWarmup.deadline = Math.max(loopWarmup.deadline, now() + wait);
+        }
+        if (
+          force_optimize ||
+          (loopWarmup.stable &&
+            (!optimization || (entered === optimization.highest && tier === optimization.highest)))
+        )
+          break;
+      }
+      if (force_optimize) {
+        force_optimize.next(loop);
+        await run(true, 0);
+        harness = observeHarness(optimization?.tier(loop), now());
+      }
     }
+    workload = observeWorkload(optimization?.tier(fn), now());
     if (opts.gc) opts.gc();
+    if (warmed) harness = observeHarness(optimization?.tier(loop), now());
     observation.start();
 
+    const recorded = await run(false);
     const measured = {
       kind: 'fn' as const,
       debug: loop.toString(),
       ...(isWarmupUnsettled(warmup, opts) ? { unsettled: true } : {}),
-      ...(await run(false)),
+      ...(opts.warmup_samples > 0
+        ? {
+            optimization: {
+              workload: [workload],
+              ...(warmed ? { harness: [harness] } : {}),
+            },
+          }
+        : {}),
+      ...recorded,
     };
     if (observer && awaitGcOutsideLoop) measured.gc = await measured.gc;
     if (!observer) delete measured.gc;
@@ -484,6 +535,8 @@ export async function benchIter(iter: (...args: any[]) => any, opts: any = {}): 
   };
   const now: () => number = opts.now;
   let batchSamples = 0;
+  let observeWorkload!: ReturnType<typeof optimizationClock>;
+  let workload: OptimizationSample | null = null;
   const samples = createSamples(opts.max_samples);
   const observation = new GcScope(opts.sample_gc ? await GcObservation.create() : undefined);
   const _i = {
@@ -519,6 +572,7 @@ export async function benchIter(iter: (...args: any[]) => any, opts: any = {}): 
         iterations++;
       } while (iterations < warmup.iterations && now() < warmup.deadline);
       recordWarmup(warmup, now() - t0, iterations, opts);
+      workload = observeWorkload(optimization?.tier(iter), now());
     } while (!isWarmupDone(warmup, opts, now()));
 
     const single = warmup.single;
@@ -571,6 +625,7 @@ export async function benchIter(iter: (...args: any[]) => any, opts: any = {}): 
   })();
 
   try {
+    observeWorkload = optimizationClock(now());
     await iter(((_.next = gen.next.bind(gen)), ctx));
     if (_.gc) _.gc = await _.gc;
   } finally {
@@ -592,6 +647,7 @@ export async function benchIter(iter: (...args: any[]) => any, opts: any = {}): 
     },
     debug: _.debug,
     ...(_.unsettled ? { unsettled: true } : {}),
+    ...(opts.warmup_samples > 0 ? { optimization: { workload: [workload] } } : {}),
     ticks: _.count * (!_.batch ? 1 : batchSamples),
     ...(_.gc ? { gc: _.gc } : {}),
   };

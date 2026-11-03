@@ -222,6 +222,18 @@ function mergeStats(list: Stats[], calibrationRates: number[]): Stats {
     ticks: list.reduce((a, s) => a + s.ticks, 0),
     ...(heaps.length === list.length ? { heap: mergeRange(heaps) } : {}),
     ...(gcs.length === list.length ? { gc: mergeGc(gcs) } : {}),
+    ...(list.some((stats) => stats.optimization)
+      ? {
+          optimization: {
+            workload: list.flatMap((stats) => stats.optimization?.workload ?? [null]),
+            ...(list.some((stats) => stats.optimization?.harness)
+              ? {
+                  harness: list.flatMap((stats) => stats.optimization?.harness ?? [null]),
+                }
+              : {}),
+          },
+        }
+      : {}),
     // `freqs` is retained in the saved schema for compatibility. The values
     // are software calibration rates, not literal hardware frequencies.
     blocks: { medians, freqs: calibrationRates, spreads: list.map((s) => relativeSpread(s.samples)) },

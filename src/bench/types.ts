@@ -38,6 +38,20 @@ export interface LegacyGcStats {
   p50: number;
 }
 
+export type OptimizationTier =
+  'Ignition' | 'Sparkplug' | 'Maglev' | 'TurboFan' | 'LLInt' | 'Baseline' | 'DFG' | 'FTL';
+
+export interface OptimizationSample {
+  tier: OptimizationTier;
+  time: number;
+}
+
+/** Entry tiers per block, with elapsed ns from that warmup phase's start. Null means unavailable. */
+export interface OptimizationStats {
+  workload: Array<OptimizationSample | null>;
+  harness?: Array<OptimizationSample | null>;
+}
+
 export interface Stats {
   debug: string;
   ticks: number;
@@ -61,6 +75,7 @@ export interface Stats {
   snapshot?: Snapshot;
   unsettled?: boolean;
   varyingOutput?: boolean;
+  optimization?: OptimizationStats;
   /** Per-block summaries when the benchmark ran in multiple fresh processes. */
   blocks?: {
     medians: number[];
