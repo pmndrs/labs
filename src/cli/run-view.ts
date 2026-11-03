@@ -1,4 +1,4 @@
-import { isLikelyOptimizedOut } from '../bench/diagnostics.ts';
+import { isLikelyOptimizedOut, lateOptimizationWarning } from '../bench/diagnostics.ts';
 import * as histogramFmt from '../bench/format/histogram.ts';
 import { formatGcColumns } from '../bench/format/gc.ts';
 import { optimizationRows } from '../bench/format/optimization.ts';
@@ -51,7 +51,13 @@ export function runStatus(
   minDelta: number
 ): {
   symbol: string;
-  problem?: 'failed' | 'unmeasured' | 'optimized-out' | 'nondeterministic' | 'imprecise';
+  problem?:
+    | 'failed'
+    | 'unmeasured'
+    | 'optimized-out'
+    | 'nondeterministic'
+    | 'late-optimization'
+    | 'imprecise';
   message: string;
   advice: string;
   minDetectableChange?: number;
@@ -81,6 +87,9 @@ export function runStatus(
       message: 'likely optimized out',
       advice: 'return the result',
     };
+  const lateOptimization = lateOptimizationWarning(stats.optimization);
+  if (lateOptimization && !stats.varyingOutput)
+    return { symbol: '⚠', problem: 'late-optimization', message: lateOptimization, advice: '' };
   if (stats.unsettled || stats.varyingOutput)
     return {
       symbol: '⚠',

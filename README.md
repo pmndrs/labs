@@ -71,9 +71,8 @@ In an interactive terminal, a live view shows each benchmark's progress while it
 - **⚠ UNSTABLE**: The CPU speed probes taken during the run varied more than 5%, usually from background load, efficiency cores, or throttling. Treat comparisons with other runs carefully. With `--against`, Labs checks drift between paired blocks.
 - **✓, ⚠, ✗**: A warning shows one line with the most serious problem and what to do. `likely optimized out` means the work was removed by the JIT. `results change between runs` means warmup never settled or the output differed between fresh processes. `min detectable change ±N%` is the smallest change a comparison could detect, shown when it is larger than `minDelta`.
 - **avg, p75, p99**: Average time per iteration and the 75th and 99th percentiles. For batched work, percentiles describe batch averages rather than individual calls.
-- **bench tier**: The entry tier observed before sampling. Batched work is unverified unless both the function and harness reached the top tier, because inlining is not observed.
-- **fn entry, harness**: First-observed entry tiers and elapsed warmup times. Each phase has its own clock. An unbatched harness is not warmed. Mixed tiers show block counts, and unavailable tiers are marked explicitly.
-- **settled**: Time until workload warmup timings agree. This does not confirm optimization.
+- **sampling**: Mode, verified tier at measurement start, and elapsed warmup including preparation. Uncertain tiers are marked unverified. Mixed tiers show block counts. A warning marks verified tier increases during sampling.
+- **settled**: Elapsed warmup until sampling timings agree. Unbatched runs and older results report workload warmup. Partial settling shows block counts. This does not confirm optimization.
 - **Histogram**: The fastest 99% of timing samples, with the minimum and upper cutoff below. Cyan marks samples below the average, yellow the average bin, and magenta samples above it.
 - **gc**: Observed GC time per iteration and its share of sampling time, including gaps between calls. Below is average GC event frequency. The share is not an exact GC contribution to `avg`.
 - **gc max**: Longest observed GC event, marked `major` when applicable. Below is the number of major GC events observed.
@@ -121,7 +120,7 @@ bench --against ../wt-a --candidate ../wt-b
 Labs promises to give results you can trust. To do this a number of guarantees are made when running benches.
 
 - Each bench block runs in its own isolated worker process, preventing benches in the same file from contaminating each other's JIT state, heap layout, or GC history. Reordering benches can otherwise skew results by 2x or more.
-- Every block warms the benchmark and harness before measurement to let the runtime optimize both and stabilize timings.
+- Every block warms the benchmark naturally until timings agree or the warmup budget expires. Labs does not force a compilation tier.
 - Samples run consecutively after one initial GC. Natural GC remains in timing, all samples are retained, and heap diagnostics run separately afterward.
 - Every bench is run in isolated blocks that are interleaved: `A₁ B₁ C₁ → A₂ B₂ C₂ → … → A₈ B₈ C₈`. This reduces bias from gradual changes such as CPU throttling or even boosting.
 - Timing overhead is controlled. If a sample's measurement time is so fast that the overhead of the timing itself would bias the results, then it is run in a batch sized so each sample lasts about a millisecond.

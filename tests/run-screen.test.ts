@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { defineConfig } from '../src/config.ts';
 import { replayReport } from '../src/report.ts';
 import type { SavedResult } from '../src/store.ts';
+import { runJson } from '../src/cli/json.ts';
 import { showRunReport } from '../src/cli/run-screen.ts';
 import { renderRunView } from '../src/cli/run-view.ts';
 import { openReportScreen } from '../src/cli/screen.ts';
@@ -81,8 +82,6 @@ describe('run report', () => {
       ],
     };
     const text = render(result, 120, 0, 40).lines.join('\n');
-    expect(text).toContain('bench tier');
-    expect(text).toContain('unverified (inlining not observed) (2/3)');
     expect(text).toContain('fn entry');
     expect(text).toContain('3.00 ms → DFG (2/3)');
     expect(text).toContain('unavailable (1/3)');
@@ -94,7 +93,6 @@ describe('run report', () => {
     try {
       replayReport(result, defineConfig({ benchDir: '.' }));
       const report = stripVTControlCharacters(log.mock.calls.flat().join('\n'));
-      expect(report).toContain('unverified (inlining not observed) (2/3)');
       expect(report).toContain('12.00 ms → FTL (2/3)');
       expect(report).toContain('unavailable (1/3)');
     } finally {
@@ -108,60 +106,64 @@ describe('run report', () => {
       batch: true,
       workload: 'TurboFan',
       harness: 'TurboFan',
-      status: 'TurboFan entry',
-      sampling: '10.00 ms → TurboFan (batched)',
+      benchmark: 'TurboFan',
+      sampling: 'batched · 12.00 ms → TurboFan',
     },
     {
       name: 'lower function tier inside a top-tier harness',
       batch: true,
       workload: 'Maglev',
       harness: 'TurboFan',
-      status: 'unverified (inlining not observed)',
-      sampling: '10.00 ms → TurboFan (batched)',
+      benchmark: null,
+      sampling: 'batched · tier unverified',
     },
     {
       name: 'top-tier function inside a lower-tier harness',
       batch: true,
       workload: 'TurboFan',
       harness: 'Maglev',
-      status: 'unverified (inlining not observed)',
-      sampling: '10.00 ms → Maglev (batched)',
+      benchmark: null,
+      sampling: 'batched · tier unverified',
     },
     {
       name: 'unbatched function below the top tier',
       batch: false,
       workload: 'Sparkplug',
       harness: null,
-      status: 'Sparkplug entry (below TurboFan)',
-      sampling: 'not warmed (unbatched, one call per sample)',
+      benchmark: 'Sparkplug',
+      sampling: 'unbatched · 12.00 ms → Sparkplug',
     },
     {
       name: 'runtime without tier diagnostics',
       batch: true,
       workload: null,
       harness: null,
-      status: 'unavailable',
-      sampling: 'unavailable (batched)',
+      benchmark: null,
+      sampling: 'batched · tier unavailable',
     },
   ] as const)(
     'explains the benchmark tier for a $name',
-    ({ batch, workload, harness, status, sampling }) => {
+    ({ batch, workload, harness, benchmark, sampling }) => {
       const result = fixture();
       const stats = result.files[0].benchmarks[0].runs[0].stats!;
       stats.plan = { batch, batch_samples: batch ? 1024 : 1, batch_unroll: 4, samples: 8 };
       stats.optimization = {
+        mode: 'natural',
+        benchmark: [benchmark ? { tier: benchmark, time: 12e6 } : null],
         workload: [workload ? { tier: workload, time: 3e6 } : null],
         ...(batch ? { harness: [harness ? { tier: harness, time: 10e6 } : null] } : {}),
       };
+      stats.warmup = { time: 20e6, phase: batch ? 'sampling' : 'workload' };
       const text = render(result, 120, 0, 40).lines.join('\n');
-      expect(text).toContain('bench tier');
-      expect(text).toContain(status);
       expect(text).toContain(sampling);
+      expect(text).toContain('✓ create entities');
+      expect(text).not.toContain('fn entry');
+      expect(text).not.toContain('harness');
+      expect(text).toContain(batch ? '(sampling timings)' : '(workload timings)');
       const log = vi.spyOn(console, 'log').mockImplementation(() => {});
       try {
         replayReport(result, defineConfig({ benchDir: '.' }));
         const report = stripVTControlCharacters(log.mock.calls.flat().join('\n'));
-        expect(report).toContain(status);
         expect(report).toContain(sampling);
       } finally {
         log.mockRestore();
@@ -169,15 +171,61 @@ describe('run report', () => {
     }
   );
 
+  it('warns only for a verified promotion within the same block', () => {
+    const result = fixture();
+    const stats = result.files[0].benchmarks[0].runs[0].stats!;
+    stats.optimization = {
+      mode: 'natural',
+      benchmark: [{ tier: 'Maglev', time: 2e6 }, { tier: 'TurboFan', time: 3e6 }, null],
+      benchmarkEnd: ['TurboFan', 'Maglev', 'TurboFan'],
+      workload: [null, null, null],
+    };
+    const warning = 'tier rose during sampling · Maglev → TurboFan (1/3 blocks)';
+    expect(render(result, 120, 0, 40).lines.join('\n')).toContain(warning);
+    expect(runJson(result, defineConfig({ benchDir: '.' }), true).benches[0]).toMatchObject({
+      status: 'warning',
+      problem: 'late-optimization',
+      message: warning,
+    });
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      replayReport(result, defineConfig({ benchDir: '.' }));
+      expect(stripVTControlCharacters(log.mock.calls.flat().join('\n'))).toContain('⚠ ' + warning);
+    } finally {
+      log.mockRestore();
+    }
+    stats.optimization.benchmarkEnd = ['Maglev', 'Maglev', 'TurboFan'];
+    expect(runJson(result, defineConfig({ benchDir: '.' }), true).benches[0].status).toBe('passed');
+  });
+
   it('does not infer unbatched sampling from missing data in older results', () => {
     const result = fixture();
     result.files[0].benchmarks[0].runs[0].stats!.optimization = {
       workload: [{ tier: 'Sparkplug', time: 3e6 }],
     };
     const text = render(result, 120, 0, 40).lines.join('\n');
-    expect(text).toContain('unverified (entry only)');
+    expect(text).toContain('fn entry');
     expect(text).toMatch(/harness\s+not recorded/);
     expect(text).not.toContain('unbatched');
+  });
+
+  it('shows when natural warmup did not settle within its budget', () => {
+    const result = fixture();
+    result.files[0].benchmarks[0].runs[0].stats!.optimization = {
+      mode: 'natural',
+      benchmark: [null],
+      workload: [{ tier: 'Maglev', time: 3e6 }],
+      harness: [{ tier: 'TurboFan', time: 10e6 }],
+    };
+    const text = render(result, 120, 0, 40).lines.join('\n');
+    expect(text).toContain('tier unverified');
+    expect(text).toContain('not observed within warmup budget');
+    result.files[0].benchmarks[0].runs[0].stats!.warmup = {
+      time: 20e6,
+      phase: 'sampling',
+      blocks: { settled: 1, total: 3 },
+    };
+    expect(render(result, 120, 0, 40).lines.join('\n')).toContain('(1/3 blocks)');
   });
 
   it.each([

@@ -61,14 +61,18 @@ describe('agent output', () => {
     const before = runJson(run, config, true).benches[0];
     const stats = run.files[0].benchmarks[0].runs[0].stats!;
     stats.optimization = {
+      mode: 'natural',
+      benchmark: [{ tier: 'TurboFan', time: 30e6 }, null],
       workload: [{ tier: 'TurboFan', time: 12e6 }, null],
       harness: [
         { tier: 'TurboFan', time: 25e6 },
         { tier: 'Maglev', time: 7e6 },
       ],
     };
+    stats.warmup = { time: 40e6, phase: 'sampling' };
     const after = runJson(run, config, true).benches[0];
     expect(after.optimization).toEqual(stats.optimization);
+    expect(after.warmup).toEqual(stats.warmup);
     expect(after.timeNs).toEqual(before.timeNs);
     expect(after.status).toBe(before.status);
   });
