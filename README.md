@@ -67,7 +67,7 @@ Firefox and WebKit require `pnpm exec playwright-core install firefox webkit`. W
 <details>
 <summary>How to read the results</summary>
 
-- **⚠ UNSTABLE**: The CPU speed probes taken during the run varied more than 5%, usually from background load, efficiency cores, or throttling. Treat comparisons with other runs carefully. Interleaved `--against` runs are judged by the drift between paired blocks instead, since both trees see the same machine state.
+- **⚠ UNSTABLE**: The CPU speed probes taken during the run varied more than 5%, usually from background load, efficiency cores, or throttling. Treat comparisons with other runs carefully. With `--against`, Labs checks drift between paired blocks.
 - **✓, ⚠, ✗**: A warning shows one line with the most serious problem and what to do. `likely optimized out` means the work was removed by the JIT. `results change between runs` means warmup never settled or the output differed between fresh processes. `min detectable change ±N%` is the smallest change a comparison could detect, shown when it is larger than `minDelta`.
 - **avg, p75, p99**: Average time per iteration and the 75th and 99th percentiles. For batched work, percentiles describe batch averages rather than individual calls.
 - **Histogram**: The fastest 99% of timing samples, with the minimum and upper cutoff below. Cyan marks samples below the average, yellow the average bin, and magenta samples above it.
