@@ -13,6 +13,15 @@ describe('CLI options', () => {
     if (cwd) rmSync(cwd, { recursive: true, force: true });
   });
 
+  function cli(...args: string[]) {
+    return [
+      '--import',
+      pathToFileURL(createRequire(import.meta.url).resolve('tsx')).href,
+      fileURLToPath(new URL('../src/cli/cli.ts', import.meta.url)),
+      ...args,
+    ];
+  }
+
   function run(...args: string[]) {
     cwd = mkdtempSync(join(tmpdir(), 'labs-cli-'));
     writeFileSync(join(cwd, 'package.json'), JSON.stringify({ type: 'module' }));
@@ -30,16 +39,7 @@ describe('CLI options', () => {
         join(cwd, `${name}.bench.ts`),
         `import { bench } from '@pmndrs/labs'; bench('${name} ${tag}', () => 1);`
       );
-    return spawnSync(
-      process.execPath,
-      [
-        '--import',
-        pathToFileURL(createRequire(import.meta.url).resolve('tsx')).href,
-        fileURLToPath(new URL('../src/cli/cli.ts', import.meta.url)),
-        ...args,
-      ],
-      { cwd, encoding: 'utf8', timeout: 30_000 }
-    );
+    return spawnSync(process.execPath, cli(...args), { cwd, encoding: 'utf8', timeout: 30_000 });
   }
 
   it('prints usage for --help without a config', () => {
@@ -60,6 +60,25 @@ describe('CLI options', () => {
     expect(output.status, output.stderr).toBe(0);
     const files = JSON.parse(output.stdout).benches.map((bench: { file: string }) => bench.file);
     expect(files).toEqual(['alpha.bench.ts', 'beta.bench.ts']);
+  });
+
+  it('compares two saved results by name', () => {
+    expect(run('-n', 'one', 'alpha').status).toBe(0);
+    expect(
+      spawnSync(process.execPath, cli('-n', 'two', 'alpha'), { cwd, encoding: 'utf8' }).status
+    ).toBe(0);
+    const output = spawnSync(process.execPath, cli('compare', 'one', 'two', '--json'), {
+      cwd,
+      encoding: 'utf8',
+    });
+    expect(output.status, output.stderr).toBe(0);
+    expect(JSON.parse(output.stdout).benches).toHaveLength(1);
+    const extra = spawnSync(process.execPath, cli('compare', 'one', 'two', 'three'), {
+      cwd,
+      encoding: 'utf8',
+    });
+    expect(extra.status).toBe(1);
+    expect(extra.stderr).toContain('at most two result names');
   });
 
   it('rejects run options on subcommands', () => {

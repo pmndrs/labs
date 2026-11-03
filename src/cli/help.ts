@@ -8,6 +8,7 @@ Usage
   bench run [filter...]         Same as bench
   bench list                    List saved results
   bench compare [name] [-l]     Compare a saved result against the baseline
+  bench compare <base> <name>   Compare two saved results
   bench baseline [name]         Set the baseline result
   bench delete <name>           Delete a saved result
   bench prune                   Remove results recorded on an unstable clock
