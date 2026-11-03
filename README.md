@@ -58,8 +58,8 @@ In an interactive terminal, a live view shows each benchmark's progress while it
 - **Node.js** is the default runtime.
 - **Chrome** requires a local installation and runs headlessly. Set extra flags with `chrome.args`.
 - **Bun** requires a local installation. GC diagnostics require the Labs CLI. Heap allocation diagnostics are unavailable.
-- **Firefox** requires `pnpm exec playwright-core install firefox`. Heap allocation diagnostics are unavailable.
-- **WebKit** requires `pnpm exec playwright-core install webkit`. It runs Safari's engine in a separate browser build. Heap allocation diagnostics are unavailable.
+- **Firefox** requires `pnpm dlx playwright-core@1.64.1 install firefox`. Heap allocation diagnostics are unavailable.
+- **WebKit** requires `pnpm dlx playwright-core@1.64.1 install webkit`. It runs Safari's engine in a separate browser build. Heap allocation diagnostics are unavailable.
 
 </details>
 

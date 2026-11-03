@@ -5,6 +5,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { resolve as resolveModule } from 'import-meta-resolve';
 import { compare } from '../compare.ts';
 import type { LabsConfig } from '../config.ts';
+import { RuntimeLaunchError } from '../runtime-error.ts';
 import { collectDiagnostics, emptyDiagnostics, printReportBox, printRunSummary } from '../report.ts';
 import {
   type FreqSample,
@@ -612,8 +613,12 @@ export async function runCLI(args: string[]) {
       if (specs.length) await runWorkers(specs);
     } catch (err) {
       process.exitCode = 1;
-      crash = (err as Error).message;
+      crash =
+        runtime === 'bun' && (err as NodeJS.ErrnoException).syscall?.startsWith('spawn')
+          ? new RuntimeLaunchError('bun', err, config.bun?.executablePath).message
+          : (err as Error).message;
       crashes.push({ file: suiteName(f), error: crash });
+      if (!view) console.error(`${RED}✖${RESET} ${crash}`);
     } finally {
       for (const config of bunConfigs) rmSync(config, { force: true });
     }

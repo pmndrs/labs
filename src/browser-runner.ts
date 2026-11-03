@@ -10,6 +10,7 @@ import { startBrowserServer } from './browser-server.ts';
 import { observeChromeGc } from './chrome-trace.ts';
 import { observeWebkitGc } from './webkit-gc.ts';
 import { observeFirefoxGc, prepareFirefoxGc } from './firefox-gc.ts';
+import { RuntimeLaunchError } from './runtime-error.ts';
 
 type BrowserGlobal = typeof globalThis & { __labs: typeof browserHarness };
 
@@ -37,25 +38,31 @@ export async function runBrowser(options: {
     diagnostics = false,
     env?: NodeJS.ProcessEnv
   ): Promise<T> => {
-    const browser = await engine.launch({
-      executablePath: options.launch?.executablePath,
-      headless: options.launch?.headless ?? true,
-      ...(options.runtime === 'firefox'
-        ? { env: env ?? { ...process.env, MOZ_PROFILER_STARTUP: '0', MOZ_PROFILER_SHUTDOWN: '' } }
-        : {}),
-      ...(options.runtime === 'chrome'
-        ? {
-            channel: 'chrome',
-            args: [
-              '--js-flags=--expose-gc --allow-natives-syntax',
-              // Dawn rounds GPU timestamps to 65536 ns against timing attacks, which a benchmark browser does not face.
-              '--disable-dawn-features=timestamp_quantization',
-              ...(diagnostics && options.tune.heap !== false ? ['--enable-precise-memory-info'] : []),
-              ...(options.launch?.args ?? []),
-            ],
-          }
-        : {}),
-    });
+    const browser = await engine
+      .launch({
+        executablePath: options.launch?.executablePath,
+        headless: options.launch?.headless ?? true,
+        ...(options.runtime === 'firefox'
+          ? { env: env ?? { ...process.env, MOZ_PROFILER_STARTUP: '0', MOZ_PROFILER_SHUTDOWN: '' } }
+          : {}),
+        ...(options.runtime === 'chrome'
+          ? {
+              channel: 'chrome',
+              args: [
+                '--js-flags=--expose-gc --allow-natives-syntax',
+                // Dawn rounds GPU timestamps to 65536 ns against timing attacks, which a benchmark browser does not face.
+                '--disable-dawn-features=timestamp_quantization',
+                ...(diagnostics && options.tune.heap !== false
+                  ? ['--enable-precise-memory-info']
+                  : []),
+                ...(options.launch?.args ?? []),
+              ],
+            }
+          : {}),
+      })
+      .catch((error: unknown) => {
+        throw new RuntimeLaunchError(options.runtime, error, options.launch?.executablePath);
+      });
     let pageError: Error | undefined;
     try {
       const page = await browser.newPage();

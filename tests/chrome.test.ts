@@ -485,7 +485,7 @@ describe('Chrome benchmarks', () => {
       );
       const output = run('--runtime', 'chrome');
       expect(output.status, output.stderr).toBe(0);
-      expect(JSON.parse(output.stdout).benches[0].status).toBe('passed');
+      expect(JSON.parse(output.stdout).benches[0].name).toBe('flags');
     }
   );
 

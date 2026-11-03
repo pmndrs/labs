@@ -262,10 +262,14 @@ describe('comparing checkouts through the CLI', () => {
   );
 
   it.each([false, true])('fails when a worker crashes with JSON output %s', (json) => {
-    writeFileSync(join(project, 'benches', 'value.bench.ts'), 'throw new Error("broken import");');
+    writeFileSync(
+      join(project, 'benches', 'value.bench.ts'),
+      'setInterval(() => {}, 1000); throw new Error("broken import");'
+    );
     const child = cli('--no-save', ...(json ? ['--json'] : []));
     expect(child.status, child.stderr).toBe(1);
     expect(child.stderr).toContain('broken import');
+    if (json) expect(JSON.parse(child.stdout).crashes[0].error).toContain('broken import');
   });
 
   it('does not establish a baseline from a partially crashed run', { timeout: 40_000 }, () => {
