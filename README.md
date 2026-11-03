@@ -246,6 +246,7 @@ pnpm bench -b                         # shorthand for --baseline
 ```sh
 pnpm bench compare                     # interactive picker (latest preselected)
 pnpm bench compare "v1.3.0"           # compare named result vs baseline
+pnpm bench compare "v1.2.0" "v1.3.0"  # compare two saved results, baseline first
 pnpm bench compare --last             # replay the last compared pair
 pnpm bench compare -l                 # shorthand for --last
 ```
