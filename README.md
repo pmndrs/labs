@@ -195,6 +195,7 @@ pnpm bench "relation"                   # partial match on file name, save
 pnpm bench "relation churn"             # separator-agnostic match, save
 pnpm bench "@relation"                  # filter by tag, save
 pnpm bench "churn @relation"            # name + tag combined, save
+pnpm bench --help                       # show usage
 pnpm bench -n "v1.2.0"                 # save with explicit name (prompts if it exists)
 pnpm bench -n "v1.2.0" -f              # overwrite existing without prompting
 pnpm bench -n "v1.2.0" --force         # same as -f
