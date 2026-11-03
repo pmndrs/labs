@@ -9,8 +9,8 @@ export const AsyncFunction = (async () => {}).constructor as any;
 export const GeneratorFunction = function* () {}.constructor as any;
 export const AsyncGeneratorFunction = async function* () {}.constructor as any;
 
-const _sink: { _: any; __(): void } = {
-  _: null,
+const _sink: { _: any[]; __(): void } = {
+  _: [],
   __() {
     _print(_sink._);
   },
@@ -18,10 +18,12 @@ const _sink: { _: any; __(): void } = {
 
 /**
  * Stores `v` in a side-effecting sink so the engine cannot dead-code-eliminate
- * the computation that produced it.
+ * the computation that produced it. Each call site in an unrolled loop body
+ * takes its own slot. A store that the next call site overwrites is dead, and
+ * JavaScriptCore removes it together with the work that produced the value.
  */
-export function do_not_optimize(v: any): void {
-  _sink._ = v;
+export function do_not_optimize(v: any, slot = 0): void {
+  _sink._[slot] = v;
 }
 
 /**
