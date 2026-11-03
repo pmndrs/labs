@@ -81,22 +81,103 @@ describe('run report', () => {
       ],
     };
     const text = render(result, 120, 0, 40).lines.join('\n');
-    expect(text).toContain('workload');
+    expect(text).toContain('bench tier');
+    expect(text).toContain('unverified (inlining not observed) (2/3)');
+    expect(text).toContain('fn entry');
     expect(text).toContain('3.00 ms → DFG (2/3)');
     expect(text).toContain('unavailable (1/3)');
     expect(text).toContain('harness');
     expect(text).toContain('12.00 ms → FTL (2/3)');
     expect(text).toContain('5.00 ms → DFG (1/3)');
-    expect(text).toContain('settled   20.00 ms');
+    expect(text).toMatch(/settled\s+20.00 ms \(workload timings\)/);
     const log = vi.spyOn(console, 'log').mockImplementation(() => {});
     try {
       replayReport(result, defineConfig({ benchDir: '.' }));
       const report = stripVTControlCharacters(log.mock.calls.flat().join('\n'));
+      expect(report).toContain('unverified (inlining not observed) (2/3)');
       expect(report).toContain('12.00 ms → FTL (2/3)');
       expect(report).toContain('unavailable (1/3)');
     } finally {
       log.mockRestore();
     }
+  });
+
+  it.each([
+    {
+      name: 'top-tier function and batched harness',
+      batch: true,
+      workload: 'TurboFan',
+      harness: 'TurboFan',
+      status: 'TurboFan entry',
+      sampling: '10.00 ms → TurboFan (batched)',
+    },
+    {
+      name: 'lower function tier inside a top-tier harness',
+      batch: true,
+      workload: 'Maglev',
+      harness: 'TurboFan',
+      status: 'unverified (inlining not observed)',
+      sampling: '10.00 ms → TurboFan (batched)',
+    },
+    {
+      name: 'top-tier function inside a lower-tier harness',
+      batch: true,
+      workload: 'TurboFan',
+      harness: 'Maglev',
+      status: 'unverified (inlining not observed)',
+      sampling: '10.00 ms → Maglev (batched)',
+    },
+    {
+      name: 'unbatched function below the top tier',
+      batch: false,
+      workload: 'Sparkplug',
+      harness: null,
+      status: 'Sparkplug entry (below TurboFan)',
+      sampling: 'not warmed (unbatched, one call per sample)',
+    },
+    {
+      name: 'runtime without tier diagnostics',
+      batch: true,
+      workload: null,
+      harness: null,
+      status: 'unavailable',
+      sampling: 'unavailable (batched)',
+    },
+  ] as const)(
+    'explains the benchmark tier for a $name',
+    ({ batch, workload, harness, status, sampling }) => {
+      const result = fixture();
+      const stats = result.files[0].benchmarks[0].runs[0].stats!;
+      stats.plan = { batch, batch_samples: batch ? 1024 : 1, batch_unroll: 4, samples: 8 };
+      stats.optimization = {
+        workload: [workload ? { tier: workload, time: 3e6 } : null],
+        ...(batch ? { harness: [harness ? { tier: harness, time: 10e6 } : null] } : {}),
+      };
+      const text = render(result, 120, 0, 40).lines.join('\n');
+      expect(text).toContain('bench tier');
+      expect(text).toContain(status);
+      expect(text).toContain(sampling);
+      const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+      try {
+        replayReport(result, defineConfig({ benchDir: '.' }));
+        const report = stripVTControlCharacters(log.mock.calls.flat().join('\n'));
+        expect(report).toContain(status);
+        expect(report).toContain(sampling);
+      } finally {
+        log.mockRestore();
+      }
+    }
+  );
+
+  it('does not infer unbatched sampling from missing data in older results', () => {
+    const result = fixture();
+    result.files[0].benchmarks[0].runs[0].stats!.optimization = {
+      workload: [{ tier: 'Sparkplug', time: 3e6 }],
+    };
+    const text = render(result, 120, 0, 40).lines.join('\n');
+    expect(text).toContain('unverified (entry only)');
+    expect(text).toMatch(/harness\s+not recorded/);
+    expect(text).not.toContain('unbatched');
   });
 
   it.each([
