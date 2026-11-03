@@ -1,8 +1,5 @@
 # Labs
 
-> [!WARNING]
-> Labs runs benchmarks in Node.js, Google Chrome, or Bun. The CLI requires Node.js.
-
 Labs is JS benchmarking you can trust. Trying to get good signal is harder than you might think. VMs are non-deterministic, environments are unstable, and typical benchmarks don't give you any sense of a comparison's validity. Labs detects variance, giving feedback on how to fix it, and uses statistical analysis to determine if two runs are actually different.
 
 ```bash
