@@ -225,6 +225,15 @@ function mergeStats(list: Stats[], calibrationRates: number[]): Stats {
     ...(list.some((stats) => stats.optimization)
       ? {
           optimization: {
+            ...(list.every((stats) => stats.optimization?.mode === 'natural')
+              ? { mode: 'natural' as const }
+              : {}),
+            ...(list.some((stats) => stats.optimization?.benchmark)
+              ? { benchmark: list.flatMap((stats) => stats.optimization?.benchmark ?? [null]) }
+              : {}),
+            ...(list.some((stats) => stats.optimization?.benchmarkEnd)
+              ? { benchmarkEnd: list.flatMap((stats) => stats.optimization?.benchmarkEnd ?? [null]) }
+              : {}),
             workload: list.flatMap((stats) => stats.optimization?.workload ?? [null]),
             ...(list.some((stats) => stats.optimization?.harness)
               ? {
@@ -287,11 +296,17 @@ function mergeBlocks(parts: Array<{ trial: Trial; calibrationRate: number }>): T
 
 /** Median warmup settle time across the blocks that settled. */
 function mergeWarmup(stats: Stats[]): Pick<Stats, 'warmup'> {
-  const times = stats
-    .map((s) => s.warmup?.time)
-    .filter((t): t is number => t !== undefined)
-    .sort((a, b) => a - b);
-  return times.length ? { warmup: { time: times[times.length >> 1] } } : {};
+  const warmups = stats.flatMap((s) => (s.warmup ? [s.warmup] : [])).sort((a, b) => a.time - b.time);
+  return warmups.length
+    ? {
+        warmup: {
+          ...warmups[warmups.length >> 1],
+          ...(warmups.length < stats.length
+            ? { blocks: { settled: warmups.length, total: stats.length } }
+            : {}),
+        },
+      }
+    : {};
 }
 
 /**

@@ -10,7 +10,6 @@ import {
   AsyncFunction,
   do_not_optimize,
   GeneratorFunction,
-  force_optimize,
   dollar_vm,
   kind,
   never_optimize,
@@ -18,13 +17,7 @@ import {
 } from './runtime.ts';
 import { toSnapshot } from './snapshot.ts';
 import { batchSize, defaults } from './constants.ts';
-import {
-  createWarmup,
-  isWarmupDone,
-  isWarmupUnsettled,
-  recordWarmup,
-  type WarmupState,
-} from './warmup.ts';
+import { createWarmup, isWarmupDone, isWarmupUnsettled, recordWarmup } from './warmup.ts';
 import { memoryPass } from './memory.ts';
 import { GcObservation, GcScope } from './gc.ts';
 import { optimization, optimizationClock } from './optimization.ts';
@@ -338,9 +331,29 @@ export async function benchFn(fn: (...args: any[]) => any, opts: any = {}): Prom
   const observation = new GcScope(observer);
   const awaitGcOutsideLoop = !opts.heap;
   const after = !opts.after ? '' : 'await $after();';
-  const warmed = batch && opts.warmup_samples > 0 && !opts.$counters;
+  const warmed =
+    batch && opts.warmup_samples > 0 && opts.warmup_time > 0 && samples.length > 0 && !opts.$counters;
   // Keep probe results outside the sampling loop's live locals.
-  const entry: { tier: OptimizationTier | undefined; at: number } = { tier: undefined, at: 0 };
+  function verifiedTier(
+    tier: OptimizationTier | undefined,
+    harnessTier: OptimizationTier | undefined,
+    direct: boolean
+  ): OptimizationTier | null {
+    return tier &&
+      (direct ||
+        tier === harnessTier ||
+        ['Ignition', 'Sparkplug', 'LLInt', 'Baseline'].includes(harnessTier ?? ''))
+      ? tier
+      : null;
+  }
+  let benchmarkEnd: OptimizationTier | null = null;
+  const entry = {
+    tier: undefined as OptimizationTier | undefined,
+    at: 0,
+    finish(harnessTier?: OptimizationTier) {
+      benchmarkEnd = verifiedTier(optimization?.tier(fn), harnessTier, !batch && !dollar_vm);
+    },
+  };
 
   const loop: (...args: any[]) => Promise<any> = new AsyncFunction(
     '$fn',
@@ -360,8 +373,11 @@ export async function benchFn(fn: (...args: any[]) => any, opts: any = {}): Prom
     '$warm',
     '$entry',
     '$vm',
+    '$settle',
+    '$recordSamples',
+    '$recordTime',
     `
-    ${warmed && optimization?.frame ? `$entry.tier = ${optimization.frame}; $entry.at = $now();` : ''}
+    ${opts.warmup_samples > 0 && optimization?.frame ? `$entry.tier = ${optimization.frame}; $entry.at = $now();` : ''}
     ${!opts.$counters ? '' : 'let _hc = false;'}
     ${!opts.$counters ? '' : 'try { $counters.init(); _hc = true; } catch {}'}
 
@@ -376,8 +392,18 @@ export async function benchFn(fn: (...args: any[]) => any, opts: any = {}): Prom
       ).join('\n')
     ).join('\n')}
 
-    for (; _ < ${samples.length}; _++) {
-      if (_ >= $minSamples && t >= $minTime) break;
+    for (;; _++) {
+      if (_ >= ${samples.length} || (_ >= $minSamples && t >= $minTime)) {
+        if (!$settle) break;
+        if ($settle(t / _)) {
+          $minSamples = $recordSamples;
+          $minTime = $recordTime;
+          $settle = null;
+        }
+        ${optimization?.frame ? `$entry.tier = ${optimization.frame}; $entry.at = $now();` : ''}
+        _ = 0; t = 0;
+        if ($minSamples <= 0 && $minTime <= 0) break;
+      }
       ${prepare}
       ${!opts.$counters ? '' : 'if (_hc) try { $counters.before(); } catch {};'}
       const t0 = $now();
@@ -391,6 +417,7 @@ export async function benchFn(fn: (...args: any[]) => any, opts: any = {}): Prom
       ${after}
     }
     if ($warm) return t / _;
+    ${opts.warmup_samples > 0 && optimization ? `if (_ > 0) $entry.finish(${optimization.frame ?? ''});` : ''}
 
     const gc = ${awaitGcOutsideLoop ? '' : 'await '}$observation.finish(t, _ * ${batch ? batchSamples : 1}, ${now === runtimeNow && !opts.manual});
     ${
@@ -426,7 +453,11 @@ export async function benchFn(fn: (...args: any[]) => any, opts: any = {}): Prom
   // around it costs nothing measurable.
   if (!batch) never_optimize(loop);
 
-  const run = (warm: boolean, minSamples = warm ? opts.warmup_samples : opts.min_samples) =>
+  const run = (
+    warm: boolean,
+    minSamples = warm ? opts.warmup_samples : opts.min_samples,
+    settle?: (duration: number) => boolean
+  ) =>
     loop(
       fn,
       opts.gc,
@@ -440,79 +471,105 @@ export async function benchFn(fn: (...args: any[]) => any, opts: any = {}): Prom
       observation,
       samples,
       summarizeSamples,
-      minSamples,
-      warm ? 0 : opts.min_cpu_time,
+      settle && !warm ? opts.warmup_samples : minSamples,
+      warm || settle ? 0 : opts.min_cpu_time,
       warm,
       entry,
-      dollar_vm
+      dollar_vm,
+      settle,
+      warm ? minSamples : opts.min_samples,
+      warm ? 0 : opts.min_cpu_time
     );
 
   try {
     const observeHarness = optimizationClock(now());
-    let harness: OptimizationSample | null = null;
-    function readHarness() {
+    let harness: OptimizationSample | null = readHarness();
+    let benchmark: OptimizationSample | null = null;
+    function readHarness(): OptimizationSample | null {
       return optimization?.frame
         ? observeHarness(entry.tier, entry.at)
         : observeHarness(optimization?.tier(loop), now());
     }
-    // The batched loop is fresh code that inlines the workload. Entered once,
-    // it would tier up through on-stack replacement while recording, with the
-    // engine dropping back to slower code at every batch for a while. Warm
-    // passes over the same loop collect feedback first. Where the engine can
-    // be told, it then compiles the loop at the top tier for the recorded
-    // pass. Elsewhere the passes repeat until their timings agree.
+    function readBenchmark(at = now()): OptimizationSample | null {
+      const tier = verifiedTier(workload?.tier, harness?.tier, !batch && !dollar_vm);
+      return tier ? { tier, time: at - started } : null;
+    }
+    let samplingWarmup = warmup;
+    let settle: Parameters<typeof run>[2];
+    // Warm the same loop that records samples without requesting a compiler tier.
     if (warmed) {
-      let loopWarmup: WarmupState = createWarmup(
+      samplingWarmup = createWarmup(
         now() + opts.warmup_time,
         opts.warmup_samples,
         now() + opts.warmup_settle
       );
-      force_optimize?.prepare(loop);
+      // Prime entry-path feedback before the hot loop can tier up through OSR.
       for (let i = 0; i < 3; i++) {
         await run(true, 0);
         harness = readHarness();
       }
-      let wait: number | undefined;
-      while (now() < loopWarmup.deadline) {
+      await run(true, 1);
+      harness = readHarness();
+      let priming = true;
+      settle = (pass) => {
+        if (priming) {
+          priming = false;
+          return true;
+        }
         const previousTier = harness?.tier;
-        const pass = await run(true);
+        const previousWorkload = workload?.tier;
         harness = readHarness();
         workload = observeWorkload(optimization?.tier(fn), now());
-        if (optimization?.frame && harness?.tier !== previousTier) {
-          loopWarmup = createWarmup(loopWarmup.deadline, opts.warmup_samples, loopWarmup.settled);
+        if (harness?.tier !== previousTier || workload?.tier !== previousWorkload) {
+          samplingWarmup = createWarmup(
+            samplingWarmup.deadline,
+            opts.warmup_samples,
+            samplingWarmup.settled
+          );
         }
-        recordWarmup(loopWarmup, pass, 1, opts);
-        if (wait === undefined) {
-          wait = dollar_vm ? (2e6 * pass) / batchSamples : 0;
-          if (wait <= 1e9) loopWarmup.deadline = Math.max(loopWarmup.deadline, now() + wait);
-        }
-        if (
-          force_optimize ||
-          (loopWarmup.stable && (!optimization || harness?.tier === optimization.highest))
-        )
-          break;
-      }
-      if (force_optimize) {
-        force_optimize.next(loop);
-        await run(true, 0);
-        harness = readHarness();
-      }
+        recordWarmup(samplingWarmup, pass, 1, opts, now());
+        if (!isWarmupDone(samplingWarmup, opts, now())) return false;
+        if (opts.gc) opts.gc();
+        workload = observeWorkload(optimization?.tier(fn), now());
+        observation.start();
+        return true;
+      };
+      // Keep the diagnostic callback out of the sampling loop's compiled body.
+      never_optimize(settle);
+      dollar_vm?.noInline(settle);
+      // Prime the recording transition without executing benchmark calls.
+      await run(true, 0, settle);
+      harness = readHarness();
+    } else {
+      if (opts.gc) opts.gc();
+      workload = observeWorkload(optimization?.tier(fn), now());
+      benchmark = readBenchmark();
+      observation.start();
     }
-    workload = observeWorkload(optimization?.tier(fn), now());
-    if (opts.gc) opts.gc();
-    if (warmed && !optimization?.frame) harness = readHarness();
-    observation.start();
 
-    const recorded = await run(false);
-    if (warmed && optimization?.frame) harness = readHarness();
+    const recorded = await run(false, opts.min_samples, settle);
+    if (opts.warmup_samples > 0 && optimization?.frame) {
+      harness = readHarness();
+      benchmark = readBenchmark(entry.at);
+    }
     const measured = {
       kind: 'fn' as const,
       debug: loop.toString(),
-      ...(isWarmupUnsettled(warmup, opts) ? { unsettled: true } : {}),
-      ...(warmup.settledAt ? { warmup: { time: warmup.settledAt - started } } : {}),
+      ...(isWarmupUnsettled(samplingWarmup, opts) ? { unsettled: true } : {}),
+      ...(samplingWarmup.settledAt
+        ? {
+            warmup: {
+              time: samplingWarmup.settledAt - started,
+              phase: warmed ? ('sampling' as const) : ('workload' as const),
+            },
+          }
+        : {}),
       ...(opts.warmup_samples > 0
         ? {
             optimization: {
+              mode: 'natural' as const,
+              benchmark: [benchmark],
+              ...(benchmarkEnd ? { benchmarkEnd: [benchmarkEnd] } : {}),
               workload: [workload],
               ...(warmed ? { harness: [harness] } : {}),
             },
@@ -667,7 +724,9 @@ export async function benchIter(iter: (...args: any[]) => any, opts: any = {}): 
     debug: _.debug,
     ...(_.unsettled ? { unsettled: true } : {}),
     ...(_.warmup ? { warmup: _.warmup } : {}),
-    ...(opts.warmup_samples > 0 ? { optimization: { workload: [workload] } } : {}),
+    ...(opts.warmup_samples > 0
+      ? { optimization: { mode: 'natural' as const, workload: [workload] } }
+      : {}),
     ticks: _.count * (!_.batch ? 1 : batchSamples),
     ...(_.gc ? { gc: _.gc } : {}),
   };

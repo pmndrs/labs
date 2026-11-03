@@ -14,8 +14,25 @@ describe('sampling loop warm-up on JavaScriptCore', () => {
     encoding: 'utf8',
   });
   const runtimes = [
-    ['bun', bun.status === 0, { bun: { executablePath: bun.stdout?.trim() } }],
-    ['webkit', existsSync(webkit.executablePath()), {}],
+    [
+      'bun',
+      bun.status === 0,
+      {
+        bun: {
+          executablePath: bun.stdout?.trim(),
+          env: { BUN_JSC_thresholdForFTLOptimizeAfterWarmUp: '1', BUN_JSC_useConcurrentJIT: 'false' },
+        },
+      },
+    ],
+    [
+      'webkit',
+      existsSync(webkit.executablePath()),
+      {
+        webkit: {
+          env: { JSC_thresholdForFTLOptimizeAfterWarmUp: '1', JSC_useConcurrentJIT: 'false' },
+        },
+      },
+    ],
   ] as const;
   let project: string;
 
@@ -24,7 +41,7 @@ describe('sampling loop warm-up on JavaScriptCore', () => {
   });
 
   it.each(runtimes.filter(([, available]) => available))(
-    'keeps every block of a short %s run at the optimized speed',
+    'retains unrolled work when %s reaches FTL',
     { timeout: 180_000 },
     (runtime, _available, extra) => {
       project = mkdtempSync(join(tmpdir(), `labs-warm-loop-${runtime}-`));
@@ -48,11 +65,15 @@ describe('sampling loop warm-up on JavaScriptCore', () => {
         join(project, 'work.bench.ts'),
         `import { bench } from '@pmndrs/labs';
         for (const [name, n] of [['fast', 300], ['fast scaled', 330], ['long', 30_000]] as const) {
-          bench(name, () => {
+          const trial = bench(name, () => {
             let s = 0;
             for (let i = 0; i < n; i++) s += Math.sqrt(i);
             return s;
           });
+          const run = trial.run.bind(trial);
+          trial.run = (thrw, tune, plans) => run(thrw, {
+            ...tune, warmup_settle: 100e6, warmup_time: 200e6,
+          }, plans);
         }`
       );
       const output = spawnSync(

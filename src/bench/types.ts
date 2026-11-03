@@ -46,8 +46,11 @@ export interface OptimizationSample {
   time: number;
 }
 
-/** Workload and sampling-body entry tiers per block, with elapsed ns from warmup. Null means unavailable. */
+/** Per-block entry tiers with elapsed ns. Benchmark time spans warmup and raw tiers use phase clocks. */
 export interface OptimizationStats {
+  mode?: 'natural';
+  benchmark?: Array<OptimizationSample | null>;
+  benchmarkEnd?: Array<OptimizationTier | null>;
   workload: Array<OptimizationSample | null>;
   harness?: Array<OptimizationSample | null>;
 }
@@ -76,8 +79,12 @@ export interface Stats {
   unsettled?: boolean;
   varyingOutput?: boolean;
   optimization?: OptimizationStats;
-  /** Time (ns) from the first call until warmup windows agreed, absent when they never did. */
-  warmup?: { time: number };
+  /** Elapsed ns from the first call until the reported phase's warmup windows agreed. */
+  warmup?: {
+    time: number;
+    phase?: 'workload' | 'sampling';
+    blocks?: { settled: number; total: number };
+  };
   /** Per-block summaries when the benchmark ran in multiple fresh processes. */
   blocks?: {
     medians: number[];

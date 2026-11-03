@@ -40,39 +40,20 @@ export const never_optimize: (f: (...args: any[]) => any) => void = (() => {
 })();
 
 /**
- * Top-tier compilation of `f` on demand. `prepare` goes before the calls that
- * collect type feedback and `next` compiles `f` for its following call. Needs
- * natives syntax, which the CLI enables, and is undefined elsewhere.
- */
-export const force_optimize: { prepare(f: Function): void; next(f: Function): void } | undefined =
-  (() => {
-    try {
-      return {
-        // oxlint-disable-next-line typescript/no-implied-eval
-        prepare: new Function('f', '%PrepareFunctionForOptimization(f)') as (f: Function) => void,
-        // oxlint-disable-next-line typescript/no-implied-eval
-        next: new Function('f', '%OptimizeFunctionOnNextCall(f)') as (f: Function) => void,
-      };
-    } catch {
-      return undefined;
-    }
-  })();
-
-/**
  * JavaScriptCore's tier introspection, available with useDollarVM, which the
  * CLI enables for Bun and WebKit.
  */
 export const dollar_vm:
   | {
-      codeBlockFor(fn: Function): string | undefined;
+      codeBlockFor(value: unknown): string | undefined;
+      codeBlockForFrame(index: number): unknown;
+      noInline(fn: Function): void;
       ftlTrue(): boolean;
-      dfgTrue(): boolean;
-      baselineJITTrue(): boolean;
-      llintTrue(): boolean;
     }
   | undefined =
   typeof (globalThis as any).$vm?.codeBlockFor === 'function' &&
-  typeof (globalThis as any).$vm?.ftlTrue === 'function'
+  typeof (globalThis as any).$vm?.ftlTrue === 'function' &&
+  typeof (globalThis as any).$vm?.codeBlockForFrame === 'function'
     ? (globalThis as any).$vm
     : undefined;
 

@@ -63,8 +63,9 @@ describe('adaptive warmup', () => {
       },
       { now: () => clock, gc: false, min_samples: 1, max_samples: 1, min_cpu_time: 0 }
     );
-    expect(settled.warmup?.time).toBeGreaterThanOrEqual(3_000_000);
-    expect(settled.warmup?.time).toBeLessThan(5_000_000);
+    expect(settled.warmup?.phase).toBe('sampling');
+    expect(settled.warmup?.time).toBeGreaterThanOrEqual(10_000_000);
+    expect(settled.warmup?.time).toBeLessThan(15_000_000);
 
     const unsettled = await measure(
       () => {

@@ -8,22 +8,30 @@ import { describe, expect, it } from 'vitest';
 
 /**
  * Timing guarantees for the batched sampling loop under the worker, which runs
- * every block in a fresh process the way the CLI does. A loop entered cold used
- * to spend its first hundred or so samples a magnitude slower while V8
- * re-tiered it, enough to carry the median of a short block.
+ * every block in a fresh process. Early promotion isolates timing accuracy
+ * from the engine's choice of how long to keep code in an intermediate tier.
  */
 describe('sampling loop warm-up', () => {
   const WORKER = fileURLToPath(new URL('../src/worker.ts', import.meta.url));
   const FIXTURE = fileURLToPath(new URL('./fixtures/warm-loop.bench.ts', import.meta.url));
   const TSX = pathToFileURL(createRequire(import.meta.url).resolve('tsx')).href;
 
-  it('keeps every block of a short run at the optimized speed', { timeout: 120_000 }, () => {
+  it('keeps short blocks comparable when V8 promotes hot code early', { timeout: 120_000 }, () => {
     const resultFile = join(tmpdir(), `labs-warm-loop-test-${process.pid}.json`);
     try {
-      // The CLI runs workers with natives syntax, which the forced compile needs
+      // The CLI enables native tier diagnostics for the worker.
       execFileSync(
         process.execPath,
-        ['--allow-natives-syntax', '--expose-gc', '--import', TSX, WORKER],
+        [
+          '--allow-natives-syntax',
+          '--expose-gc',
+          '--no-maglev',
+          '--no-concurrent-recompilation',
+          '--invocation-count-for-turbofan=2',
+          '--import',
+          TSX,
+          WORKER,
+        ],
         {
           stdio: ['ignore', 'ignore', 'pipe'],
           env: {
