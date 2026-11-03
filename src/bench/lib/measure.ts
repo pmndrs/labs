@@ -275,7 +275,7 @@ export async function benchFn(fn: (...args: any[]) => any, opts: any = {}): Prom
           const _result = await Promise.all([
             ${Array.from({ length: opts.concurrency }, (_, concurrency) => `${call(concurrency, unroll)},`).join('\n')}
           ]);
-          $consume(_result);
+          $consume(_result, ${unroll ?? 0});
         }
       `;
     }
@@ -285,7 +285,7 @@ export async function benchFn(fn: (...args: any[]) => any, opts: any = {}): Prom
       (_, concurrency) => `
         {
           const _result = ${async ? 'await ' : ''}${call(concurrency, unroll)};
-          if (void 0 !== _result) $consume(_result);
+          if (void 0 !== _result) $consume(_result, ${(unroll ?? 0) * opts.concurrency + concurrency});
         }
       `
     ).join('\n');
