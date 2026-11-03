@@ -45,7 +45,6 @@ bench
 # Or choose another runtime
 bench --runtime chrome # bun | webkit | firefox
 # Or filter by file name and tag
-bench "@mytag"
 bench vec3 matrix @mytag
 # Save with a name for easier reading
 bench "@mytag" -n 'v1.0.0'
@@ -195,8 +194,7 @@ pnpm bench                              # run all, save named after the current 
 pnpm bench "relation"                   # partial match on file name, save
 pnpm bench "relation churn"             # separator-agnostic match, save
 pnpm bench "@relation"                  # filter by tag, save
-pnpm bench "churn @relation"            # name + tag combined, save
-pnpm bench churn @relation              # the same, unquoted
+pnpm bench churn @relation              # name + tag combined, save
 pnpm bench --help                       # show usage
 pnpm bench -n "v1.2.0"                 # save with explicit name (prompts if it exists)
 pnpm bench -n "v1.2.0" -f              # overwrite existing without prompting
