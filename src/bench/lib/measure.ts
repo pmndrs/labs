@@ -111,6 +111,8 @@ export async function benchGenerator(gen: (...args: any[]) => any, opts: any = {
       n.value = { ...n.value, time: renderPass(device, n.value.render, n.value.draw) };
     }
     gpuTimed = !!n.value.time;
+    // The CPU heap is idle while the GPU runs, so GC observation has no subject
+    if (gpuTimed) opts.sample_gc = false;
   }
 
   let $fn = n.value;

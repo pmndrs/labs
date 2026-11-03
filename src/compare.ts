@@ -308,6 +308,7 @@ function trialRuns(trial: ComparableTrial): Array<{
     p99: typeof stats?.p99 === 'number' ? stats.p99 : 0,
     ...(Array.isArray(stats?.blocks?.medians) ? { runMedians: stats.blocks.medians } : {}),
     ...(Array.isArray(stats?.blocks?.freqs) ? { calibrationRates: stats.blocks.freqs } : {}),
+    ...(stats?.kind === 'gpu' ? { gpu: true } : {}),
     ...(stats?.gc && 'total' in stats.gc
       ? {
           gcValue: observedGcCost(stats.gc),
@@ -342,6 +343,7 @@ function errorMessage(error: unknown): string {
 interface IndexEntry {
   p99: number;
   samples: number[];
+  gpu?: boolean;
   runMedians?: number[];
   calibrationRates?: number[];
   gcValue?: number;
@@ -457,7 +459,7 @@ function calibrationSensitive(
   if (normalizedVerdict === timeVerdict) return undefined;
 
   return (
-    `${CLOCK_CONFOUNDED_PREFIX}${timeVerdict}→${normalizedVerdict} · ` +
+    `${CLOCK_CONFOUNDED_PREFIX}${base.gpu ? 'GPU ' : ''}${timeVerdict}→${normalizedVerdict} · ` +
     `${baselineRate.toFixed(2)}→${candidateRate.toFixed(2)}`
   );
 }

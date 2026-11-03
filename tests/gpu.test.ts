@@ -108,6 +108,9 @@ describe('GPU benches', () => {
       const json = JSON.parse(output.stdout);
       const clocks = Object.fromEntries(json.benches.map((b: any) => [b.name, b.clock]));
       expect(clocks).toEqual({ dispatch: 'gpu', encode: 'cpu', compile: 'cpu' });
+      // GPU time has no GC to report, and the environment carries the GPU clock
+      expect(json.benches.find((b: any) => b.name === 'dispatch').gc).toBeNull();
+      expect(json.environment.gpuSpeedVaried).toEqual(expect.any(Number));
       const stats = Object.fromEntries(
         loadResult(join(project, '.labs'), 'gpu').files[0].benchmarks.map((trial) => [
           trial.alias,

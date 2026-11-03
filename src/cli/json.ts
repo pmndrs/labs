@@ -2,6 +2,7 @@ import type { GcStats } from '../bench/types.ts';
 import { type CompareResult, compareFailed } from '../compare.ts';
 import type { LabsConfig } from '../config.ts';
 import { type SavedResult, isEnvironmentStable, pairedFreqDrift } from '../store.ts';
+import { gpuRateDrift } from '../report.ts';
 import { runStatus } from './run-view.ts';
 
 /** How much the CPU speed probes varied across the run, as a fraction of their mean. */
@@ -31,12 +32,18 @@ function gcJson(gc: GcStats) {
 
 /** The judged view of a run, with the same conclusions the report screen shows. */
 export function runJson(result: SavedResult, config: LabsConfig, saved: boolean) {
+  const gpuRates = result.files.flatMap((file) =>
+    file.benchmarks.flatMap((trial) =>
+      trial.runs.flatMap((run) => (run.stats?.kind === 'gpu' ? (run.stats.blocks?.freqs ?? []) : []))
+    )
+  );
   return {
     name: result.name,
     saved,
     environment: {
       stable: isEnvironmentStable(result),
       cpuSpeedVaried: cpuSpeedVaried(result),
+      ...(gpuRates.length ? { gpuSpeedVaried: gpuRateDrift(gpuRates) } : {}),
       ...(result.environment?.paired
         ? { pairedDrift: pairedFreqDrift(result.environment.freqs, result.environment.paired) }
         : {}),

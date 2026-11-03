@@ -353,7 +353,7 @@ bench.gpu('blur compile', function* ({ device, fresh }) {
 
 Render passes take their attachments: `yield { render: descriptor, draw: (pass) => ... }`. Work labs cannot wrap, such as WebGL timer queries, returns its own nanoseconds through `yield { time: async () => ns }`.
 
-GPU benches run on the `chrome` and `webkit` runtimes, which expose the machine's GPU headlessly. Headless Firefox has no WebGPU adapter. Each block records the GPU's speed from a fixed probe dispatch, the way CPU benches record a calibration rate, so the clock gate judges GPU blocks against the GPU. The GPU clock climbs under load and drops after idle gaps, so the warm-up runs until pass timings agree. Drivers cache compiled pipelines by source, so compile benches pass their source through `fresh`, which makes every sample a cache miss. Results and JSON output carry `clock: 'gpu'` for GPU-timed benches.
+GPU benches run on the `chrome` and `webkit` runtimes, which expose the machine's GPU headlessly. Headless Firefox has no WebGPU adapter. Each block records the GPU's speed from a fixed probe dispatch, the way CPU benches record a calibration rate, so the clock gate judges GPU blocks against the GPU. The GPU clock climbs under load and drops after idle gaps, so the warm-up runs until pass timings agree. Drivers cache compiled pipelines by source, so compile benches pass their source through `fresh`, which makes every sample a cache miss. GPU-timed rows read per pass, carry no GC lines, and the report adds a GPU clock line from the probes. JSON output carries `clock: 'gpu'` per bench and `gpuSpeedVaried` in the environment.
 
 ## Dead Code Elimination
 

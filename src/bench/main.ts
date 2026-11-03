@@ -558,7 +558,7 @@ const formats = {
             );
           else
             print(
-              `| ${run.name.padEnd(name_len)} | \`${`${formatNs(run.stats!.avg)}/iter`.padStart(14)}\` | \`${formatNs(run.stats!.min).padStart(9)}\` | \`${formatNs(run.stats!.p75).padStart(9)}\` | \`${formatNs(run.stats!.p99).padStart(9)}\` | \`${formatNs(run.stats!.max).padStart(9)}\` |`
+              `| ${run.name.padEnd(name_len)} | \`${`${formatNs(run.stats!.avg)}${run.stats!.kind === 'gpu' ? '/pass' : '/iter'}`.padStart(14)}\` | \`${formatNs(run.stats!.min).padStart(9)}\` | \`${formatNs(run.stats!.p75).padStart(9)}\` | \`${formatNs(run.stats!.p99).padStart(9)}\` | \`${formatNs(run.stats!.max).padStart(9)}\` |`
             );
         }
       }

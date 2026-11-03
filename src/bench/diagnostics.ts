@@ -6,6 +6,7 @@ export function isLikelyOptimizedOut(
   gcMode: GcMode,
   noop?: Partial<Record<'fn' | 'iter' | 'fn_gc', Pick<Stats, 'avg'>>>
 ): boolean {
+  if (stats.kind === 'gpu') return false;
   const mode =
     stats.kind === 'iter' ? 'iter' : gcMode === true || gcMode === 'inner' ? 'fn_gc' : 'fn';
   return stats.avg < 1.42 * (noop?.[mode]?.avg ?? 0);

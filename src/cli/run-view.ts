@@ -40,6 +40,13 @@ type RunEntry = {
   advice: string;
 };
 
+/** Blocks of a GPU bench that ran at a lower clock than the fastest block, or changed clock inside. */
+export function gpuClockShifts(stats: { blocks?: { freqs: number[]; spreads?: number[] } }): number {
+  const { freqs = [], spreads = [] } = stats.blocks ?? {};
+  const top = Math.max(...freqs);
+  return freqs.filter((rate, i) => rate < top * 0.9 || (spreads[i] ?? 0) > 0.1).length;
+}
+
 /**
  * Report status for one run, shared by the report and the live progress view.
  * Only the most serious problem is reported, with advice on what to do about it.
@@ -56,6 +63,7 @@ export function runStatus(
     | 'unmeasured'
     | 'optimized-out'
     | 'nondeterministic'
+    | 'gpu-clock'
     | 'mixed-tiers'
     | 'deoptimized'
     | 'tier-drop'
@@ -91,9 +99,23 @@ export function runStatus(
       message: 'likely optimized out',
       advice: 'return the result',
     };
-  const warning = samplingWarning(stats);
+  // Tier warnings describe the CPU sampling loop, which GPU time does not run through
+  const warning = stats.kind === 'gpu' ? undefined : samplingWarning(stats);
   if (warning && !stats.varyingOutput) return { symbol: '⚠', ...warning, advice: '' };
-  if (stats.unsettled || stats.varyingOutput)
+  if (stats.kind === 'gpu') {
+    // The GPU clock settles at one of a few levels per process and can move
+    // mid-block. Blocks probed slower than the fastest, or split inside, ran at
+    // another level. A minority leaves the median of blocks intact.
+    const shifted = gpuClockShifts(stats);
+    const total = stats.blocks?.freqs.length ?? 0;
+    if (stats.unsettled || shifted * 2 >= Math.max(total, 1))
+      return {
+        symbol: '⚠',
+        problem: 'gpu-clock',
+        message: `GPU clock shifted in ${shifted} of ${total} blocks`,
+        advice: 'free the GPU or lengthen blocks',
+      };
+  } else if (stats.unsettled || stats.varyingOutput)
     return {
       symbol: '⚠',
       problem: 'nondeterministic',
@@ -110,7 +132,11 @@ export function runStatus(
       problem: 'imprecise',
       minDetectableChange: resolution,
       message: `min detectable change ±${Math.round(resolution * 100)}%`,
-      advice: machine ? 'rerun on an idle machine' : 'add blocks',
+      advice: machine
+        ? stats.kind === 'gpu'
+          ? 'rerun with an idle GPU'
+          : 'rerun on an idle machine'
+        : 'add blocks',
     };
   }
   return {
