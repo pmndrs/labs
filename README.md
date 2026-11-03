@@ -1,8 +1,5 @@
 # Labs
 
-> [!WARNING]
-> Labs runs benchmarks in Node.js, Google Chrome, or Bun. The CLI requires Node.js.
-
 Labs is JS benchmarking you can trust. Trying to get good signal is harder than you might think. VMs are non-deterministic, environments are unstable, and typical benchmarks don't give you any sense of a comparison's validity. Labs detects variance, giving feedback on how to fix it, and uses statistical analysis to determine if two runs are actually different.
 
 ```bash
@@ -46,10 +43,7 @@ Run your benchmarks with the `bench` command.
 # Run all benches, save named after the current commit
 bench
 # Or choose another runtime
-bench --runtime chrome
-bench --runtime firefox
-bench --runtime webkit
-bench --runtime bun
+bench --runtime chrome # bun | webkit | firefox
 # Or filter by tag
 bench "@mytag"
 # Save with a name for easier reading
@@ -58,9 +52,16 @@ bench "@mytag" -n 'v1.0.0'
 
 In an interactive terminal, a live view shows each benchmark's progress while it runs, then a full-screen results view opens. Select a benchmark to inspect its timings, sample distribution, memory use, and run consistency. Quitting prints a short summary. Reopen saved results with `bench list`.
 
-Chrome requires a local installation and runs headlessly.
-Bun requires a local installation. GC diagnostics require the CLI; heap allocation diagnostics are unavailable.
-Firefox and WebKit require `pnpm exec playwright-core install firefox webkit`. WebKit runs Safari's engine in a separate browser build. Heap allocation diagnostics are unavailable in these runtimes.
+<details>
+<summary>Runtime info</summary>
+
+- **Node.js** is the default runtime.
+- **Chrome** requires a local installation and runs headlessly. Set extra flags with `chrome.args`.
+- **Bun** requires a local installation. GC diagnostics require the Labs CLI. Heap allocation diagnostics are unavailable. Set JSC options through `bun.env` with `BUN_JSC_*` names.
+- **Firefox** requires `pnpm dlx playwright-core@1.64.1 install firefox`. Heap allocation diagnostics are unavailable.
+- **WebKit** requires `pnpm dlx playwright-core@1.64.1 install webkit`. It runs Safari's engine in a separate browser build. Heap allocation diagnostics are unavailable. Set JSC options through `webkit.env` with `JSC_*` names. WebKit forwards these to its content process on macOS. Set `DEBUG=pw:browser` to see WebKit's diagnostic output.
+
+</details>
 
 <img src="docs/images/bench.png" width="760" alt="Labs run view with a benchmark list, timing measurements, sample histogram, garbage collection, heap per iteration, and run consistency" />
 
@@ -394,9 +395,10 @@ export default defineConfig({
 | `benchMatch`        | `**/*.bench.ts`                             | Glob pattern for discovery                                                                                                                      |
 | `nodeFlags`         | `['--allow-natives-syntax', '--expose-gc']` | Node flags per worker process                                                                                                                   |
 | `runtime`           | `'node'`                                    | Benchmark runtime: `'node'`, `'chrome'`, `'bun'`, `'firefox'`, or `'webkit'`. Override per run with `--runtime`                                 |
-| `chrome`            | `{ headless: true }`                        | Chrome launch options: `headless` and optional `executablePath`                                                                                 |
-| `firefox`, `webkit` | `{ headless: true }`                        | Playwright browser launch options: `headless` and optional `executablePath`                                                                     |
-| `bun`               | `{}`                                        | Bun launch options: optional `executablePath`                                                                                                   |
+| `chrome`            | `{ headless: true }`                        | Chrome options: `headless`, `executablePath`, and extra `args`. GPU timestamps use full resolution.                                             |
+| `firefox`           | `{ headless: true }`                        | Firefox launch options: `headless` and optional `executablePath`                                                                                |
+| `webkit`            | `{ headless: true }`                        | WebKit launch options: `headless`, `executablePath`, extra `args`, and `env`                                                                    |
+| `bun`               | `{}`                                        | Bun launch options: `executablePath`, extra `args`, and `env`                                                                                   |
 | `resultsDir`        | `.labs`                                     | Directory for saved results, relative to config                                                                                                 |
 | `blockTime`         | `0.5`                                       | Pilot block's timed work budget in seconds, excluding warmup and heap diagnostics. Later blocks replay its sample count                         |
 | `minSamples`        | `20`                                        | Minimum samples per block                                                                                                                       |

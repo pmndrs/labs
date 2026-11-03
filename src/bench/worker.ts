@@ -14,6 +14,7 @@ import type { BlockPlan, GcStats, Stats, Trial } from './types.ts';
 import { mergeGc } from './lib/gc.ts';
 import { colors } from './env.ts';
 import { renderReport } from './render.ts';
+import { RuntimeLaunchError } from '../runtime-error.ts';
 
 type TuneOptions = {
   min_cpu_time?: number;
@@ -410,4 +411,14 @@ async function main(): Promise<void> {
 }
 
 const onlyIndex = process.env.LABS_ONLY_INDEX;
-void (onlyIndex !== undefined ? childMain(Number(onlyIndex)) : main());
+void (onlyIndex !== undefined ? childMain(Number(onlyIndex)) : main()).catch((error: unknown) => {
+  if (!process.send || !(error instanceof RuntimeLaunchError)) {
+    console.error(error instanceof RuntimeLaunchError ? error.message : error);
+  }
+  if (process.send) {
+    process.send(
+      { type: 'labs:error', message: error instanceof Error ? error.message : String(error) },
+      () => process.exit(1)
+    );
+  } else process.exit(1);
+});

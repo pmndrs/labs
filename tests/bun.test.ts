@@ -4,7 +4,7 @@ import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { defineConfig } from '../src/config.ts';
 import { renderRunView } from '../src/cli/run-view.ts';
 import { runWorkers } from '../src/cli/workers.ts';
@@ -19,6 +19,7 @@ describe('Bun benchmarks', () => {
   let project: string;
 
   afterEach(() => {
+    vi.unstubAllEnvs();
     if (project) rmSync(project, { recursive: true, force: true });
   });
 
@@ -139,6 +140,38 @@ describe('Bun benchmarks', () => {
           colors: false,
         }).lines.join('\n')
       ).toContain('Bun');
+    }
+  );
+
+  it.skipIf(!available).each([true, false])(
+    'passes launch arguments and JSC settings to every block with GC observation %s',
+    (gc) => {
+      vi.stubEnv('BUN_JSC_useDollarVM', '0');
+      vi.stubEnv('BENCH_LAUNCH_VALUE', 'inherited');
+      setup(
+        `import { assert, bench } from '@pmndrs/labs';
+        assert.equal(globalThis.launchValue, 'preloaded');
+        assert.equal(process.env.BENCH_LAUNCH_VALUE, 'configured');
+        assert.equal(typeof globalThis.$vm.ftlTrue, 'function');
+        bench('launch options', () => { Bun.gc(true); return globalThis.launchValue; });`,
+        {
+          gc,
+          bun: {
+            executablePath,
+            args: ['--preload', './preload.ts'],
+            env: { BUN_JSC_useDollarVM: '1', BENCH_LAUNCH_VALUE: 'configured' },
+          },
+        }
+      );
+      writeFileSync(join(project, 'preload.ts'), `globalThis.launchValue = 'preloaded';`);
+      const output = run();
+      expect(output.status, output.stderr).toBe(0);
+      const report = JSON.parse(output.stdout);
+      expect(report.crashes).toEqual([]);
+      expect(report.benches).toHaveLength(1);
+      expect(report.benches[0].gc === null).toBe(!gc);
+      const saved = loadResult(join(project, '.labs'), 'bun-test');
+      expect(saved.files[0].benchmarks[0].runs[0].stats!.blocks!.medians).toHaveLength(2);
     }
   );
 

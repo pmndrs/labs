@@ -69,6 +69,7 @@ export function runWorkers(specs: WorkerSpec[]): Promise<void> {
         env: spec.live ? { ...spec.env, LABS_PROGRESS: '1' } : spec.env,
       });
       let lastError = '';
+      let reportedError: string | undefined;
       if (spec.live) {
         const { onEvent, onOutput } = spec.live;
         readLines(child.stdio[3] as NodeJS.ReadableStream, (line) => {
@@ -80,7 +81,11 @@ export function runWorkers(specs: WorkerSpec[]): Promise<void> {
           onOutput(line);
         });
       }
-      child.on('message', (message) => {
+      child.on('message', (message: any) => {
+        if (message?.type === 'labs:error') {
+          reportedError = message.message;
+          return;
+        }
         if (message !== 'turn' && message !== 'diagnostics') return;
         if (message === 'diagnostics') diagnosing.add(child);
         release(child);
@@ -111,7 +116,9 @@ export function runWorkers(specs: WorkerSpec[]): Promise<void> {
         finish(
           code === 0
             ? undefined
-            : new Error(lastError || `bench worker exited with ${signal ?? `code ${code}`}`)
+            : new Error(
+                reportedError || lastError || `bench worker exited with ${signal ?? `code ${code}`}`
+              )
         );
       });
     }
