@@ -109,7 +109,7 @@ describe('GPU bench reporting', () => {
     const status = runStatus(trial as any, run as any, undefined, 0.05);
     expect(status.problem).toBe('gpu-clock');
     expect(status.message).toBe('GPU clock shifted (3/6)');
-    expect(status.advice).toBe('free the GPU or lengthen blocks');
+    expect(status.advice).toBe('');
   });
 
   it('counts a block whose samples split between levels as shifted', () => {

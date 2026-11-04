@@ -114,7 +114,7 @@ export function runStatus(
         symbol: '⚠',
         problem: 'gpu-clock',
         message: `GPU clock shifted (${shifted}/${total})`,
-        advice: 'free the GPU or lengthen blocks',
+        advice: '',
       };
   } else if (stats.unsettled || stats.varyingOutput)
     return {
