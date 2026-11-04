@@ -53,6 +53,37 @@ describe('adaptive warmup', () => {
     }
   );
 
+  it('reports when the workload settled and nothing when it never did', async () => {
+    let clock = 0;
+    let calls = 0;
+    const settled = await measure(
+      () => {
+        clock += clock < 3_000_000 ? 100_000 : 10_000;
+        return ++calls;
+      },
+      { now: () => clock, gc: false, min_samples: 1, max_samples: 1, min_cpu_time: 0 }
+    );
+    expect(settled.warmup?.phase).toBe('sampling');
+    expect(settled.warmup?.time).toBeGreaterThanOrEqual(10_000_000);
+    expect(settled.warmup?.time).toBeLessThan(15_000_000);
+
+    const unsettled = await measure(
+      () => {
+        clock += ++calls % 2 ? 100_000 : 200_000;
+      },
+      {
+        now: () => clock,
+        gc: false,
+        warmup_time: 2_000_000,
+        min_samples: 1,
+        max_samples: 1,
+        min_cpu_time: 0,
+      }
+    );
+    expect(unsettled.unsettled).toBe(true);
+    expect(unsettled.warmup).toBeUndefined();
+  });
+
   it('keeps warming work that only gets fast once the engine has optimized it', async () => {
     let clock = 0;
     let calls = 0;
@@ -212,5 +243,6 @@ describe('adaptive warmup', () => {
     expect(warmupCalls).toBeGreaterThan(3);
     expect(trial.runs[0].stats?.plan).toEqual(plan);
     expect(trial.runs[0].stats?.p50).toBe(1_000);
+    expect(trial.runs[0].stats?.optimization?.natural).toBeUndefined();
   });
 });

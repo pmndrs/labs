@@ -3,11 +3,12 @@ import { min as arrMin, max as arrMax } from '../utils/math.ts';
 import { truncate, formatNs, formatBytes, formatAmount } from '../utils/units.ts';
 import * as histogramFmt from './format/histogram.ts';
 import { formatGcColumns } from './format/gc.ts';
+import { optimizationRows } from './format/optimization.ts';
 import * as boxplotFmt from './format/boxplot.ts';
 import * as barplotFmt from './format/barplot.ts';
 import * as lineplotFmt from './format/lineplot.ts';
 import { isAssertionError, type Context, type GcMode, type Trial } from './types.ts';
-import { isLikelyOptimizedOut } from './diagnostics.ts';
+import { isLikelyOptimizedOut, samplingWarning } from './diagnostics.ts';
 
 export interface RenderedTrial {
   highlight: false | string | null;
@@ -255,6 +256,16 @@ export function renderReport(
             }
           }
 
+          for (const { label, value } of optimizationRows(r.stats!)) {
+            prev_run_gap = true;
+            const head = ' '.repeat(k_legend - 12) + label.padEnd(12);
+            print(
+              opts.colors
+                ? ansi.gray + head + ansi.reset + ansi.blue + value + ansi.reset
+                : head + value
+            );
+          }
+
           if (r.stats!.heap) {
             l = '';
             prev_run_gap = true;
@@ -448,6 +459,9 @@ export function renderReport(
             }
           }
         }
+        const warning = samplingWarning(r.stats)?.message;
+        if (warning)
+          print(opts.colors ? `${ansi.yellow}  ⚠ ${warning}${ansi.reset}` : `  ⚠ ${warning}`);
       }
     }
 

@@ -6,6 +6,8 @@ import { describe, expect, it, vi } from 'vitest';
 import { defineConfig } from '../src/config.ts';
 import { replayReport } from '../src/report.ts';
 import type { SavedResult } from '../src/store.ts';
+import { CYAN, GRAY, YELLOW } from '../src/utils/ansi.ts';
+import { runJson } from '../src/cli/json.ts';
 import { showRunReport } from '../src/cli/run-screen.ts';
 import { renderRunView } from '../src/cli/run-view.ts';
 import { openReportScreen } from '../src/cli/screen.ts';
@@ -57,17 +59,406 @@ function fixture(): SavedResult {
   };
 }
 
-function render(result = fixture(), columns = 100, detailOffset = 0, rows = 30) {
+function render(result = fixture(), columns = 100, detailOffset = 0, rows = 30, colors = false) {
   return renderRunView(result, defineConfig({ benchDir: '.' }), {
     columns,
     rows,
     selected: 0,
     detailOffset,
-    colors: false,
+    colors,
   });
 }
 
 describe('run report', () => {
+  it('shows the measured tier and preparation time instead of the early natural probe', () => {
+    const result = fixture();
+    const stats = result.files[0].benchmarks[0].runs[0].stats!;
+    stats.optimization = {
+      mode: 'prepared',
+      natural: { tier: 'Sparkplug', time: 5e6 },
+      benchmark: Array.from({ length: 3 }, () => ({ tier: 'TurboFan', time: 8e6 })),
+      benchmarkEnd: ['TurboFan', 'TurboFan', null],
+      workload: [],
+    };
+    stats.warmup = { time: 8e6, phase: 'sampling' };
+    for (const columns of [40, 100]) {
+      const text = render(result, columns, 0, 40).lines.join('\n');
+      expect(text).toMatch(/TurboFan +8.00 ms/);
+      expect(text).not.toMatch(/Sparkplug|5.00 ms|→|\?|\(\d\/\d\)|sampling|forced|natural/);
+    }
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      replayReport(result, defineConfig({ benchDir: '.' }));
+      const report = stripVTControlCharacters(log.mock.calls.flat().join('\n'));
+      expect(report).toMatch(/warmup +TurboFan 8.00 ms/);
+      expect(report).not.toMatch(/Sparkplug|5.00 ms|sampling|forced/);
+    } finally {
+      log.mockRestore();
+    }
+  });
+
+  it('shows time to native tiers separately from settled timings and preserves mixed blocks', () => {
+    const result = fixture();
+    const stats = result.files[0].benchmarks[0].runs[0].stats!;
+    stats.warmup = { time: 20e6 };
+    stats.optimization = {
+      workload: [{ tier: 'DFG', time: 2e6 }, { tier: 'DFG', time: 4e6 }, null],
+      harness: [
+        { tier: 'FTL', time: 10e6 },
+        { tier: 'FTL', time: 14e6 },
+        { tier: 'DFG', time: 5e6 },
+      ],
+    };
+    const text = render(result, 120, 0, 40).lines.join('\n');
+    expect(text).toContain('fn entry');
+    expect(text).toContain('3.00 ms → DFG (2/3)');
+    expect(text).toContain('unavailable (1/3)');
+    expect(text).toContain('harness');
+    expect(text).toContain('12.00 ms → FTL (2/3)');
+    expect(text).toContain('5.00 ms → DFG (1/3)');
+    expect(text).toMatch(/✓ create entities +20.00 ms/);
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      replayReport(result, defineConfig({ benchDir: '.' }));
+      const report = stripVTControlCharacters(log.mock.calls.flat().join('\n'));
+      expect(report).toContain('12.00 ms → FTL (2/3)');
+      expect(report).toContain('unavailable (1/3)');
+    } finally {
+      log.mockRestore();
+    }
+  });
+
+  it.each([
+    {
+      name: 'top-tier function and batched harness',
+      batch: true,
+      workload: 'TurboFan',
+      harness: 'TurboFan',
+      benchmark: 'TurboFan',
+      sampling: 'batched · 12.00 ms → TurboFan',
+    },
+    {
+      name: 'lower function tier inside a top-tier harness',
+      batch: true,
+      workload: 'Maglev',
+      harness: 'TurboFan',
+      benchmark: null,
+      sampling: 'batched · tier unverified',
+    },
+    {
+      name: 'top-tier function inside a lower-tier harness',
+      batch: true,
+      workload: 'TurboFan',
+      harness: 'Maglev',
+      benchmark: null,
+      sampling: 'batched · tier unverified',
+    },
+    {
+      name: 'unbatched function below the top tier',
+      batch: false,
+      workload: 'Sparkplug',
+      harness: null,
+      benchmark: 'Sparkplug',
+      sampling: 'unbatched · 12.00 ms → Sparkplug',
+    },
+    {
+      name: 'runtime without tier diagnostics',
+      batch: true,
+      workload: null,
+      harness: null,
+      benchmark: null,
+      sampling: 'batched · tier unavailable',
+    },
+  ] as const)(
+    'explains the benchmark tier for a $name',
+    ({ batch, workload, harness, benchmark, sampling }) => {
+      const result = fixture();
+      const stats = result.files[0].benchmarks[0].runs[0].stats!;
+      stats.plan = { batch, batch_samples: batch ? 1024 : 1, batch_unroll: 4, samples: 8 };
+      stats.optimization = {
+        mode: 'natural',
+        benchmark: [benchmark ? { tier: benchmark, time: 12e6 } : null],
+        benchmarkEnd: [benchmark],
+        workload: [workload ? { tier: workload, time: 3e6 } : null],
+        ...(batch ? { harness: [harness ? { tier: harness, time: 10e6 } : null] } : {}),
+      };
+      stats.warmup = { time: 20e6, phase: batch ? 'sampling' : 'workload' };
+      const text = render(result, 120, 0, 40).lines.join('\n');
+      const heading = text.split('\n').find((line) => line.trimEnd().endsWith('20.00 ms'));
+      expect(heading).toContain('✓ create entities');
+      expect(heading?.trim().replace(/ {2,}/g, ' ')).toBe(
+        ['✓ create entities', benchmark, '20.00 ms'].filter(Boolean).join(' ')
+      );
+      expect(text).not.toMatch(/^\s*(sampling|settled)\s/m);
+      expect(text).not.toContain('fn entry');
+      expect(text).not.toContain('harness');
+      const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+      try {
+        replayReport(result, defineConfig({ benchDir: '.' }));
+        const report = stripVTControlCharacters(log.mock.calls.flat().join('\n'));
+        expect(report).toContain(sampling);
+      } finally {
+        log.mockRestore();
+      }
+    }
+  );
+
+  it('warns only for a verified promotion within the same block', () => {
+    const result = fixture();
+    const stats = result.files[0].benchmarks[0].runs[0].stats!;
+    stats.optimization = {
+      mode: 'natural',
+      benchmark: [{ tier: 'Maglev', time: 2e6 }, null, null],
+      benchmarkEnd: ['TurboFan', 'Maglev', 'TurboFan'],
+      workload: [null, null, null],
+    };
+    const warning = 'Maglev → TurboFan';
+    expect(render(result, 120, 0, 40).lines.join('\n')).toContain(warning);
+    expect(runJson(result, defineConfig({ benchDir: '.' }), true).benches[0]).toMatchObject({
+      status: 'warning',
+      problem: 'late-optimization',
+      message: warning,
+    });
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      replayReport(result, defineConfig({ benchDir: '.' }));
+      expect(stripVTControlCharacters(log.mock.calls.flat().join('\n'))).toContain('⚠ ' + warning);
+    } finally {
+      log.mockRestore();
+    }
+    stats.optimization.benchmarkEnd = ['Maglev', 'Maglev', 'TurboFan'];
+    expect(runJson(result, defineConfig({ benchDir: '.' }), true).benches[0].status).toBe('passed');
+  });
+
+  it('shows Mixed in the heading and puts verified outcome counts in a warning', () => {
+    const result = fixture();
+    const stats = result.files[0].benchmarks[0].runs[0].stats!;
+    stats.optimization = {
+      mode: 'natural',
+      benchmark: Array.from({ length: 5 }, () => ({ tier: 'Maglev', time: 2e6 })),
+      benchmarkEnd: ['TurboFan', 'Maglev', 'Maglev', 'Maglev', 'Maglev'],
+      workload: [],
+    };
+    stats.warmup = { time: 20e6, phase: 'sampling' };
+    for (const columns of [40, 100]) {
+      const text = render(result, columns, 0, 40, true).lines.join('\n');
+      expect(text).toContain(YELLOW + 'Mixed');
+      const heading = stripVTControlCharacters(text)
+        .split('\n')
+        .find((line) => line.trimEnd().endsWith('20.00 ms'));
+      expect(heading).toMatch(/Mixed +20.00 ms/);
+      expect(heading).not.toMatch(/Maglev|TurboFan|×/);
+      expect(text).toContain('Maglev ×4 · Maglev → TurboFan ×1');
+      expect(text.indexOf('Maglev ×4')).toBeLessThan(text.indexOf('Maglev → TurboFan ×1'));
+    }
+    expect(runJson(result, defineConfig({ benchDir: '.' }), true).benches[0]).toMatchObject({
+      status: 'warning',
+      problem: 'mixed-tiers',
+      message: 'Maglev ×4 · Maglev → TurboFan ×1',
+    });
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      replayReport(result, defineConfig({ benchDir: '.' }));
+      const report = stripVTControlCharacters(log.mock.calls.flat().join('\n'));
+      expect(report).toMatch(/warmup +Mixed 20.00 ms/);
+      expect(report).toContain('⚠ Maglev ×4 · Maglev → TurboFan ×1');
+    } finally {
+      log.mockRestore();
+    }
+    stats.varyingOutput = true;
+    const warning = render(result, 120, 0, 40).lines.join('\n');
+    expect(warning).toContain('results change between runs');
+    expect(warning).toContain('Maglev ×4 · Maglev → TurboFan ×1');
+    stats.varyingOutput = false;
+    stats.optimization.benchmarkEnd = ['TurboFan', null, null, null, null];
+    const text = render(result, 100, 0, 40, true).lines.join('\n');
+    expect(text).toContain(YELLOW + 'Maglev → TurboFan');
+    expect(text).not.toMatch(/\?|×\d|\(\d\/\d\)/);
+  });
+
+  it.each([{ ends: undefined }, { ends: [null, null] }])(
+    'omits missing end tiers without a promotion warning ($ends)',
+    ({ ends }) => {
+      const result = fixture();
+      result.files[0].benchmarks[0].runs[0].stats!.optimization = {
+        mode: 'natural',
+        benchmark: [
+          { tier: 'Maglev', time: 2e6 },
+          { tier: 'Maglev', time: 2e6 },
+        ],
+        benchmarkEnd: ends,
+        workload: [],
+      };
+      const text = render(result, 100, 0, 40, true).lines.join('\n');
+      expect(text).toContain(CYAN + 'Maglev');
+      expect(text).not.toContain('?');
+      expect(text).not.toContain('code optimized after timing began');
+    }
+  );
+
+  it('keeps the warmup tier and time together when the name needs more room', () => {
+    const result = fixture();
+    const run = result.files[0].benchmarks[0].runs[0];
+    run.name = 'heavy: 128 pose copies';
+    run.stats!.optimization = {
+      mode: 'natural',
+      benchmark: [{ tier: 'Maglev', time: 38e6 }],
+      benchmarkEnd: ['TurboFan'],
+      workload: [{ tier: 'Maglev', time: 6e6 }],
+    };
+    run.stats!.warmup = { time: 36e6 };
+    const coloredReport = () => render(result, 100, 0, 40, true).lines.join('\n');
+    expect(coloredReport()).toContain(YELLOW + 'Maglev → TurboFan');
+    expect(coloredReport()).toContain(GRAY + '36.00 ms');
+    const summary = 'Maglev → TurboFan  36.00 ms';
+    const wide = render(result, 100, 0, 40).lines.map((line) => line.trimEnd());
+    expect(wide.find((line) => line.endsWith(summary))).toMatch(/⚠ heavy: 128 pose copies +Maglev/);
+    const narrow = render(result, 40, 0, 40).lines.map((line) => line.trim());
+    expect(narrow).toContain(summary);
+    expect(narrow.join('\n')).not.toContain('code optimized after timing began');
+    run.stats!.varyingOutput = true;
+    expect(coloredReport()).toContain(YELLOW + 'Maglev → TurboFan');
+  });
+
+  it('shows the observed destination when a block promotes below the highest tier', () => {
+    const result = fixture();
+    const stats = result.files[0].benchmarks[0].runs[0].stats!;
+    stats.optimization = {
+      mode: 'prepared',
+      natural: { tier: 'Ignition', time: 3e6 },
+      benchmark: [{ tier: 'Ignition', time: 8e6 }],
+      benchmarkEnd: ['Maglev'],
+      workload: [],
+    };
+    stats.warmup = { time: 7.15e6, phase: 'sampling' };
+    const text = render(result, 100, 0, 40, true).lines.join('\n');
+    expect(text).toContain(YELLOW + 'Ignition → Maglev');
+    expect(text).toContain(GRAY + '7.15 ms');
+    expect(text).not.toMatch(/TurboFan|code optimized after timing began/);
+    expect(runJson(result, defineConfig({ benchDir: '.' }), true).benches[0]).toMatchObject({
+      status: 'warning',
+      problem: 'late-optimization',
+      message: 'Ignition → Maglev',
+    });
+  });
+
+  it('warns about a recovered TurboFan bailout and keeps its timing', () => {
+    const result = fixture();
+    const stats = result.files[0].benchmarks[0].runs[0].stats!;
+    stats.optimization = {
+      mode: 'prepared',
+      benchmark: [{ tier: 'TurboFan', time: 10 }],
+      benchmarkEnd: ['TurboFan'],
+      deoptimized: ['workload'],
+      workload: [],
+    };
+    const text = render(result, 105, 0, 40, true).lines.join('\n');
+    expect(text).toContain(YELLOW + 'TurboFan (deopt)');
+    expect(runJson(result, defineConfig({ benchDir: '.' }), true).benches[0]).toMatchObject({
+      status: 'warning',
+      problem: 'deoptimized',
+      message: 'TurboFan deoptimized during sampling',
+      timeNs: { avg: stats.avg },
+    });
+    stats.optimization.benchmark!.push({ tier: 'TurboFan', time: 10 });
+    stats.optimization.benchmarkEnd!.push('TurboFan');
+    stats.optimization.deoptimized!.push(false);
+    const mixed = render(result, 105, 0, 40, true).lines.join('\n');
+    expect(mixed).toContain(YELLOW + 'Mixed');
+    expect(mixed).toContain('TurboFan (deopt) ×1 · TurboFan ×1');
+  });
+
+  it('keeps an unverified workload tier out of loop deopt warnings', () => {
+    const result = fixture();
+    const stats = result.files[0].benchmarks[0].runs[0].stats!;
+    stats.optimization = {
+      mode: 'prepared',
+      target: 'TurboFan',
+      benchmark: [null],
+      benchmarkEnd: [null],
+      deoptimized: ['harness'],
+      workload: [{ tier: 'Maglev', time: 1e6 }],
+      harness: [{ tier: 'TurboFan', time: 1e6 }],
+    };
+    stats.warmup = { time: 20e6, phase: 'sampling' };
+    const text = render(result, 120, 0, 40).lines.join('\n');
+    expect(text).toMatch(/⚠ create entities +20.00 ms/);
+    expect(text).not.toMatch(/TurboFan|Maglev/);
+    expect(text).toContain('Sampling loop deoptimized during timing');
+    expect(runJson(result, defineConfig({ benchDir: '.' }), true).benches[0]).toMatchObject({
+      status: 'warning',
+      problem: 'deoptimized',
+      message: 'Sampling loop deoptimized during timing',
+      timeNs: { avg: stats.avg },
+    });
+  });
+
+  it('shows an observed deoptimization instead of retaining the starting tier', () => {
+    const result = fixture();
+    result.files[0].benchmarks[0].runs[0].stats!.optimization = {
+      mode: 'prepared',
+      natural: { tier: 'Sparkplug', time: 3e6 },
+      benchmark: [{ tier: 'TurboFan', time: 8e6 }],
+      benchmarkEnd: ['Maglev'],
+      workload: [],
+    };
+    const text = render(result, 100, 0, 40, true).lines.join('\n');
+    expect(text).toContain(YELLOW + 'TurboFan → Maglev');
+    expect(text).not.toContain('Sparkplug');
+  });
+
+  it('does not turn different stable blocks into a transition', () => {
+    const result = fixture();
+    result.files[0].benchmarks[0].runs[0].stats!.optimization = {
+      mode: 'prepared',
+      benchmark: [
+        { tier: 'Maglev', time: 8e6 },
+        { tier: 'TurboFan', time: 9e6 },
+      ],
+      benchmarkEnd: ['Maglev', 'TurboFan'],
+      workload: [],
+    };
+    const text = render(result, 100, 0, 40, true).lines.join('\n');
+    expect(text).toContain(YELLOW + 'Mixed');
+    expect(text).toContain('Maglev ×1 · TurboFan ×1');
+    expect(text).not.toContain('→');
+    expect(runJson(result, defineConfig({ benchDir: '.' }), true).benches[0]).toMatchObject({
+      status: 'warning',
+      problem: 'mixed-tiers',
+      message: 'Maglev ×1 · TurboFan ×1',
+    });
+  });
+
+  it('does not infer unbatched sampling from missing data in older results', () => {
+    const result = fixture();
+    result.files[0].benchmarks[0].runs[0].stats!.optimization = {
+      workload: [{ tier: 'Sparkplug', time: 3e6 }],
+    };
+    const text = render(result, 120, 0, 40).lines.join('\n');
+    expect(text).toContain('fn entry');
+    expect(text).toMatch(/harness\s+not recorded/);
+    expect(text).not.toContain('unbatched');
+  });
+
+  it('omits the natural function tier when the sampling tier was unavailable', () => {
+    const result = fixture();
+    result.files[0].benchmarks[0].runs[0].stats!.optimization = {
+      mode: 'prepared',
+      natural: { tier: 'Maglev', time: 3e6 },
+      benchmark: [null],
+      workload: [{ tier: 'Maglev', time: 3e6 }],
+      harness: [{ tier: 'TurboFan', time: 10e6 }],
+    };
+    const text = render(result, 120, 0, 40).lines.join('\n');
+    expect(text).toMatch(/^\s*✓ create entities *$/m);
+    result.files[0].benchmarks[0].runs[0].stats!.warmup = {
+      time: 20e6,
+      phase: 'sampling',
+      blocks: { settled: 1, total: 3 },
+    };
+    expect(render(result, 120, 0, 40).lines.join('\n')).toMatch(/✓ create entities +20\.00 ms *$/m);
+  });
+
   it.each([
     ['fn', false, 'fn'],
     ['fn', true, 'fn_gc'],

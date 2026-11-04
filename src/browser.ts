@@ -64,13 +64,20 @@ export const browserHarness = {
     result.benchmarks.forEach((trial, index) => {
       Object.assign(trial, { groupName: registry[index]?.groupName ?? '' });
     });
-    const calibration = await measure(() => {}, { ...clock, batch_unroll: 1 });
+    const calibration = await measure(() => {}, {
+      ...clock,
+      batch_unroll: 1,
+    });
     return jsonSafe({ ...result, environment: { postFreq: 1 / calibration.avg } });
   },
 
   async calibrate(): Promise<BrowserCalibration> {
     const clock = { ...calibrateClock(), ...(gc.fallback ? { gc: false as const } : {}) };
-    const calibration = await measure(() => {}, { ...clock, batch_unroll: 1, min_cpu_time: 5e7 });
+    const calibration = await measure(() => {}, {
+      ...clock,
+      batch_unroll: 1,
+      min_cpu_time: 5e7,
+    });
     return { clock, calibrationRate: 1 / calibration.avg };
   },
 

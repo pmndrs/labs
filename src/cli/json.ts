@@ -64,6 +64,8 @@ export function runJson(result: SavedResult, config: LabsConfig, saved: boolean)
               ? { avg: stats.avg, p75: stats.p75, p99: stats.p99, min: stats.min, max: stats.max }
               : null,
             heapBytes: stats?.heap ?? null,
+            warmup: stats?.warmup ?? null,
+            optimization: stats?.optimization ?? null,
             gc: stats?.gc && 'total' in stats.gc ? gcJson(stats.gc) : null,
           };
         })
