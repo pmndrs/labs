@@ -6,7 +6,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { defineConfig } from '../src/config.ts';
 import { replayReport } from '../src/report.ts';
 import type { SavedResult } from '../src/store.ts';
-import { CYAN, GRAY, YELLOW } from '../src/utils/ansi.ts';
+import { CYAN, YELLOW } from '../src/utils/ansi.ts';
 import { runJson } from '../src/cli/json.ts';
 import { showRunReport } from '../src/cli/run-screen.ts';
 import { renderRunView } from '../src/cli/run-view.ts';
@@ -83,14 +83,14 @@ describe('run report', () => {
     stats.warmup = { time: 8e6, phase: 'sampling' };
     for (const columns of [40, 100]) {
       const text = render(result, columns, 0, 40).lines.join('\n');
-      expect(text).toMatch(/TurboFan +8.00 ms/);
+      expect(text).toMatch(/TurboFan *$/m);
       expect(text).not.toMatch(/Sparkplug|5.00 ms|→|\?|\(\d\/\d\)|sampling|forced|natural/);
     }
     const log = vi.spyOn(console, 'log').mockImplementation(() => {});
     try {
       replayReport(result, defineConfig({ benchDir: '.' }));
       const report = stripVTControlCharacters(log.mock.calls.flat().join('\n'));
-      expect(report).toMatch(/warmup +TurboFan 8.00 ms/);
+      expect(report).toMatch(/warmup +TurboFan *$/m);
       expect(report).not.toMatch(/Sparkplug|5.00 ms|sampling|forced/);
     } finally {
       log.mockRestore();
@@ -116,7 +116,7 @@ describe('run report', () => {
     expect(text).toContain('harness');
     expect(text).toContain('12.00 ms → FTL (2/3)');
     expect(text).toContain('5.00 ms → DFG (1/3)');
-    expect(text).toMatch(/✓  cpu  create entities +20.00 ms/);
+    expect(text).toMatch(/✓  cpu  create entities/);
     const log = vi.spyOn(console, 'log').mockImplementation(() => {});
     try {
       replayReport(result, defineConfig({ benchDir: '.' }));
@@ -184,10 +184,12 @@ describe('run report', () => {
       };
       stats.warmup = { time: 20e6, phase: batch ? 'sampling' : 'workload' };
       const text = render(result, 120, 0, 40).lines.join('\n');
-      const heading = text.split('\n').find((line) => line.trimEnd().endsWith('20.00 ms'));
-      expect(heading).toContain('✓  cpu  create entities');
+      const heading = text
+        .split('\n')
+        .map((line) => line.trim())
+        .find((line) => line.startsWith('✓  cpu  create entities'));
       expect(heading?.trim().replace(/ {2,}/g, ' ')).toBe(
-        ['✓ cpu create entities', benchmark, '20.00 ms'].filter(Boolean).join(' ')
+        ['✓ cpu create entities', benchmark].filter(Boolean).join(' ')
       );
       expect(text).not.toMatch(/^\s*(sampling|settled)\s/m);
       expect(text).not.toContain('fn entry');
@@ -245,8 +247,9 @@ describe('run report', () => {
       expect(text).toContain(YELLOW + 'Mixed');
       const heading = stripVTControlCharacters(text)
         .split('\n')
-        .find((line) => line.trimEnd().endsWith('20.00 ms'));
-      expect(heading).toMatch(/Mixed +20.00 ms/);
+        .map((line) => line.trim())
+        .find((line) => /^[✓⚠]  cpu  create entities/.test(line));
+      expect(heading).toMatch(/Mixed *$/);
       expect(heading).not.toMatch(/Maglev|TurboFan|×/);
       expect(text).toContain('Maglev (4/5)  Maglev → TurboFan (1/5)');
       expect(text.indexOf('Maglev (4/5)')).toBeLessThan(text.indexOf('Maglev → TurboFan (1/5)'));
@@ -260,7 +263,7 @@ describe('run report', () => {
     try {
       replayReport(result, defineConfig({ benchDir: '.' }));
       const report = stripVTControlCharacters(log.mock.calls.flat().join('\n'));
-      expect(report).toMatch(/warmup +Mixed 20.00 ms/);
+      expect(report).toMatch(/warmup +Mixed *$/m);
       expect(report).toContain('⚠ Maglev (4/5)  Maglev → TurboFan (1/5)');
     } finally {
       log.mockRestore();
@@ -296,7 +299,7 @@ describe('run report', () => {
     }
   );
 
-  it('keeps the warmup tier and time together when the name needs more room', () => {
+  it('keeps the warmup tier in the heading when the name needs more room', () => {
     const result = fixture();
     const run = result.files[0].benchmarks[0].runs[0];
     run.name = 'heavy: 128 pose copies';
@@ -309,12 +312,13 @@ describe('run report', () => {
     run.stats!.warmup = { time: 36e6 };
     const coloredReport = () => render(result, 100, 0, 40, true).lines.join('\n');
     expect(coloredReport()).toContain(YELLOW + 'Maglev → TurboFan');
-    expect(coloredReport()).toContain(GRAY + '36.00 ms');
-    const summary = 'Maglev → TurboFan  36.00 ms';
+    const summary = 'Maglev → TurboFan';
     const wide = render(result, 100, 0, 40).lines.map((line) => line.trimEnd());
-    expect(wide.find((line) => line.endsWith(summary))).toMatch(/⚠  cpu  heavy: 128 pose copies +Maglev/);
+    expect(wide.find((line) => line.endsWith(summary))).toMatch(
+      /⚠  cpu  heavy: 128 pose copies +Maglev/
+    );
     const narrow = render(result, 40, 0, 40).lines.map((line) => line.trim());
-    expect(narrow).toContain(summary);
+    expect(narrow.some((line) => line.endsWith(summary))).toBe(true);
     expect(narrow.join('\n')).not.toContain('code optimized after timing began');
     run.stats!.varyingOutput = true;
     expect(coloredReport()).toContain(YELLOW + 'Maglev → TurboFan');
@@ -333,7 +337,6 @@ describe('run report', () => {
     stats.warmup = { time: 7.15e6, phase: 'sampling' };
     const text = render(result, 100, 0, 40, true).lines.join('\n');
     expect(text).toContain(YELLOW + 'Ignition → Maglev');
-    expect(text).toContain(GRAY + '7.15 ms');
     expect(text).not.toMatch(/TurboFan|code optimized after timing began/);
     expect(runJson(result, defineConfig({ benchDir: '.' }), true).benches[0]).toMatchObject({
       status: 'warning',
@@ -382,7 +385,7 @@ describe('run report', () => {
     };
     stats.warmup = { time: 20e6, phase: 'sampling' };
     const text = render(result, 120, 0, 40).lines.join('\n');
-    expect(text).toMatch(/⚠  cpu  create entities +20.00 ms/);
+    expect(text).toMatch(/⚠  cpu  create entities *$/m);
     expect(text).not.toMatch(/TurboFan|Maglev/);
     expect(text).toContain('Sampling loop deoptimized during timing');
     expect(runJson(result, defineConfig({ benchDir: '.' }), true).benches[0]).toMatchObject({
@@ -456,7 +459,7 @@ describe('run report', () => {
       phase: 'sampling',
       blocks: { settled: 1, total: 3 },
     };
-    expect(render(result, 120, 0, 40).lines.join('\n')).toMatch(/✓  cpu  create entities +20\.00 ms *$/m);
+    expect(render(result, 120, 0, 40).lines.join('\n')).toMatch(/^\s*✓  cpu  create entities *$/m);
   });
 
   it.each([

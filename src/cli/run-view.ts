@@ -262,7 +262,6 @@ function warmupHeading(stats: SavedBenchmarkRun['stats']) {
           ? YELLOW
           : CYAN,
     });
-  if (stats?.warmup) parts.push({ text: duration(stats.warmup.time), color: GRAY });
   return parts;
 }
 
