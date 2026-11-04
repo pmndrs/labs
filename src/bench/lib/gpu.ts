@@ -25,15 +25,19 @@ export function freshShader(code: string): string {
 
 /**
  * Times passes on the GPU. `encode` records one pass between the given
- * timestamp writes. The returned function resolves to a pass's GPU time in
- * nanoseconds. Four passes stay in flight, since the GPU clock climbs only
- * under continuous load and falls as soon as the queue runs dry, so each call
- * returns the time of the oldest pass and submits a new one.
+ * timestamp writes. The returned function submits passes and resolves to a
+ * pass's GPU time in nanoseconds. Four stay in flight, since the GPU clock
+ * climbs only under continuous load and falls as soon as the queue runs dry,
+ * so each call tops the queue up and returns the oldest pass's time. The
+ * function is the submit path itself, so the harness preparation that
+ * compiles a self-timed function at the top tier covers it.
  */
+export type TimedPass = (() => Promise<number>) & { calls: number };
+
 export function timedPass(
   device: GPUDevice,
   encode: (encoder: GPUCommandEncoder, timestampWrites: GPUComputePassTimestampWrites) => void
-): () => Promise<number> {
+): TimedPass {
   const slots = Array.from({ length: 4 }, () => ({
     query: device.createQuerySet({ type: 'timestamp', count: 2 }),
     resolve: device.createBuffer({
@@ -43,26 +47,34 @@ export function timedPass(
     read: device.createBuffer({ size: 16, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST }),
   }));
   let next = 0;
-  const submit = async () => {
+  // Encoding and submission are synchronous, so the compiled pass function
+  // inlines them. Only the readback waits.
+  const enqueue = () => {
     const { query, resolve, read } = slots[next++ % slots.length];
     const encoder = device.createCommandEncoder();
     encode(encoder, { querySet: query, beginningOfPassWriteIndex: 0, endOfPassWriteIndex: 1 });
     encoder.resolveQuerySet(query, 0, 2, resolve, 0);
     encoder.copyBufferToBuffer(resolve, 0, read, 0, 16);
     device.queue.submit([encoder.finish()]);
-    await read.mapAsync(GPUMapMode.READ);
-    const stamps = new BigInt64Array(read.getMappedRange());
-    const time = Number(stamps[1] - stamps[0]);
-    read.unmap();
-    return time;
+    return read.mapAsync(GPUMapMode.READ).then(() => {
+      const stamps = new BigInt64Array(read.getMappedRange());
+      const time = Number(stamps[1] - stamps[0]);
+      read.unmap();
+      return time;
+    });
   };
   const inflight: Array<Promise<number>> = [];
-  return async () => {
-    while (inflight.length < slots.length) inflight.push(submit());
-    const time = await inflight.shift()!;
-    inflight.push(submit());
-    return time;
-  };
+  const pass: TimedPass = Object.assign(
+    async () => {
+      pass.calls++;
+      while (inflight.length < slots.length) inflight.push(enqueue());
+      const time = await inflight.shift()!;
+      inflight.push(enqueue());
+      return time;
+    },
+    { calls: 0 }
+  );
+  return pass;
 }
 
 /** Bytes a texture occupies from its size, format, mip chain and sample count. */
@@ -121,7 +133,7 @@ export function meterAllocations(device: GPUDevice): { bytes(): number; stop(): 
 export function computePass(
   device: GPUDevice,
   fill: (pass: GPUComputePassEncoder) => void
-): () => Promise<number> {
+): TimedPass {
   return timedPass(device, (encoder, timestampWrites) => {
     const pass = encoder.beginComputePass({ timestampWrites });
     fill(pass);
@@ -133,7 +145,7 @@ export function renderPass(
   device: GPUDevice,
   descriptor: GPURenderPassDescriptor,
   draw: (pass: GPURenderPassEncoder) => void
-): () => Promise<number> {
+): TimedPass {
   return timedPass(device, (encoder, timestampWrites) => {
     const pass = encoder.beginRenderPass({ ...descriptor, timestampWrites });
     draw(pass);
