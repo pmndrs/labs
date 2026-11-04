@@ -50,7 +50,7 @@ function blockCount(): number {
 }
 
 async function calibrateFreq(): Promise<number> {
-  const r = await measure(() => {}, { batch_unroll: 1 });
+  const r = await measure(() => {}, { batch_unroll: 1, min_cpu_time: 1e8 });
   return 1 / (r as any).avg;
 }
 

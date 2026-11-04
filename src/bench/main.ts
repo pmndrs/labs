@@ -384,7 +384,8 @@ export async function run(
   defaults(opts);
   const t = Date.now();
   const benchmarks: Trial[] = [];
-  const cal = opts.calibrate ?? {};
+  // Empty-call probes only need a stable average.
+  const cal = { min_cpu_time: 1e8, ...opts.calibrate };
   const filter = new RegExp(opts.filter);
   filter.lastIndex = opts.filter.lastIndex;
   const kinds = new Set(

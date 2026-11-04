@@ -33,8 +33,8 @@ export interface LabsConfig {
   /** Directory for saved results and baseline pointer, relative to config file. @default ".labs" */
   resultsDir: string;
   /**
-   * Time budget per block in seconds. Every block runs at least this long and
-   * collects at least `minSamples`. @default 0.5
+   * Pilot block's timed work budget in seconds, excluding preparation and heap
+   * diagnostics. Later blocks replay its sample count. @default 0.2
    */
   blockTime?: number;
   /** Minimum samples per block. @default 20 */
@@ -71,7 +71,7 @@ export function defineConfig(config: Partial<LabsConfig> & Pick<LabsConfig, 'ben
     nodeFlags: ['--allow-natives-syntax', '--expose-gc'],
     runtime: 'node',
     resultsDir: '.labs',
-    blockTime: 0.5,
+    blockTime: 0.2,
     minSamples: 20,
     gc: true,
     heap: true,
