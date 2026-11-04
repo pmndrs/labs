@@ -1,7 +1,9 @@
 import { stripVTControlCharacters } from 'node:util';
 import { describe, expect, it, vi } from 'vitest';
 import { renderReport } from '../src/bench/render.ts';
-import { gpuClockShifts, runStatus } from '../src/cli/run-view.ts';
+import { gpuClockShifts, renderRunView, runStatus } from '../src/cli/run-view.ts';
+import { defineConfig } from '../src/config.ts';
+import type { SavedResult } from '../src/store.ts';
 import {
   collectDiagnostics,
   emptyDiagnostics,
@@ -121,6 +123,45 @@ describe('GPU bench reporting', () => {
         )
       )
     ).toBe(1);
+  });
+
+  it('shows the GPU clock and vram where CPU benches show gc and heap', () => {
+    const stats = {
+      ...gpuStats(steady, [1, 1, 1, 1, 0.25, 1]),
+      vram: { resident: 4 << 20, perPass: 65536 },
+    };
+    const result: SavedResult = {
+      name: 'gpu',
+      timestamp: '2026-01-01T00:00:00.000Z',
+      hardware: { cpu: 'test cpu', arch: 'arm64', runtime: 'chrome', freq: 4 },
+      blocks: 6,
+      files: [
+        {
+          file: 'gpu.bench.ts',
+          benchmarks: [
+            {
+              ...trial,
+              group: 0,
+              baseline: false,
+              style: { compact: false, highlight: false },
+              groupName: '',
+              runs: [{ name: 'dispatch', args: {}, stats }],
+            },
+          ],
+        },
+      ],
+    };
+    const view = renderRunView(result, defineConfig({ benchDir: '.' }), {
+      columns: 100,
+      rows: 30,
+      selected: 0,
+      detailOffset: 0,
+      colors: false,
+    }).lines.join('\n');
+    expect(view).toMatch(/clock\s+vram/);
+    expect(view).toMatch(/5\/6\s+4\.00 MiB/);
+    expect(view).toMatch(/120% drift\s+64\.00 KiB\/pass/);
+    expect(view).not.toMatch(/\bgc\b/);
   });
 
   it('reports the GPU clock beside the CPU clock', () => {

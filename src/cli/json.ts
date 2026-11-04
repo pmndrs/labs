@@ -74,6 +74,7 @@ export function runJson(result: SavedResult, config: LabsConfig, saved: boolean)
             heapBytes: stats?.heap ?? null,
             warmup: stats?.warmup ?? null,
             optimization: stats?.optimization ?? null,
+            vramBytes: stats?.vram ?? null,
             gc: stats?.gc && 'total' in stats.gc ? gcJson(stats.gc) : null,
           };
         })

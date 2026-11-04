@@ -30,6 +30,7 @@ export interface SavedStats {
   p99: number;
   gc?: Stats['gc'];
   heap?: Stats['heap'];
+  vram?: Stats['vram'];
   plan?: BlockPlan;
   /** Output compared with the baseline. */
   snapshot?: Snapshot;
@@ -395,6 +396,7 @@ export function trimStats(stats: Stats): SavedStats {
     ...(stats.varyingOutput ? { varyingOutput: true } : {}),
     ...(stats.optimization ? { optimization: stats.optimization } : {}),
     ...(stats.warmup ? { warmup: stats.warmup } : {}),
+    ...(stats.vram !== undefined ? { vram: stats.vram } : {}),
     ...(stats.blocks ? { blocks: stats.blocks } : {}),
     ...(stats.gc
       ? {

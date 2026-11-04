@@ -309,25 +309,46 @@ function details(entry: RunEntry | undefined, width: number, state: TerminalView
       : `${min}–${max}`;
   };
   const gc = stats.gc;
-  const columns: Array<{ heading: string; qualifier?: string; value: string; detail: string }> = [
-    ...(gc && 'total' in gc
-      ? formatGcColumns(gc).map((column) => ({
-          ...column,
-          value: column.qualifier ? `${column.qualifier} ${column.value}` : column.value,
-        }))
+  const gpuColumns = () => {
+    const { freqs = [] } = stats.blocks ?? {};
+    const drift = freqs.length
+      ? (Math.max(...freqs) - Math.min(...freqs)) / ((Math.max(...freqs) + Math.min(...freqs)) / 2)
+      : 0;
+    return [
+      {
+        heading: 'clock',
+        value: freqs.length ? `${freqs.length - gpuClockShifts(stats)}/${freqs.length}` : '—',
+        detail: freqs.length ? `${(drift * 100).toFixed(0)}% drift` : '—',
+      },
+      {
+        heading: 'vram',
+        value: stats.vram === undefined ? '—' : bytes(stats.vram.resident),
+        detail: stats.vram === undefined ? '—' : `${bytes(stats.vram.perPass)}/pass`,
+      },
+    ];
+  };
+  const columns: Array<{ heading: string; qualifier?: string; value: string; detail: string }> =
+    stats.kind === 'gpu'
+      ? gpuColumns()
       : [
+          ...(gc && 'total' in gc
+            ? formatGcColumns(gc).map((column) => ({
+                ...column,
+                value: column.qualifier ? `${column.qualifier} ${column.value}` : column.value,
+              }))
+            : [
+                {
+                  heading: 'gc',
+                  value: gc ? duration(gc.p50) : entry.gcMode === false ? 'disabled' : '—',
+                  detail: range(gc, duration),
+                },
+              ]),
           {
-            heading: 'gc',
-            value: gc ? duration(gc.p50) : entry.gcMode === false ? 'disabled' : '—',
-            detail: range(gc, duration),
+            heading: stats.heap?.source === 'replay' ? 'heap replay' : 'heap',
+            value: stats.heap ? bytes(stats.heap.p50) : '—',
+            detail: range(stats.heap, bytes),
           },
-        ]),
-    {
-      heading: stats.heap?.source === 'replay' ? 'heap replay' : 'heap',
-      value: stats.heap ? bytes(stats.heap.p50) : '—',
-      detail: range(stats.heap, bytes),
-    },
-  ];
+        ];
   const columnWidths = columns.map((column) =>
     Math.max(textWidth(column.heading), textWidth(column.value), textWidth(column.detail))
   );
@@ -472,7 +493,15 @@ export function renderRunView(
       canvas.put(
         y,
         nameWidth + 29,
-        bench ? (stats?.heap ? bytes(stats.heap.p50) : '—') : 'heap',
+        bench
+          ? stats?.kind === 'gpu'
+            ? stats.vram === undefined
+              ? '—'
+              : bytes(stats.vram.resident)
+            : stats?.heap
+              ? bytes(stats.heap.p50)
+              : '—'
+          : 'memory',
         GRAY,
         12,
         true

@@ -238,6 +238,7 @@ function mergeStats(list: Stats[], calibrationRates: number[]): Stats {
   const heaps = list.map((s) => s.heap).filter(Boolean) as NonNullable<Stats['heap']>[];
   const gcs = list.map((s) => s.gc).filter((gc) => gc && 'total' in gc) as GcStats[];
   const medians = list.map((s) => s.p50);
+  const vrams = list.flatMap((s) => (s.vram === undefined ? [] : [s.vram]));
 
   return {
     ...list[0],
@@ -253,6 +254,14 @@ function mergeStats(list: Stats[], calibrationRates: number[]): Stats {
     ticks: list.reduce((a, s) => a + s.ticks, 0),
     ...(heaps.length === list.length ? { heap: mergeRange(heaps) } : {}),
     ...(gcs.length === list.length ? { gc: mergeGc(gcs) } : {}),
+    ...(vrams.length === list.length
+      ? {
+          vram: {
+            resident: median(vrams.map((v) => v.resident)),
+            perPass: median(vrams.map((v) => v.perPass)),
+          },
+        }
+      : {}),
     ...(list.some((stats) => stats.optimization)
       ? {
           optimization: {

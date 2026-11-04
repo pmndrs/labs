@@ -19,7 +19,7 @@ import { toSnapshot } from './snapshot.ts';
 import { batchSize, defaults } from './constants.ts';
 import { createWarmup, isWarmupDone, isWarmupUnsettled, recordWarmup } from './warmup.ts';
 import { memoryPass } from './memory.ts';
-import { computePass, freshShader, gpuDevice, renderPass } from './gpu.ts';
+import { computePass, freshShader, gpuDevice, meterAllocations, renderPass } from './gpu.ts';
 import { GcObservation, GcScope } from './gc.ts';
 import { optimization, optimizationClock } from './optimization.ts';
 
@@ -92,6 +92,8 @@ export async function measure(f: (...args: any[]) => any, opts: MeasureOptions =
  */
 export async function benchGenerator(gen: (...args: any[]) => any, opts: any = {}): Promise<Stats> {
   const device = opts.$gpu ? await gpuDevice() : undefined;
+  // Setup builds what the pass holds, the pass itself may grow it
+  const meter = device ? meterAllocations(device) : undefined;
   const ctx = {
     get(name: string) {
       return opts.args?.[name];
@@ -105,6 +107,10 @@ export async function benchGenerator(gen: (...args: any[]) => any, opts: any = {
   // A GPU bench yields a pass to fill, which runs timed on the GPU. A plain
   // function stays on the CPU clock like any other bench.
   let gpuTimed = false;
+  let passes = 0;
+  // What setup built. The timing wrapper then adds readback buffers of its own.
+  const resident = meter?.bytes() ?? 0;
+  let harness = 0;
   if (device && n.value && 'object' === typeof n.value) {
     if (n.value.compute) n.value = { ...n.value, time: computePass(device, n.value.compute) };
     else if (n.value.render) {
@@ -112,6 +118,9 @@ export async function benchGenerator(gen: (...args: any[]) => any, opts: any = {
     }
     gpuTimed = !!n.value.time;
     if (gpuTimed) {
+      harness = meter!.bytes() - resident;
+      const timed = n.value.time;
+      n.value = { ...n.value, time: () => (passes++, timed()) };
       // The CPU heap is idle while the GPU runs, so GC observation has no subject
       opts.sample_gc = false;
       // The GPU clock climbs over tens of milliseconds of continuous load, and
@@ -159,6 +168,10 @@ export async function benchGenerator(gen: (...args: any[]) => any, opts: any = {
   }
 
   const stats = await benchFn($fn, opts);
+  const allocated = meter?.stop() ?? 0;
+  const vram = gpuTimed
+    ? { resident, perPass: (allocated - resident - harness) / Math.max(1, passes) }
+    : undefined;
   const end = await g.next(first);
   if (!end.done) throw new TypeError('expected generator to yield once');
 
@@ -171,6 +184,7 @@ export async function benchGenerator(gen: (...args: any[]) => any, opts: any = {
   return {
     ...stats,
     kind: gpuTimed ? ('gpu' as const) : ('yield' as const),
+    ...(vram !== undefined ? { vram } : {}),
     ...(snapshot !== undefined ? { snapshot } : {}),
   };
 }

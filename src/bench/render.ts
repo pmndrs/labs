@@ -267,6 +267,30 @@ export function renderReport(
             );
           }
 
+          if (r.stats!.vram !== undefined) {
+            prev_run_gap = true;
+            const resident = formatBytes(r.stats!.vram.resident, false).padStart(9);
+            const growth = formatBytes(r.stats!.vram.perPass, false).padStart(9);
+            l = ' '.repeat(k_legend - 5);
+            if (!opts.colors) l += 'vram ' + resident + ' ' + growth + '/pass';
+            else
+              l +=
+                ansi.gray +
+                'vram ' +
+                ansi.reset +
+                ansi.yellow +
+                resident +
+                ansi.reset +
+                ' ' +
+                ansi.yellow +
+                growth +
+                ansi.reset +
+                ansi.gray +
+                '/pass' +
+                ansi.reset;
+            print(l);
+          }
+
           if (r.stats!.heap) {
             l = '';
             prev_run_gap = true;

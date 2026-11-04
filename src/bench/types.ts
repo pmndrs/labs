@@ -81,6 +81,8 @@ export interface Stats {
   p999: number;
   gc?: GcStats | LegacyGcStats;
   heap?: { min: number; max: number; p50: number; source?: 'replay' };
+  /** Bytes of buffers and textures a GPU bench holds after setup, and the net growth per pass. */
+  vram?: { resident: number; perPass: number };
   /** Decisions this measurement made, usable to freeze later blocks. */
   plan?: BlockPlan;
   /** Output compared with the baseline. */

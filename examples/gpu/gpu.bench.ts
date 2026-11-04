@@ -35,6 +35,20 @@ group('blur', () => {
     });
   }
 
+  // The same dispatch with a scratch buffer created per pass and never freed,
+  // the kind of leak the vram growth column exists to show
+  bench.gpu('dispatch leaking scratch', function* ({ device }) {
+    const { pipeline, bind } = build(device, blur(16));
+    yield {
+      compute: (pass) => {
+        device.createBuffer({ size: 65536, usage: GPUBufferUsage.STORAGE });
+        pass.setPipeline(pipeline);
+        pass.setBindGroup(0, bind);
+        pass.dispatchWorkgroups(4096);
+      },
+    };
+  });
+
   // CPU time to encode and submit the same dispatch
   bench.gpu('encode', function* ({ device }) {
     const { pipeline, bind } = build(device, blur(16));

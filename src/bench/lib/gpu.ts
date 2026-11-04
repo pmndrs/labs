@@ -65,6 +65,59 @@ export function timedPass(
   };
 }
 
+/** Bytes a texture occupies from its size, format, mip chain and sample count. */
+function textureBytes(descriptor: GPUTextureDescriptor): number {
+  const size = descriptor.size as number[] | GPUExtent3DDict;
+  const [width, height, depth] = Array.isArray(size)
+    ? [size[0], size[1] ?? 1, size[2] ?? 1]
+    : [size.width, size.height ?? 1, size.depthOrArrayLayers ?? 1];
+  const format = descriptor.format;
+  const starts = (...prefixes: string[]) => prefixes.some((prefix) => format.startsWith(prefix));
+  const texel = starts('rgba32')
+    ? 16
+    : starts('rgba16', 'rg32')
+      ? 8
+      : starts('r16', 'rg8', 'depth16')
+        ? 2
+        : starts('r8', 'stencil8')
+          ? 1
+          : 4;
+  const levels = descriptor.mipLevelCount ?? 1;
+  const chain = (1 - 0.25 ** levels) / 0.75;
+  return width * height * depth * texel * chain * (descriptor.sampleCount ?? 1);
+}
+
+/**
+ * Counts the bytes of buffers and textures created on the device, less those
+ * destroyed, until stopped. GPU memory is not readable, so what a pass
+ * allocates is the measure of its memory cost, as the heap is on the CPU.
+ */
+export function meterAllocations(device: GPUDevice): { bytes(): number; stop(): number } {
+  let bytes = 0;
+  const createBuffer = device.createBuffer.bind(device);
+  const createTexture = device.createTexture.bind(device);
+  const track = <T extends { destroy(): void }>(resource: T, size: number): T => {
+    bytes += size;
+    const destroy = resource.destroy.bind(resource);
+    resource.destroy = () => {
+      bytes -= size;
+      size = 0;
+      destroy();
+    };
+    return resource;
+  };
+  device.createBuffer = (descriptor) => track(createBuffer(descriptor), descriptor.size);
+  device.createTexture = (descriptor) => track(createTexture(descriptor), textureBytes(descriptor));
+  return {
+    bytes: () => bytes,
+    stop() {
+      device.createBuffer = createBuffer;
+      device.createTexture = createTexture;
+      return bytes;
+    },
+  };
+}
+
 export function computePass(
   device: GPUDevice,
   fill: (pass: GPUComputePassEncoder) => void

@@ -50,6 +50,15 @@ bench.gpu('encode', function* ({ device }) {
     device.queue.submit([encoder.finish()]);
   };
 });
+bench.gpu('alloc', function* ({ device }) {
+  const { pipeline, bind } = build(device);
+  yield { compute: (pass) => {
+    device.createBuffer({ size: 65536, usage: GPUBufferUsage.STORAGE });
+    pass.setPipeline(pipeline);
+    pass.setBindGroup(0, bind);
+    pass.dispatchWorkgroups(4096);
+  } };
+});
 bench.gpu('compile', function* ({ device, fresh }) {
   yield async () => {
     const module = device.createShaderModule({ code: fresh(code) });
@@ -107,7 +116,12 @@ describe('GPU benches', () => {
       expect(output.status, output.stderr || output.error?.message).toBe(0);
       const json = JSON.parse(output.stdout);
       const clocks = Object.fromEntries(json.benches.map((b: any) => [b.name, b.clock]));
-      expect(clocks).toEqual({ dispatch: 'gpu', encode: 'cpu', compile: 'cpu' });
+      expect(clocks).toEqual({ dispatch: 'gpu', encode: 'cpu', alloc: 'gpu', compile: 'cpu' });
+      // What a pass allocates is its memory cost, and a pass that allocates nothing reads zero
+      const vram = Object.fromEntries(json.benches.map((b: any) => [b.name, b.vramBytes]));
+      expect(vram.dispatch).toEqual({ resident: (1 << 20) * 4, perPass: 0 });
+      expect(vram.alloc.perPass).toBeGreaterThanOrEqual(65536);
+      expect(vram.encode).toBeNull();
       // GPU time has no GC to report, and the environment carries the GPU clock
       expect(json.benches.find((b: any) => b.name === 'dispatch').gc).toBeNull();
       expect(json.environment.gpuSpeedVaried).toEqual(expect.any(Number));
@@ -139,7 +153,7 @@ describe('GPU benches', () => {
   it('explains that GPU benches need a browser runtime', { timeout: 60_000 }, () => {
     const output = setup('node');
     const benches = JSON.parse(output.stdout).benches;
-    expect(benches).toHaveLength(3);
+    expect(benches).toHaveLength(4);
     for (const bench of benches) {
       expect(bench.status).toBe('failed');
       expect(bench.message).toContain('WebGPU');
