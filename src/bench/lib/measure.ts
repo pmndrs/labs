@@ -111,8 +111,14 @@ export async function benchGenerator(gen: (...args: any[]) => any, opts: any = {
       n.value = { ...n.value, time: renderPass(device, n.value.render, n.value.draw) };
     }
     gpuTimed = !!n.value.time;
-    // The CPU heap is idle while the GPU runs, so GC observation has no subject
-    if (gpuTimed) opts.sample_gc = false;
+    if (gpuTimed) {
+      // The CPU heap is idle while the GPU runs, so GC observation has no subject
+      opts.sample_gc = false;
+      // The GPU clock climbs over tens of milliseconds of continuous load, and
+      // passes agree long before that at whatever level it started from
+      opts.warmup_settle = Math.max(opts.warmup_settle ?? 0, 5e7);
+      opts.warmup_time = Math.max(opts.warmup_time ?? 0, 2e8);
+    }
   }
 
   let $fn = n.value;

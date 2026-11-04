@@ -120,10 +120,19 @@ export type GeneratorBench = (state: any) => Generator<any, any, any>;
 /** What a GPU bench's generator receives: the shared device and a shader cache buster. */
 export interface GpuState {
   device: GPUDevice;
-  fresh(code: string): string;
+  fresh: (code: string) => string;
   get(name: string): any;
 }
-export type GpuGeneratorBench = (state: GpuState) => Generator<any, any, any>;
+/** A GPU bench yields a pass timed on the GPU, a self-timed duration, or CPU work like any bench. */
+export type GpuYield =
+  | ({ compute: (pass: GPUComputePassEncoder) => void } & Record<string, unknown>)
+  | ({ render: GPURenderPassDescriptor; draw: (pass: GPURenderPassEncoder) => void } & Record<
+      string,
+      unknown
+    >)
+  | ({ time: () => number | Promise<number> } & Record<string, unknown>)
+  | ((...args: any[]) => any);
+export type GpuGeneratorBench = (state: GpuState) => Generator<GpuYield, any, any>;
 
 export interface MeasureOptions {
   now?: () => number;

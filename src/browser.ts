@@ -103,12 +103,14 @@ export const browserHarness = {
       });
     }
     try {
-      // A GPU bench's blocks are judged against the GPU's speed, not the CPU's
-      const calibrationRate = trialAt(index)._gpu
-        ? await probeGpuRate(await gpuDevice())
-        : prepared.calibrationRate;
+      // Blocks timed on the GPU are judged against the GPU's speed, not the CPU's
+      const gpuRate = trialAt(index)._gpu ? await probeGpuRate(await gpuDevice()) : undefined;
       const trial = await runTrialAt(index, { ...prepared.clock, ...tune, heap: false }, plans);
-      return jsonSafe({ trial, calibrationRate });
+      const gpuTimed = trial.runs.some((run) => run.stats?.kind === 'gpu');
+      return jsonSafe({
+        trial,
+        calibrationRate: gpuTimed && gpuRate ? gpuRate : prepared.calibrationRate,
+      });
     } finally {
       delete (globalThis as any).__LABS_GC_OBSERVER;
     }
