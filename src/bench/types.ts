@@ -1,3 +1,4 @@
+/// <reference lib="dom" preserve="true" />
 /// <reference types="@webgpu/types" />
 /**
  * Measurement decisions made once by a pilot block and replayed verbatim by
