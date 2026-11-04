@@ -401,7 +401,7 @@ export default defineConfig({
 | `webkit`            | `{ headless: true }`                        | WebKit launch options: `headless`, `executablePath`, extra `args`, and `env`                                                                    |
 | `bun`               | `{}`                                        | Bun launch options: `executablePath`, extra `args`, and `env`                                                                                   |
 | `resultsDir`        | `.labs`                                     | Directory for saved results, relative to config                                                                                                 |
-| `blockTime`         | `0.5`                                       | Pilot block's timed work budget in seconds, excluding warmup and heap diagnostics. Later blocks replay its sample count                         |
+| `blockTime`         | `0.2`                                       | Pilot block's timed work budget in seconds, excluding warmup and heap diagnostics. Later blocks replay its sample count                         |
 | `minSamples`        | `20`                                        | Minimum samples per block                                                                                                                       |
 | `gc`                | `true`                                      | Observe GC during sampling. Set `false` for all runtimes or use `{ node: false, chrome: true }`. Omitted runtime entries default to `true`      |
 | `heap`              | `true`                                      | Estimate allocated bytes after timing. Set to `false` to skip heap diagnostics while keeping timing samples and GC observation                  |
