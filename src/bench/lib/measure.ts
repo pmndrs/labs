@@ -107,7 +107,6 @@ export async function benchGenerator(gen: (...args: any[]) => any, opts: any = {
   // A GPU bench yields a pass to fill, which runs timed on the GPU. A plain
   // function stays on the CPU clock like any other bench.
   let gpuTimed = false;
-  let passes = 0;
   // What setup built. The timing wrapper then adds readback buffers of its own.
   const resident = meter?.bytes() ?? 0;
   let harness = 0;
@@ -119,8 +118,6 @@ export async function benchGenerator(gen: (...args: any[]) => any, opts: any = {
     gpuTimed = !!n.value.time;
     if (gpuTimed) {
       harness = meter!.bytes() - resident;
-      const timed = n.value.time;
-      n.value = { ...n.value, time: () => (passes++, timed()) };
       // The CPU heap is idle while the GPU runs, so GC observation has no subject
       opts.sample_gc = false;
       // The GPU clock climbs over tens of milliseconds of continuous load, and
@@ -173,7 +170,10 @@ export async function benchGenerator(gen: (...args: any[]) => any, opts: any = {
   if (gpuTimed) delete stats.optimization;
   const allocated = meter?.stop() ?? 0;
   const vram = gpuTimed
-    ? { resident, perPass: (allocated - resident - harness) / Math.max(1, passes) }
+    ? {
+        resident,
+        perPass: (allocated - resident - harness) / Math.max(1, n.value.time.calls ?? 1),
+      }
     : undefined;
   const end = await g.next(first);
   if (!end.done) throw new TypeError('expected generator to yield once');
@@ -226,6 +226,17 @@ export async function benchFn(fn: (...args: any[]) => any, opts: any = {}): Prom
 
     for (let o = 0; o < params.length; o++) {
       $p[o] = await opts.params[o]();
+    }
+
+    // A self-timed function is its own harness. A few calls give it feedback,
+    // then it is compiled at the top tier where V8 allows, so every block
+    // runs it at the same speed.
+    if (opts.manual && compiler?.prepare(fn)) {
+      for (let i = 0; i < 16; i++) {
+        for (let o = 0; o < params.length; o++) $p[o] = await opts.params[o]();
+        await fn(...$p);
+      }
+      compiler.compile(fn);
     }
 
     observeWorkload = optimizationClock(now());
