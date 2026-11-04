@@ -208,7 +208,8 @@ export function renderProgress(
     const grouped = file.benches.some((bench) => bench.group);
     const nameWidth = Math.max(0, ...file.benches.map((bench) => textWidth(bench.name)));
     // Room for the clock badge between the status and the name
-    const dotsX = (grouped ? 7 : 5) + 6 + Math.min(nameWidth, width - 46) + 2;
+    // Rows sit under their group heading without a further indent, as in the report
+    const dotsX = 5 + 6 + Math.min(nameWidth, width - 46) + 2;
     let group: string | undefined;
     for (const bench of file.benches) {
       if (grouped && bench.group !== group) {
@@ -216,7 +217,7 @@ export function renderProgress(
         const label = group;
         body.push((canvas, y) => canvas.put(y, 3, label, DARK_GRAY));
       }
-      const x = grouped ? 5 : 3;
+      const x = 3;
       if (bench.running) focus = body.length;
       const done = file.blocks - blocksLeft(bench, file.blocks);
       const symbol = bench.error !== undefined ? '✗' : bench.running ? tick : done ? ' ' : '·';
