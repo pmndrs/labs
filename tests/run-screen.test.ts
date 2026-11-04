@@ -116,7 +116,7 @@ describe('run report', () => {
     expect(text).toContain('harness');
     expect(text).toContain('12.00 ms → FTL (2/3)');
     expect(text).toContain('5.00 ms → DFG (1/3)');
-    expect(text).toMatch(/✓ create entities +20.00 ms/);
+    expect(text).toMatch(/✓  cpu  create entities +20.00 ms/);
     const log = vi.spyOn(console, 'log').mockImplementation(() => {});
     try {
       replayReport(result, defineConfig({ benchDir: '.' }));
@@ -185,9 +185,9 @@ describe('run report', () => {
       stats.warmup = { time: 20e6, phase: batch ? 'sampling' : 'workload' };
       const text = render(result, 120, 0, 40).lines.join('\n');
       const heading = text.split('\n').find((line) => line.trimEnd().endsWith('20.00 ms'));
-      expect(heading).toContain('✓ create entities');
+      expect(heading).toContain('✓  cpu  create entities');
       expect(heading?.trim().replace(/ {2,}/g, ' ')).toBe(
-        ['✓ create entities', benchmark, '20.00 ms'].filter(Boolean).join(' ')
+        ['✓ cpu create entities', benchmark, '20.00 ms'].filter(Boolean).join(' ')
       );
       expect(text).not.toMatch(/^\s*(sampling|settled)\s/m);
       expect(text).not.toContain('fn entry');
@@ -312,7 +312,7 @@ describe('run report', () => {
     expect(coloredReport()).toContain(GRAY + '36.00 ms');
     const summary = 'Maglev → TurboFan  36.00 ms';
     const wide = render(result, 100, 0, 40).lines.map((line) => line.trimEnd());
-    expect(wide.find((line) => line.endsWith(summary))).toMatch(/⚠ heavy: 128 pose copies +Maglev/);
+    expect(wide.find((line) => line.endsWith(summary))).toMatch(/⚠  cpu  heavy: 128 pose copies +Maglev/);
     const narrow = render(result, 40, 0, 40).lines.map((line) => line.trim());
     expect(narrow).toContain(summary);
     expect(narrow.join('\n')).not.toContain('code optimized after timing began');
@@ -382,7 +382,7 @@ describe('run report', () => {
     };
     stats.warmup = { time: 20e6, phase: 'sampling' };
     const text = render(result, 120, 0, 40).lines.join('\n');
-    expect(text).toMatch(/⚠ create entities +20.00 ms/);
+    expect(text).toMatch(/⚠  cpu  create entities +20.00 ms/);
     expect(text).not.toMatch(/TurboFan|Maglev/);
     expect(text).toContain('Sampling loop deoptimized during timing');
     expect(runJson(result, defineConfig({ benchDir: '.' }), true).benches[0]).toMatchObject({
@@ -450,13 +450,13 @@ describe('run report', () => {
       harness: [{ tier: 'TurboFan', time: 10e6 }],
     };
     const text = render(result, 120, 0, 40).lines.join('\n');
-    expect(text).toMatch(/^\s*✓ create entities *$/m);
+    expect(text).toMatch(/^\s*✓  cpu  create entities *$/m);
     result.files[0].benchmarks[0].runs[0].stats!.warmup = {
       time: 20e6,
       phase: 'sampling',
       blocks: { settled: 1, total: 3 },
     };
-    expect(render(result, 120, 0, 40).lines.join('\n')).toMatch(/✓ create entities +20\.00 ms *$/m);
+    expect(render(result, 120, 0, 40).lines.join('\n')).toMatch(/✓  cpu  create entities +20\.00 ms *$/m);
   });
 
   it.each([
@@ -474,7 +474,7 @@ describe('run report', () => {
     result.context.noop![mode].avg = 1000;
 
     const text = render(result).lines.join('\n');
-    expect(text).toContain('⚠ create entities');
+    expect(text).toContain('⚠  cpu  create entities');
     expect(text).toContain('likely optimized out');
     expect(text).toContain('1 warning');
     const log = vi.spyOn(console, 'log').mockImplementation(() => {});
@@ -492,7 +492,7 @@ describe('run report', () => {
       noop: { fn: { avg: 100 }, iter: { avg: 100 }, fn_gc: { avg: 100 } },
     };
     const calibrated = render(result).lines.join('\n');
-    expect(calibrated).toContain('✓ create entities');
+    expect(calibrated).toContain('✓  cpu  create entities');
     expect(calibrated).not.toContain('likely optimized out');
     expect(calibrated).not.toContain('warning');
   });
@@ -532,7 +532,7 @@ describe('run report', () => {
     Object.assign(stats, { unsettled, blocks: { ...stats.blocks!, spreads: [0], ...blocks } });
     const text = render(result).lines.join('\n');
 
-    expect(text).toContain(line ? '⚠ create entities' : '✓ create entities');
+    expect(text).toContain(line ? '⚠  cpu  create entities' : '✓  cpu  create entities');
     if (line) expect(text).toMatch(line);
   });
 

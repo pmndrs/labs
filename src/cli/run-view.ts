@@ -26,7 +26,7 @@ import {
 import { formatBytes, formatNs } from '../utils/units.ts';
 import type { TerminalFrame, TerminalViewState } from './screen.ts';
 import { TerminalCanvas, textWidth, wrapText } from './terminal.ts';
-import { runtimeLabel } from './utils.ts';
+import { clockBadge, runtimeLabel } from './utils.ts';
 
 type RunEntry = {
   file: string;
@@ -274,14 +274,15 @@ function details(entry: RunEntry | undefined, width: number, state: TerminalView
     return canvas.lines(colors);
   }
   const stats = entry.run.error === undefined ? entry.run.stats : undefined;
-  const title = `${entry.symbol} ${entry.name}`;
+  const badge = clockBadge(stats?.kind === 'gpu');
+  const title = `${entry.symbol} ${badge.text} ${entry.name}`;
   const metrics = warmupHeading(stats);
   const summaryWidth = textWidth(metrics.map(({ text }) => text).join('  '));
   const inlineSummary =
     summaryWidth > 0 && summaryWidth + 2 + Math.min(textWidth(title), 16) <= width;
   canvas.put(0, 0, title, BOLD, inlineSummary ? width - summaryWidth - 2 : width);
   canvas.put(0, 0, entry.symbol, entry.color, 1);
-  if (stats?.kind === 'gpu') canvas.put(0, textWidth(title) + 1, 'gpu', GRAY, 3);
+  canvas.put(0, 2, badge.text, badge.style, 5);
   let y = 1;
   if (summaryWidth > width) {
     for (const { text, color } of metrics) canvas.put(y++, 0, text, color, width, true);
@@ -478,9 +479,6 @@ export function renderRunView(
   const listRow = (y: number, label: string, bench?: RunEntry) => {
     const stats = bench?.run.error === undefined ? bench?.run.stats : undefined;
     canvas.put(y, 1, label, bench ? '' : GRAY, nameWidth);
-    // GPU time is the exception, so only it carries a tag
-    if (stats?.kind === 'gpu' && textWidth(label) + 5 <= nameWidth)
-      canvas.put(y, 2 + textWidth(label), 'gpu', GRAY, 3);
     canvas.put(y, nameWidth + 3, bench ? (stats ? duration(stats.avg) : '—') : 'avg', GRAY, 11, true);
     canvas.put(
       y,
@@ -538,8 +536,10 @@ export function renderRunView(
       const bench = benches[row.index];
       const active = selected === row.index;
       if (active) canvas.fill(y, '\x1b[48;5;236m' + WHITE);
-      listRow(y, `${active ? '›' : ' '} ${bench.symbol} ${row.text}`, bench);
+      const badge = clockBadge(bench.run.error === undefined && bench.run.stats?.kind === 'gpu');
+      listRow(y, `${active ? '›' : ' '} ${bench.symbol} ${badge.text} ${row.text}`, bench);
       canvas.put(y, 3, bench.symbol, bench.color, 1);
+      canvas.put(y, 5, badge.text, badge.style, 5);
     }
   });
   canvas.put(detailTop - 1, 1, '━'.repeat(innerWidth), DARK_GRAY);

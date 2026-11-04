@@ -94,18 +94,21 @@ export async function benchGenerator(gen: (...args: any[]) => any, opts: any = {
   const device = opts.$gpu ? await gpuDevice() : undefined;
   // Setup builds what the pass holds, the pass itself may grow it
   const meter = device ? meterAllocations(device) : undefined;
-  const ctx = {
+  const ctx: Record<string, unknown> = {
     get(name: string) {
       return opts.args?.[name];
     },
-    ...(device ? { device, fresh: freshShader } : {}),
+    fresh: freshShader,
   };
+  // Any bench may use the GPU from the CPU clock, so the device is a promise
+  // here, created only when asked for. A GPU bench has it ready.
+  if (device) ctx.device = device;
+  else Object.defineProperty(ctx, 'gpu', { get: gpuDevice, enumerable: true });
 
   const g = gen(ctx);
   const n = await g.next();
 
-  // A GPU bench yields a pass to fill, which runs timed on the GPU. A plain
-  // function stays on the CPU clock like any other bench.
+  // A GPU bench yields a pass to fill, or its own GPU time
   let gpuTimed = false;
   let passes = 0;
   // What setup built. The timing wrapper then adds readback buffers of its own.
@@ -117,6 +120,11 @@ export async function benchGenerator(gen: (...args: any[]) => any, opts: any = {
       n.value = { ...n.value, time: renderPass(device, n.value.render, n.value.draw) };
     }
     gpuTimed = !!n.value.time;
+  }
+  if (device && !gpuTimed) {
+    throw new TypeError('expected a GPU bench to yield { compute }, { render, draw } or { time }');
+  }
+  {
     if (gpuTimed) {
       harness = meter!.bytes() - resident;
       const timed = n.value.time;

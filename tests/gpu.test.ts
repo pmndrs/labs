@@ -15,7 +15,7 @@ const chrome = [
   '/usr/bin/google-chrome-stable',
 ].find((path) => path && existsSync(path));
 
-// A compute dispatch over 1M floats, with its encode and compile as CPU benches
+// A compute dispatch over 1M floats timed on the GPU, with its encode and compile as CPU benches
 const source = `import { bench } from '@pmndrs/labs';
 const code = \`@group(0) @binding(0) var<storage, read_write> data: array<f32>;
   @compute @workgroup_size(256) fn main(@builtin(global_invocation_id) id: vec3<u32>) {
@@ -38,7 +38,8 @@ bench.gpu('dispatch', function* ({ device }) {
     pass.dispatchWorkgroups(4096);
   } };
 });
-bench.gpu('encode', function* ({ device }) {
+bench('encode', async function* ({ gpu }) {
+  const device = await gpu;
   const { pipeline, bind } = build(device);
   yield () => {
     const encoder = device.createCommandEncoder();
@@ -59,7 +60,8 @@ bench.gpu('alloc', function* ({ device }) {
     pass.dispatchWorkgroups(4096);
   } };
 });
-bench.gpu('compile', function* ({ device, fresh }) {
+bench('compile', async function* ({ gpu, fresh }) {
+  const device = await gpu;
   yield async () => {
     const module = device.createShaderModule({ code: fresh(code) });
     await device.createComputePipelineAsync({ layout: 'auto', compute: { module } });

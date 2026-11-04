@@ -25,6 +25,11 @@ export const CYAN = '\x1b[36m';
 export const WHITE = '\x1b[37m';
 export const BLACK = '\x1b[30m';
 
+// ── badge backgrounds ──────────────────────────────────────────────
+
+export const BG_BLUE = '\x1b[48;5;24m';
+export const BG_MAGENTA = '\x1b[48;5;90m';
+
 /**
  * 256-color light gray used by the CLI comparison and table layer.
  * Distinct from {@link DARK_GRAY} which is the standard bright-black.

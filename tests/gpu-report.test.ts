@@ -160,7 +160,7 @@ describe('GPU bench reporting', () => {
     }).lines.join('\n');
     expect(view).toMatch(/vram\n.*4\.00 MiB\n.*\+64\.00 KiB\/pass/);
     // The clock is named where the bench is, in the list and over its details
-    expect(view.match(/dispatch gpu/g)).toHaveLength(2);
+    expect(view.match(/ gpu {2}dispatch/g)).toHaveLength(2);
     expect(view).not.toMatch(/clock/);
     expect(view).not.toMatch(/\bgc\b/);
   });

@@ -50,7 +50,8 @@ group('blur', () => {
   });
 
   // CPU time to encode and submit the same dispatch
-  bench.gpu('encode', function* ({ device }) {
+  bench('encode', async function* ({ gpu }) {
+    const device = await gpu;
     const { pipeline, bind } = build(device, blur(16));
     yield () => {
       const encoder = device.createCommandEncoder();
@@ -64,7 +65,8 @@ group('blur', () => {
   });
 
   // CPU time to compile the shader, with fresh source so the driver cache cannot serve it
-  bench.gpu('compile', function* ({ device, fresh }) {
+  bench('compile', async function* ({ gpu, fresh }) {
+    const device = await gpu;
     yield async () => {
       const module = device.createShaderModule({ code: fresh(blur(16)) });
       await device.createComputePipelineAsync({ layout: 'auto', compute: { module } });

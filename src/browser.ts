@@ -16,6 +16,7 @@ export interface BlockJob {
   group: string;
   cases: number;
   gc: boolean;
+  gpu: boolean;
 }
 
 export interface BlockResult {
@@ -56,6 +57,7 @@ export const browserHarness = {
               group: registry[index]?.groupName ?? '',
               cases: [...trial._names()].length,
               gc: trial._gc !== false,
+              gpu: trial._gpu,
             }))
           )
         );
@@ -103,14 +105,12 @@ export const browserHarness = {
       });
     }
     try {
-      // Blocks timed on the GPU are judged against the GPU's speed, not the CPU's
-      const gpuRate = trialAt(index)._gpu ? await probeGpuRate(await gpuDevice()) : undefined;
+      // A GPU bench's blocks are judged against the GPU's speed, not the CPU's
+      const calibrationRate = trialAt(index)._gpu
+        ? await probeGpuRate(await gpuDevice())
+        : prepared.calibrationRate;
       const trial = await runTrialAt(index, { ...prepared.clock, ...tune, heap: false }, plans);
-      const gpuTimed = trial.runs.some((run) => run.stats?.kind === 'gpu');
-      return jsonSafe({
-        trial,
-        calibrationRate: gpuTimed && gpuRate ? gpuRate : prepared.calibrationRate,
-      });
+      return jsonSafe({ trial, calibrationRate });
     } finally {
       delete (globalThis as any).__LABS_GC_OBSERVER;
     }

@@ -327,7 +327,7 @@ group('my-group @mytag', () => {
 
 ## GPU benches
 
-`bench.gpu` hands the generator a WebGPU device. What it yields names the clock. A pass is timed on the GPU with timestamp queries. A plain function is timed on the CPU like any other bench, which is how to measure encoding or shader compilation.
+`bench.gpu` is a bench timed on the GPU. Its generator receives the WebGPU device and yields a pass, which labs times with timestamp queries. CPU work that uses the GPU, such as encoding or shader compilation, is an ordinary `bench` that awaits `gpu` from its state, and keeps the CPU clock.
 
 ```ts
 import { bench } from '@pmndrs/labs'
@@ -343,7 +343,8 @@ bench.gpu('blur dispatch', function* ({ device }) {
   }
 })
 
-bench.gpu('blur compile', function* ({ device, fresh }) {
+bench('blur compile', async function* ({ gpu, fresh }) {
+  const device = await gpu
   yield async () => {
     const module = device.createShaderModule({ code: fresh(blurSource) })
     await device.createComputePipelineAsync({ layout: 'auto', compute: { module } })

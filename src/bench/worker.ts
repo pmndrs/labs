@@ -478,6 +478,7 @@ async function main(): Promise<void> {
             group: registry[index]?.groupName ?? '',
             cases: [...trial._names()].length,
             gc: trial._gc !== false,
+            gpu: trial._gpu,
           }))
         ),
       print: progress ? () => {} : print,

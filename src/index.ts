@@ -69,7 +69,8 @@ export function bench(nameOrFn: string | ((...args: any[]) => any), fn?: any): B
  * shader cache buster. Yield `{ compute }` or `{ render, draw }` to time a pass
  * on the GPU, or a plain function to time CPU work such as encoding.
  */
-bench.gpu = (name: string, gen: GpuGeneratorBench): B => bench(name, gen as GeneratorBench).gpu();
+bench.gpu = (name: string, gen: GpuGeneratorBench): B =>
+  bench(name, gen as unknown as GeneratorBench).gpu();
 
 export function group(f: () => any): void;
 export function group(name: string, f: () => any): void;

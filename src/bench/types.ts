@@ -117,7 +117,15 @@ export function isAssertionError(error: unknown): boolean {
   return typeof error === 'object' && error !== null && (error as any).name === 'AssertionError';
 }
 
-export type GeneratorBench = (state: any) => Generator<any, any, any>;
+/** What a generator bench receives: its arguments, the GPU device as a promise, and a shader cache buster. */
+export interface BenchState {
+  get(name: string): any;
+  gpu: Promise<GPUDevice>;
+  fresh: (code: string) => string;
+}
+export type GeneratorBench = (
+  state: BenchState
+) => Generator<any, any, any> | AsyncGenerator<any, any, any>;
 
 /** What a GPU bench's generator receives: the shared device and a shader cache buster. */
 export interface GpuState {
@@ -125,15 +133,14 @@ export interface GpuState {
   fresh: (code: string) => string;
   get(name: string): any;
 }
-/** A GPU bench yields a pass timed on the GPU, a self-timed duration, or CPU work like any bench. */
+/** A GPU bench yields a pass timed on the GPU or a self-timed duration. */
 export type GpuYield =
   | ({ compute: (pass: GPUComputePassEncoder) => void } & Record<string, unknown>)
   | ({ render: GPURenderPassDescriptor; draw: (pass: GPURenderPassEncoder) => void } & Record<
       string,
       unknown
     >)
-  | ({ time: () => number | Promise<number> } & Record<string, unknown>)
-  | ((...args: any[]) => any);
+  | ({ time: () => number | Promise<number> } & Record<string, unknown>);
 export type GpuGeneratorBench = (state: GpuState) => Generator<GpuYield, any, any>;
 
 export interface MeasureOptions {
