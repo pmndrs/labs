@@ -25,10 +25,11 @@ export const CYAN = '\x1b[36m';
 export const WHITE = '\x1b[37m';
 export const BLACK = '\x1b[30m';
 
-// ── badge backgrounds ──────────────────────────────────────────────
+// ── clock badges: a quiet ground with a muted tint per clock ───────
 
-export const BG_BLUE = '\x1b[48;5;24m';
-export const BG_MAGENTA = '\x1b[48;5;90m';
+export const BADGE = '\x1b[48;5;236m';
+export const STEEL = '\x1b[38;5;110m';
+export const ORCHID = '\x1b[38;5;176m';
 
 /**
  * 256-color light gray used by the CLI comparison and table layer.
