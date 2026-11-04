@@ -29,8 +29,7 @@ export function freshShader(code: string): string {
  * pass's GPU time in nanoseconds. Four stay in flight, since the GPU clock
  * climbs only under continuous load and falls as soon as the queue runs dry,
  * so each call tops the queue up and returns the oldest pass's time. The
- * function is the submit path itself, so the harness preparation that
- * compiles a self-timed function at the top tier covers it.
+ * function keeps submission in the call path prepared before sampling.
  */
 export type TimedPass = (() => Promise<number>) & { calls: number };
 
@@ -47,8 +46,8 @@ export function timedPass(
     read: device.createBuffer({ size: 16, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST }),
   }));
   let next = 0;
-  // Encoding and submission are synchronous, so the compiled pass function
-  // inlines them. Only the readback waits.
+  // Synchronous encoding and submission can inline into the prepared pass.
+  // Only the readback waits.
   const enqueue = () => {
     const { query, resolve, read } = slots[next++ % slots.length];
     const encoder = device.createCommandEncoder();
