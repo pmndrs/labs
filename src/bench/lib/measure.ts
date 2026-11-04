@@ -19,6 +19,7 @@ import { toSnapshot } from './snapshot.ts';
 import { batchSize, defaults } from './constants.ts';
 import { createWarmup, isWarmupDone, isWarmupUnsettled, recordWarmup } from './warmup.ts';
 import { memoryPass } from './memory.ts';
+import { computePass, freshShader, gpuDevice, meterAllocations, renderPass } from './gpu.ts';
 import { GcObservation, GcScope } from './gc.ts';
 import { optimization, optimizationClock } from './optimization.ts';
 
@@ -90,14 +91,53 @@ export async function measure(f: (...args: any[]) => any, opts: MeasureOptions =
  * the yielded object's `snapshot` hook or the generator's return value.
  */
 export async function benchGenerator(gen: (...args: any[]) => any, opts: any = {}): Promise<Stats> {
-  const ctx = {
+  const device = opts.$gpu ? await gpuDevice() : undefined;
+  // Setup builds what the pass holds, the pass itself may grow it
+  const meter = device ? meterAllocations(device) : undefined;
+  const ctx: Record<string, unknown> = {
     get(name: string) {
       return opts.args?.[name];
     },
+    fresh: freshShader,
   };
+  // Any bench may use the GPU from the CPU clock, so the device is a promise
+  // here, created only when asked for. A GPU bench has it ready.
+  if (device) ctx.device = device;
+  else Object.defineProperty(ctx, 'gpu', { get: gpuDevice, enumerable: true });
 
   const g = gen(ctx);
   const n = await g.next();
+
+  // A GPU bench yields a pass to fill, or its own GPU time
+  let gpuTimed = false;
+  // What setup built. The timing wrapper then adds readback buffers of its own.
+  const resident = meter?.bytes() ?? 0;
+  let harness = 0;
+  if (device && n.value && 'object' === typeof n.value) {
+    if (n.value.compute) n.value = { ...n.value, time: computePass(device, n.value.compute) };
+    else if (n.value.render) {
+      n.value = { ...n.value, time: renderPass(device, n.value.render, n.value.draw) };
+    } else if (n.value.time) {
+      const time = n.value.time;
+      const counted = Object.assign(() => (counted.calls++, time()), { calls: 0 });
+      n.value = { ...n.value, time: counted };
+    }
+    gpuTimed = !!n.value.time;
+  }
+  if (device && !gpuTimed) {
+    throw new TypeError('expected a GPU bench to yield { compute }, { render, draw } or { time }');
+  }
+  {
+    if (gpuTimed) {
+      harness = meter!.bytes() - resident;
+      // The CPU heap is idle while the GPU runs, so GC observation has no subject
+      opts.sample_gc = false;
+      // The GPU clock climbs over tens of milliseconds of continuous load, and
+      // passes agree long before that at whatever level it started from
+      opts.warmup_settle = Math.max(opts.warmup_settle ?? 0, 5e7);
+      opts.warmup_time = Math.max(opts.warmup_time ?? 0, 2e8);
+    }
+  }
 
   let $fn = n.value;
   if (!n.value?.heap && null != n.value?.heap) opts.heap = false;
@@ -120,12 +160,15 @@ export async function benchGenerator(gen: (...args: any[]) => any, opts: any = {
   };
 
   if (n.done || 'fn' !== kind($fn)) {
-    $fn = n.value?.bench || n.value?.manual;
+    // Manual benches time themselves and return durations. `time` is the
+    // documented name, `manual` with a budget the earlier one.
+    const manual = n.value?.time || n.value?.manual;
+    $fn = n.value?.bench || manual;
     if ('fn' !== kind($fn, true)) throw new TypeError('expected benchmarkable yield from generator');
 
     opts.params ??= {};
     const params: number = $fn.length;
-    opts.manual = !n.value.manual ? false : 'manual' !== n.value.budget ? 'real' : 'manual';
+    opts.manual = !manual ? false : 'manual' !== n.value.budget ? 'real' : 'manual';
 
     for (let o = 0; o < params; o++) {
       opts.params[o] = n.value[o];
@@ -134,6 +177,16 @@ export async function benchGenerator(gen: (...args: any[]) => any, opts: any = {
   }
 
   const stats = await benchFn($fn, opts);
+  // Tier records describe the JavaScript that submitted the passes, not the
+  // shader the GPU ran, so GPU time carries none
+  if (gpuTimed) delete stats.optimization;
+  const allocated = meter?.stop() ?? 0;
+  const vram = gpuTimed
+    ? {
+        resident,
+        perPass: (allocated - resident - harness) / Math.max(1, n.value.time.calls),
+      }
+    : undefined;
   const end = await g.next(first);
   if (!end.done) throw new TypeError('expected generator to yield once');
 
@@ -145,7 +198,8 @@ export async function benchGenerator(gen: (...args: any[]) => any, opts: any = {
 
   return {
     ...stats,
-    kind: 'yield' as const,
+    kind: gpuTimed ? ('gpu' as const) : ('yield' as const),
+    ...(vram !== undefined ? { vram } : {}),
     ...(snapshot !== undefined ? { snapshot } : {}),
   };
 }
@@ -164,7 +218,7 @@ export async function benchFn(fn: (...args: any[]) => any, opts: any = {}): Prom
   const now: () => number = opts.now;
   const consume = opts.$consume ?? do_not_optimize;
   const started = now();
-  const warmup = createWarmup(
+  let warmup = createWarmup(
     started + opts.warmup_time,
     opts.warmup_samples,
     started + opts.warmup_settle
@@ -207,7 +261,7 @@ export async function benchFn(fn: (...args: any[]) => any, opts: any = {}): Prom
 
     if (opts.after) await opts.after();
 
-    recordWarmup(warmup, t1 - t0, 1, opts, now());
+    recordWarmup(warmup, opts.manual ? (first as number) : t1 - t0, 1, opts, now());
     workload = observeWorkload(optimization?.tier(fn), now());
     async function warmCalls(limit: number) {
       let duration = 0;
@@ -220,7 +274,7 @@ export async function benchFn(fn: (...args: any[]) => any, opts: any = {}): Prom
         const t0 = now();
         const value = async ? await fn(...$p) : fn(...$p);
         if (!opts.manual && value !== void 0) consume(value);
-        duration += now() - t0;
+        duration += opts.manual ? value : now() - t0;
         if (opts.after) await opts.after();
         iterations++;
       }
@@ -233,15 +287,26 @@ export async function benchFn(fn: (...args: any[]) => any, opts: any = {}): Prom
       opts.warmup_time > 0 &&
       now() < warmup.deadline &&
       compiler?.prepare(fn);
+    // Prepare self-timed submission code before settling its returned timings.
+    if (opts.manual && prepared) {
+      await warmCalls(15);
+      if (now() < warmup.deadline && compiler?.compile(fn)) {
+        requestedTurboFan = true;
+        warmup = createWarmup(warmup.deadline, opts.warmup_samples, warmup.settled);
+      }
+    }
     while (
       !isWarmupDone(warmup, opts, now()) &&
-      !(prepared && (warmup.stable || workload?.tier === 'TurboFan'))
+      !(prepared && !opts.manual && (warmup.stable || workload?.tier === 'TurboFan'))
     )
       await warmCalls(warmup.iterations);
     single = warmup.single;
-    if (prepared && now() < warmup.deadline) {
-      if (opts.batch_samples) await warmCalls(opts.batch_samples);
-      if (now() < warmup.deadline && compiler?.compile(fn)) {
+    // The budget bounds the agreement loop, not the compile, which is a
+    // synchronous millisecond. Jittery workloads spend the whole budget
+    // without agreeing and still deserve the top tier.
+    if (!opts.manual && prepared) {
+      if (opts.batch_samples && now() < warmup.deadline) await warmCalls(opts.batch_samples);
+      if (compiler?.compile(fn)) {
         requestedTurboFan = true;
         await warmCalls(1);
         single = (await warmCalls(1)) ?? warmup.single;
@@ -547,8 +612,9 @@ export async function benchFn(fn: (...args: any[]) => any, opts: any = {}): Prom
         opts.warmup_samples,
         now() + opts.warmup_settle
       );
-      const preparedLoop =
-        verifiedTurboFan && now() < samplingWarmup.deadline && compiler?.prepare(loop);
+      // The loop is labs' own code and compiles whatever tier the workload
+      // reached, inlining it as it stands
+      const preparedLoop = compiler?.prepare(loop);
       // Prime entry-path feedback before the hot loop can tier up through OSR.
       for (let i = 0; i < 3 && now() < samplingWarmup.deadline; i++) {
         await run(true, 0);
@@ -597,13 +663,7 @@ export async function benchFn(fn: (...args: any[]) => any, opts: any = {}): Prom
       // Prime the recording transition without executing benchmark calls.
       await run(true, 0, settle);
       harness = readHarness();
-      if (
-        preparedLoop &&
-        optimization &&
-        now() < samplingWarmup.deadline &&
-        compiler?.compile(loop) &&
-        now() < samplingWarmup.deadline
-      ) {
+      if (preparedLoop && optimization && compiler?.compile(loop)) {
         await run(true, 1);
         harness = readHarness();
         workload = observeWorkload(optimization.tier(fn), now());
@@ -647,7 +707,7 @@ export async function benchFn(fn: (...args: any[]) => any, opts: any = {}): Prom
         }
       }
       benchmark = readBenchmark();
-      if (requestedTurboFan && benchmark?.tier === 'TurboFan') optimizedAt = now();
+      if (!opts.manual && requestedTurboFan && benchmark?.tier === 'TurboFan') optimizedAt = now();
       deopts?.start();
       observation.start();
     }

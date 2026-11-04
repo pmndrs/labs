@@ -44,6 +44,22 @@ describe('live progress', () => {
     expect(text).not.toContain('Node.js');
   });
 
+  it('tags GPU benches from the start', () => {
+    const progress = createProgress('main', ['gpu.bench.ts'], 0, 'chrome');
+    startFile(progress, 0, 0);
+    applyEvent(progress, 0, {
+      type: 'start',
+      blocks: 3,
+      benches: [
+        { index: 0, name: 'dispatch', group: '', cases: 1, gpu: true },
+        { index: 1, name: 'encode', group: '', cases: 1 },
+      ],
+    });
+    const text = renderProgress(progress, view).join('\n');
+    expect(text).toMatch(/· {2}gpu {2}dispatch\s+○○○/);
+    expect(text).toMatch(/· {2}cpu {2}encode\s+○○○/);
+  });
+
   it('shows each bench with completed blocks and its median so far', () => {
     const progress = running();
     applyEvent(progress, 0, { type: 'bench', index: 0, block: 0 });
@@ -54,7 +70,7 @@ describe('live progress', () => {
     expect(text).toMatch(/labs {2}v\d+\.\d+\.\d+ {2}Node\.js {2}main/);
     expect(text).toContain('block 1/3');
     expect(text).toMatch(/create entities\s+●○○\s+575\.00 ns/);
-    expect(text).toMatch(/[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] remove entities\s+○○○/);
+    expect(text).toMatch(/[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] {2}cpu {2}remove entities\s+○○○/);
     expect(text).toContain('· scene.bench.ts');
   });
 
@@ -76,7 +92,7 @@ describe('live progress', () => {
 
     expect(remainingTime(progress.files[0])).toBe(2_000);
     const text = renderProgress(progress, view).join('\n');
-    expect(text).toContain('✗ create entities');
+    expect(text).toContain('✗  cpu  create entities');
     expect(text).toContain('boom');
   });
 

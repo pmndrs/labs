@@ -115,6 +115,7 @@ export function renderReport(
         }
 
         const compact = trial.compact;
+        const unit = r.stats!.kind === 'gpu' ? '/pass' : '/iter';
         const optimized_out = isLikelyOptimizedOut(r.stats!, trial.gcMode, ctx.noop);
         optimized_out_warning = optimized_out_warning || optimized_out;
 
@@ -125,8 +126,8 @@ export function renderReport(
           const name = truncate(r.name, k_legend).padEnd(k_legend);
 
           l += _h(name) + ' ';
-          if (!opts.colors) l += avg + '/iter';
-          else l += ansi.bold + ansi.yellow + avg + ansi.reset + ansi.bold + '/iter' + ansi.reset;
+          if (!opts.colors) l += avg + unit;
+          else l += ansi.bold + ansi.yellow + avg + ansi.reset + ansi.bold + unit + ansi.reset;
 
           const p75 = formatNs(r.stats!.p75).padStart(9);
           const p99 = formatNs(r.stats!.p99).padStart(9);
@@ -149,7 +150,7 @@ export function renderReport(
           const bins = histogramFmt.bins(r.stats!, 21, 0.99);
           const histogram = histogramFmt.ascii(bins, 2, { colors: opts.colors });
 
-          if (!opts.colors) l += avg + '/iter' + ' ' + p75 + ' ' + histogram[0];
+          if (!opts.colors) l += avg + unit + ' ' + p75 + ' ' + histogram[0];
           else
             l +=
               ansi.bold +
@@ -157,7 +158,7 @@ export function renderReport(
               avg +
               ansi.reset +
               ansi.bold +
-              '/iter' +
+              unit +
               ansi.reset +
               ' ' +
               ansi.gray +
@@ -264,6 +265,33 @@ export function renderReport(
                 ? ansi.gray + head + ansi.reset + ansi.blue + value + ansi.reset
                 : head + value
             );
+          }
+
+          if (r.stats!.vram !== undefined) {
+            prev_run_gap = true;
+            const resident = formatBytes(r.stats!.vram.resident, false).padStart(9);
+            const perPass = r.stats!.vram.perPass;
+            const growth = (
+              (perPass > 0 ? '+' : perPass < 0 ? '-' : '') + formatBytes(Math.abs(perPass), false)
+            ).padStart(10);
+            l = ' '.repeat(k_legend - 5);
+            if (!opts.colors) l += 'vram ' + resident + ' ' + growth + '/pass';
+            else
+              l +=
+                ansi.gray +
+                'vram ' +
+                ansi.reset +
+                ansi.yellow +
+                resident +
+                ansi.reset +
+                ' ' +
+                ansi.yellow +
+                growth +
+                ansi.reset +
+                ansi.gray +
+                '/pass' +
+                ansi.reset;
+            print(l);
           }
 
           if (r.stats!.heap) {

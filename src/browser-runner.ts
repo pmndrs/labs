@@ -189,7 +189,9 @@ export async function runBrowser(options: {
     const replayable = [...blocks].filter(
       ([, parts]) =>
         options.runtime === 'chrome' &&
-        parts.every(({ trial }) => trial.runs.every((run) => run.stats?.plan)) &&
+        parts.every(({ trial }) =>
+          trial.runs.every((run) => run.stats?.plan && run.stats.kind !== 'gpu')
+        ) &&
         options.tune.heap !== false
     );
     if (replayable.length) await options.beforeDiagnostics?.();

@@ -1,5 +1,10 @@
 import type { GitInfo } from '../store.ts';
-import { RED, RESET } from '../utils/ansi.ts';
+import { BADGE, ORCHID, RED, RESET, STEEL } from '../utils/ansi.ts';
+
+/** The clock a bench is timed on, as a badge between its status and its name. */
+export function clockBadge(gpu: boolean): { text: string; style: string } {
+  return { text: gpu ? ' gpu ' : ' cpu ', style: BADGE + (gpu ? ORCHID : STEEL) };
+}
 
 const DEFAULT_NAME_RE = /^\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}$/;
 
