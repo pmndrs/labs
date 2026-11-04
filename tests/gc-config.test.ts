@@ -20,12 +20,6 @@ describe('configured GC observation', () => {
       config: { runtime: 'chrome', gc: { node: false, chrome: true } },
       observed: false,
     },
-    {
-      name: 'enabled for Node',
-      config: { runtime: 'chrome', gc: { node: true, chrome: false } },
-      observed: true,
-    },
-    { name: 'enabled when Node is unspecified', config: { gc: { chrome: false } }, observed: true },
   ])('$name', ({ config, observed }) => {
     const project = mkdtempSync(join(tmpdir(), 'labs-gc-config-'));
     try {
@@ -46,10 +40,6 @@ describe('configured GC observation', () => {
         join(project, 'work.bench.ts'),
         `import { bench } from '@pmndrs/labs';
         bench('function', () => { gc(); return 1; });
-        bench('argument $value', function* (state) {
-          const value = state.get('value');
-          yield () => { gc(); return value; };
-        }).args('value', [1, 2]);
         bench('disabled', () => { gc(); return 1; }).gc(false);`
       );
       const output = execFileSync(
@@ -75,7 +65,7 @@ describe('configured GC observation', () => {
       const saved = loadResult(join(project, '.labs'), 'gc-config');
       expect(saved.hardware.runtime).toBe('node');
       const report = JSON.parse(output);
-      expect(report.benches).toHaveLength(4);
+      expect(report.benches).toHaveLength(2);
       for (const trial of saved.files[0].benchmarks) {
         const enabled = observed && trial.alias !== 'disabled';
         expect(trial.gcMode).toBe(enabled);

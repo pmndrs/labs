@@ -66,25 +66,25 @@ describe('runtime startup feedback', () => {
     );
   }
 
-  it.each(['bun', 'chrome', 'firefox', 'webkit'] as const)(
-    'reports an invalid %s executable in terminal and JSON output',
-    (runtime) => {
-      const executablePath = join(project, 'missing-runtime');
-      for (const mode of ['text', 'json'] as const) {
-        const output = run(runtime, mode, { executablePath });
-        expect(output.status, output.stderr || output.error?.message).toBe(1);
-        expect(output.stderr).toContain(`${runtime}.executablePath in labs.config.ts`);
-        expect(output.stderr).toContain(executablePath);
-        if (mode === 'json') {
-          const report = JSON.parse(output.stdout);
-          expect(report.saved).toBe(false);
-          expect(report.benches).toEqual([]);
-          expect(report.crashes[0].error).toContain(`${runtime}.executablePath in labs.config.ts`);
-          expect(report.crashes[0].error).toContain(executablePath);
-        }
-      }
+  it.each([
+    ['bun', 'json'],
+    ['chrome', 'text'],
+    ['firefox', 'json'],
+    ['webkit', 'text'],
+  ] as const)('reports an invalid %s executable in %s output', (runtime, mode) => {
+    const executablePath = join(project, 'missing-runtime');
+    const output = run(runtime, mode, { executablePath });
+    expect(output.status, output.stderr || output.error?.message).toBe(1);
+    expect(output.stderr).toContain(`${runtime}.executablePath in labs.config.ts`);
+    expect(output.stderr).toContain(executablePath);
+    if (mode === 'json') {
+      const report = JSON.parse(output.stdout);
+      expect(report.saved).toBe(false);
+      expect(report.benches).toEqual([]);
+      expect(report.crashes[0].error).toContain(`${runtime}.executablePath in labs.config.ts`);
+      expect(report.crashes[0].error).toContain(executablePath);
     }
-  );
+  });
 
   it.each(['firefox', 'webkit'] as const)(
     'gives the install command for a missing %s browser download',

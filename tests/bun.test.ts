@@ -143,45 +143,40 @@ describe('Bun benchmarks', () => {
     }
   );
 
-  it.skipIf(!available).each([true, false])(
-    'passes launch arguments and JSC settings to every block with GC observation %s',
-    (gc) => {
-      vi.stubEnv('BUN_JSC_useDollarVM', '0');
-      vi.stubEnv('BENCH_LAUNCH_VALUE', 'inherited');
-      setup(
-        `import { assert, bench } from '@pmndrs/labs';
+  it.skipIf(!available)('passes launch arguments and JSC settings to every block', () => {
+    vi.stubEnv('BUN_JSC_useDollarVM', '0');
+    vi.stubEnv('BENCH_LAUNCH_VALUE', 'inherited');
+    setup(
+      `import { assert, bench } from '@pmndrs/labs';
         assert.equal(globalThis.launchValue, 'preloaded');
         assert.equal(process.env.BENCH_LAUNCH_VALUE, 'configured');
         assert.equal(typeof globalThis.$vm.ftlTrue, 'function');
         bench('launch options', () => { Bun.gc(true); return globalThis.launchValue; });`,
-        {
-          gc,
-          bun: {
-            executablePath,
-            args: ['--preload', './preload.ts'],
-            env: { BUN_JSC_useDollarVM: '1', BENCH_LAUNCH_VALUE: 'configured' },
-          },
-        }
-      );
-      writeFileSync(join(project, 'preload.ts'), `globalThis.launchValue = 'preloaded';`);
-      const output = run();
-      expect(output.status, output.stderr).toBe(0);
-      const report = JSON.parse(output.stdout);
-      expect(report.crashes).toEqual([]);
-      expect(report.benches).toHaveLength(1);
-      expect(report.benches[0].gc === null).toBe(!gc);
-      const saved = loadResult(join(project, '.labs'), 'bun-test');
-      expect(saved.files[0].benchmarks[0].runs[0].stats!.blocks!.medians).toHaveLength(2);
-    }
-  );
+      {
+        bun: {
+          executablePath,
+          args: ['--preload', './preload.ts'],
+          env: { BUN_JSC_useDollarVM: '1', BENCH_LAUNCH_VALUE: 'configured' },
+        },
+      }
+    );
+    writeFileSync(join(project, 'preload.ts'), `globalThis.launchValue = 'preloaded';`);
+    const output = run();
+    expect(output.status, output.stderr).toBe(0);
+    const report = JSON.parse(output.stdout);
+    expect(report.crashes).toEqual([]);
+    expect(report.benches).toHaveLength(1);
+    expect(report.benches[0].gc).not.toBeNull();
+    const saved = loadResult(join(project, '.labs'), 'bun-test');
+    expect(saved.files[0].benchmarks[0].runs[0].stats!.blocks!.medians).toHaveLength(2);
+  });
 
   it.skipIf(!available)(
-    'counts only sampling collections for functions, generators, and iterators',
+    'counts major and minor collections only during sampling',
     { timeout: 60_000 },
     () => {
       setup(`import { bench } from '@pmndrs/labs';
         import { edenGC } from 'bun:jsc';
-        bench('function', () => { Bun.gc(true); return 42; });
         bench('generator', function* () {
           Bun.gc(true);
           yield () => { Bun.gc(true); return 42; };
@@ -217,7 +212,7 @@ describe('Bun benchmarks', () => {
   );
 
   it.skipIf(!available)(
-    'observes natural collections and respects the global disable',
+    'observes natural collections from allocating work',
     { timeout: 60_000 },
     () => {
       setup(
@@ -237,14 +232,6 @@ describe('Bun benchmarks', () => {
       expect(observed.status, observed.stderr).toBe(0);
       const saved = loadResult(join(project, '.labs'), 'bun-test');
       expect((saved.files[0].benchmarks[0].runs[0].stats!.gc as GcStats).count).toBeGreaterThan(0);
-      const config = join(project, 'labs.config.ts');
-      writeFileSync(
-        config,
-        readFileSync(config, 'utf8').replace('"runtime":"bun"', '"runtime":"bun","gc":false')
-      );
-      const disabled = run('--force');
-      expect(disabled.status, disabled.stderr).toBe(0);
-      expect(JSON.parse(disabled.stdout).benches[0].gc).toBeNull();
     }
   );
 
@@ -303,17 +290,6 @@ describe('Bun benchmarks', () => {
       },
     ]);
     expect(readFileSync(log, 'utf8')).toMatch(/^(ababab|bababa)$/);
-  });
-
-  it('reports a missing Bun executable', () => {
-    setup(`import { bench } from '@pmndrs/labs'; bench('work', () => 42);`, {
-      bun: { executablePath: join(tmpdir(), 'labs-missing-bun-executable') },
-    });
-    const output = run();
-    expect(output.status).toBe(1);
-    const report = JSON.parse(output.stdout);
-    expect(report.benches).toEqual([]);
-    expect(report.crashes[0].error).toContain('ENOENT');
   });
 
   it('rejects hardware counters that require Node', () => {

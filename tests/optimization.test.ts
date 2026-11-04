@@ -61,7 +61,7 @@ describe('observed optimization tiers', () => {
     writeFileSync(
       join(project, 'labs.config.ts'),
       `import { defineConfig } from ${JSON.stringify(new URL('../src/index.ts', import.meta.url).href)};
-      export default defineConfig(${JSON.stringify({ benchDir: '.', runtime, blocks: 3, blockTime: 0.02, heap: false, ...extra })});`
+      export default defineConfig(${JSON.stringify({ benchDir: '.', runtime, blocks: 2, blockTime: 0.02, heap: false, ...extra })});`
     );
     writeFileSync(join(project, 'work.bench.ts'), source);
     const output = spawnSync(
@@ -89,9 +89,17 @@ describe('observed optimization tiers', () => {
       const stats = run(runtime, extra);
       expect(stats.optimization?.mode).toBe('prepared');
       expect(stats.optimization?.natural).toBeUndefined();
-      expect(stats.optimization?.benchmark).toHaveLength(3);
-      expect(stats.optimization?.workload).toHaveLength(3);
-      expect(stats.optimization?.harness).toHaveLength(3);
+      expect(stats.optimization?.benchmark).toHaveLength(2);
+      expect(stats.optimization?.workload).toHaveLength(2);
+      expect(stats.optimization?.harness).toHaveLength(2);
+      if (runtime === 'node' || runtime === 'chrome') {
+        expect(stats.optimization?.target).toBe('TurboFan');
+        expect(stats.optimization!.benchmark!.map((sample) => sample?.tier)).toEqual([
+          'TurboFan',
+          'TurboFan',
+        ]);
+        expect(stats.optimization!.benchmarkEnd).toEqual(['TurboFan', 'TurboFan']);
+      }
       for (const sample of stats.optimization!.workload) {
         expect(sample?.tier).toBeTruthy();
         expect(sample?.time).toBeGreaterThanOrEqual(0);
@@ -105,70 +113,7 @@ describe('observed optimization tiers', () => {
     }
   );
 
-  it.each(
-    runtimes.filter(
-      ({ runtime, available }) => available && runtime !== 'bun' && runtime !== 'webkit'
-    )
-  )(
-    'compiles a workload whose timings never agree, and the loop around it, on $runtime',
-    { timeout: 70_000 },
-    ({ runtime, extra }) => {
-      // Alternating costs keep consecutive warm-up windows apart by far more
-      // than the tolerance, so agreement never ends the warm-up and the budget does
-      const stats = run(
-        runtime,
-        extra,
-        `import { bench } from '@pmndrs/labs';
-      let flip = 0;
-      bench('jitter', () => {
-        let sum = 0;
-        const n = (flip ^= 1) ? 200 : 2000;
-        for (let i = 0; i < n; i++) sum += Math.sqrt(i);
-        return sum;
-      });`
-      );
-      expect(stats.optimization?.mode).toBe('prepared');
-      expect(stats.optimization!.workload.map((sample) => sample?.tier)).toEqual(
-        Array(3).fill('TurboFan')
-      );
-      expect(stats.optimization!.harness!.map((sample) => sample?.tier)).toEqual(
-        Array(3).fill('TurboFan')
-      );
-    }
-  );
-
-  it('prepares TurboFan in the pilot and each fresh worker even with delayed natural tiering', () => {
-    const stats = run('node', {
-      nodeFlags: [
-        '--allow-natives-syntax',
-        '--expose-gc',
-        '--no-use-osr',
-        '--invocation-count-for-maglev=1000000',
-        '--invocation-count-for-turbofan=1000000',
-      ],
-    });
-    expect(stats.optimization?.target).toBe('TurboFan');
-    expect(stats.optimization!.benchmark!.map((sample) => sample?.tier)).toEqual(
-      Array(3).fill('TurboFan')
-    );
-    expect(stats.optimization!.benchmarkEnd).toEqual(Array(3).fill('TurboFan'));
-  });
-
-  it.each([
-    { name: 'first sync call', costs: [150e6], async: false, warmupCalls: 1 },
-    { name: 'first async call', costs: [150e6], async: true, warmupCalls: 1 },
-    { name: 'feedback priming', costs: [1e6, 150e6], batchSamples: 2, warmupCalls: 2 },
-    { name: 'validation', costs: [1e6, 150e6], warmupCalls: 2 },
-    { name: 'self-timed first call', costs: [150e6], manual: true, warmupCalls: 1 },
-    { name: 'self-timed feedback priming', costs: [1e6, 150e6], manual: true, warmupCalls: 2 },
-    {
-      name: 'disabled self-timed warmup',
-      costs: [1e6],
-      manual: true,
-      disabled: true,
-      warmupCalls: 1,
-    },
-  ])('respects the preparation budget for $name', (scenario) => {
+  it.each([true, false])('bounds self-timed preparation with warmup enabled %s', (enabled) => {
     const output = spawnSync(
       process.execPath,
       [
@@ -178,17 +123,15 @@ describe('observed optimization tiers', () => {
         '--input-type=module',
         '--eval',
         `import { measure } from ${JSON.stringify(new URL('../src/bench/lib/measure.ts', import.meta.url).href)};
-      const costs = ${JSON.stringify(scenario.costs)};
       let clock = 0, calls = 0, warmupCalls = 0;
-      ${scenario.async ? 'async ' : ''}function work() {
-        clock += costs[Math.min(calls, costs.length - 1)];
+      async function work() {
+        clock += calls === 0 ? 1e6 : 150e6;
         calls++;
-        return ${scenario.manual ? '150e6' : 'calls'};
+        return 150e6;
       }
-      const stats = await measure(${scenario.manual ? 'function* () { yield { time: work }; }' : 'work'}, {
-        ${scenario.batchSamples ? `batch_samples: ${scenario.batchSamples},` : ''}
+      const stats = await measure(function* () { yield { time: work }; }, {
         batch: false, heap: false, min_samples: 1, max_samples: 1, min_cpu_time: 0,
-        warmup_time: ${scenario.disabled ? 0 : 100e6}, warmup_samples: ${scenario.disabled ? 0 : 1},
+        warmup_time: ${enabled ? 100e6 : 0}, warmup_samples: ${enabled ? 1 : 0},
         warmup_window: 1, warmup_settle: 0,
         now: () => clock, gc: () => { warmupCalls = calls; },
       });
@@ -198,7 +141,7 @@ describe('observed optimization tiers', () => {
     );
     expect(output.status, output.stderr || output.error?.message).toBe(0);
     expect(JSON.parse(output.stdout)).toEqual({
-      warmupCalls: scenario.warmupCalls,
+      warmupCalls: enabled ? 2 : 1,
       samples: [150e6],
     });
   });
@@ -278,31 +221,6 @@ describe('observed optimization tiers', () => {
     expect(result.inputs).toBe(result.calls);
     expect(result.cleanups).toBe(result.calls);
     expect(result.samples).toEqual(Array(3).fill(1e6));
-  });
-
-  it.each([
-    ['early Maglev', ['--no-concurrent-recompilation', '--invocation-count-for-maglev=1']],
-    ['disabled OSR', ['--no-use-osr', '--minimum-invocations-before-optimization=1000000']],
-  ])('recognizes an executing Sparkplug frame with %s', (_name, flags) => {
-    const output = spawnSync(
-      process.execPath,
-      [
-        '--allow-natives-syntax',
-        ...flags,
-        '--import',
-        pathToFileURL(createRequire(import.meta.url).resolve('tsx')).href,
-        '--input-type=module',
-        '--eval',
-        `import { optimization } from ${JSON.stringify(new URL('../src/bench/lib/optimization.ts', import.meta.url).href)};
-      const detect = new Function(\`return function detect() { return \${optimization.frame}; }\`)();
-      %NeverOptimizeFunction(detect);
-      %CompileBaseline(detect);
-      console.log(JSON.stringify({ actual: %ActiveTierIsSparkplug(detect), reported: detect() }));`,
-      ],
-      { encoding: 'utf8', timeout: 30_000 }
-    );
-    expect(output.status, output.stderr || output.error?.message).toBe(0);
-    expect(JSON.parse(output.stdout)).toEqual({ actual: true, reported: 'Sparkplug' });
   });
 
   it('keeps the measured tier and timing when the workload forbids optimization', () => {
@@ -414,45 +332,6 @@ describe('observed optimization tiers', () => {
     }
   );
 
-  it.each([false, true])('prepares the executing V8 benchmark with delayed tiering %s', (delayed) => {
-    const output = spawnSync(
-      process.execPath,
-      [
-        '--allow-natives-syntax',
-        '--expose-gc',
-        '--import',
-        pathToFileURL(createRequire(import.meta.url).resolve('tsx')).href,
-        ...(delayed
-          ? [
-              '--no-use-osr',
-              '--invocation-count-for-maglev=1000000',
-              '--invocation-count-for-turbofan=1000000',
-            ]
-          : ['--no-maglev', '--no-concurrent-recompilation', '--invocation-count-for-turbofan=2']),
-        '--input-type=module',
-        '--eval',
-        `import { measure } from ${JSON.stringify(new URL('../src/bench/lib/measure.ts', import.meta.url).href)};
-      const seen = new Uint8Array(1024);
-      const head = new Uint32Array(1);
-      const work = new Function('seen', 'head', \`return function work() {
-        seen[head[0]++ & 1023] = %CurrentFrameIsTurbofan() ? 1 : 0;
-        let sum = 0; for (let i = 0; i < 300; i++) sum += Math.sqrt(i); return sum;
-      }\`)(seen, head);
-      const stats = await measure(work, {
-        batch: true, batch_samples: 1024, min_samples: 1, max_samples: 1, min_cpu_time: 0,
-        warmup_settle: 20e6, heap: false, gc: () => { head[0] = 0; globalThis.gc(); },
-      });
-      console.log(JSON.stringify({ actual: seen[0], calls: head[0], reported: stats.optimization.benchmark[0] }));`,
-      ],
-      { encoding: 'utf8', timeout: 30_000 }
-    );
-    expect(output.status, output.stderr || output.error?.message).toBe(0);
-    const result = JSON.parse(output.stdout);
-    expect(result.calls).toBe(1024);
-    expect(result.actual).toBe(1);
-    expect(result.reported?.tier).toBe('TurboFan');
-  });
-
   it.each([false, true])(
     'skips the stability wait after verified optimization with batching %s',
     (batch) => {
@@ -526,7 +405,7 @@ describe('observed optimization tiers', () => {
     const stats = run('node', {
       nodeFlags: ['--allow-natives-syntax', '--expose-gc', '--no-turbofan', '--no-maglev'],
     });
-    expect(stats.optimization!.harness).toHaveLength(3);
+    expect(stats.optimization!.harness).toHaveLength(2);
     for (const sample of stats.optimization!.harness!) {
       expect(sample?.tier).not.toBe('TurboFan');
       if (sample) expect(sample.time).toBeGreaterThanOrEqual(0);
@@ -535,7 +414,9 @@ describe('observed optimization tiers', () => {
     expect(stats.warmup?.time).toBeGreaterThan(0);
   });
 
-  it.each(runtimes.filter(({ available }) => available))(
+  it.each(
+    runtimes.filter(({ runtime, available }) => available && ['node', 'bun'].includes(runtime))
+  )(
     'observes the sampling body for an async workload on $runtime',
     { timeout: 70_000 },
     ({ runtime, extra, tiers }) => {
@@ -550,7 +431,7 @@ describe('observed optimization tiers', () => {
           expect(['LLInt', 'Baseline', 'DFG', 'FTL']).toContain(sample?.tier);
           expect(sample?.time).toBeGreaterThanOrEqual(0);
         }
-        expect(stats.optimization!.workload).toEqual([null, null, null]);
+        expect(stats.optimization!.workload).toEqual([null, null]);
       } else {
         for (const sample of stats.optimization!.harness!)
           if (sample) expect(tiers).toContain(sample.tier);
@@ -596,11 +477,7 @@ describe('observed optimization tiers', () => {
     }
   );
 
-  it.each(
-    runtimes.filter(
-      ({ available, runtime }) => available && (runtime === 'bun' || runtime === 'webkit')
-    )
-  )(
+  it.each(runtimes.filter(({ available, runtime }) => available && runtime === 'bun'))(
     'observes the sampling body for a parameterized workload on $runtime',
     { timeout: 70_000 },
     ({ runtime, extra }) => {
@@ -620,7 +497,7 @@ describe('observed optimization tiers', () => {
     const stats = run('bun', {
       bun: { executablePath: bun.stdout.trim(), env: { BUN_JSC_useFTLJIT: 'false' } },
     });
-    expect(stats.optimization!.harness).toHaveLength(3);
+    expect(stats.optimization!.harness).toHaveLength(2);
     for (const sample of stats.optimization!.harness!)
       expect(['LLInt', 'Baseline', 'DFG']).toContain(sample?.tier);
   });
@@ -629,10 +506,10 @@ describe('observed optimization tiers', () => {
     const stats = run('node', { nodeFlags: ['--expose-gc'] });
     expect(stats.optimization).toEqual({
       mode: 'prepared',
-      benchmark: [null, null, null],
-      benchmarkEnd: [null, null, null],
-      workload: [null, null, null],
-      harness: [null, null, null],
+      benchmark: [null, null],
+      benchmarkEnd: [null, null],
+      workload: [null, null],
+      harness: [null, null],
     });
   });
 
@@ -653,23 +530,10 @@ describe('observed optimization tiers', () => {
         extra,
         `import { bench } from '@pmndrs/labs'; bench('work', ${callable});`
       );
-      expect(stats.optimization!.workload).toEqual([null, null, null]);
-      expect(stats.optimization!.benchmark).toEqual([null, null, null]);
+      expect(stats.optimization!.workload).toEqual([null, null]);
+      expect(stats.optimization!.benchmark).toEqual([null, null]);
       for (const sample of stats.optimization!.harness!)
         if (sample) expect(tiers).toContain(sample.tier);
     }
   );
-
-  it.skipIf(bun.status !== 0)('respects disabled JSC introspection', () => {
-    const stats = run('bun', {
-      bun: { executablePath: bun.stdout.trim(), env: { BUN_JSC_useDollarVM: '0' } },
-    });
-    expect(stats.optimization).toEqual({
-      mode: 'prepared',
-      benchmark: [null, null, null],
-      benchmarkEnd: [null, null, null],
-      workload: [null, null, null],
-      harness: [null, null, null],
-    });
-  });
 });

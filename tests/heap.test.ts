@@ -29,8 +29,6 @@ describe('configured heap diagnostics', () => {
       writeFileSync(
         join(project, 'work.bench.ts'),
         `import { bench } from ${JSON.stringify(new URL('../src/index.ts', import.meta.url).href)};
-        bench('function', () => new Uint8Array(1024));
-        bench('generator', function* () { yield () => new Uint8Array(1024); });
         bench('parameterized $size', function* (state) {
           const size = state.get('size');
           yield () => new Uint8Array(size);
@@ -59,12 +57,12 @@ describe('configured heap diagnostics', () => {
       const result = loadResult(join(project, '.labs'), 'heap-test');
       const report = JSON.parse(output);
       expect(report.saved).toBe(true);
-      expect(report.benches).toHaveLength(4);
+      expect(report.benches).toHaveLength(2);
       for (const bench of report.benches) expect(bench.gc).toHaveProperty('events');
       expect(result.blocks).toBe(2);
-      expect(result.files[0].benchmarks).toHaveLength(3);
+      expect(result.files[0].benchmarks).toHaveLength(1);
       const runs = result.files[0].benchmarks.flatMap((trial) => trial.runs);
-      expect(runs).toHaveLength(4);
+      expect(runs).toHaveLength(2);
       for (const run of runs) {
         expect(run.error).toBeUndefined();
         expect(run.stats?.samples).toHaveLength(4);

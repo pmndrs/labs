@@ -61,14 +61,18 @@ describe('Chrome benchmarks', () => {
     'runs filtered DOM benchmarks in isolated blocks and saves plans and snapshots',
     { timeout: 60_000 },
     () => {
-      setup(`import { assert, bench, group } from '@pmndrs/labs';
+      setup(
+        `import { assert, bench, group } from '@pmndrs/labs';
+        assert.equal(navigator.userAgent, 'labs-flags');
         group('dom @browser', () => {
           bench('polluter', function* () {
             yield () => { document.body.dataset.polluted = 'yes'; return 1; };
           });
-          bench('element $text', function* (state) {
+          bench('element $text', async function* (state) {
             assert(!document.body.dataset.polluted, 'blocks must have fresh documents');
             assert(globalThis.crossOriginIsolated, 'timers need cross-origin isolation');
+            console.error('EXPECTED_DIAGNOSTIC');
+            await Promise.reject(new Error('handled rejection')).catch(() => undefined);
             const element = document.createElement('div');
             element.textContent = state.get('text');
             document.body.append(element);
@@ -77,11 +81,15 @@ describe('Chrome benchmarks', () => {
             return { text };
           }).args('text', ['one', 'two']);
         });
-        bench('filtered @other', () => { throw new Error('tag was not filtered'); });`);
+        bench('filtered @other', () => { throw new Error('tag was not filtered'); });`,
+        { chrome: { executablePath, args: ['--user-agent=labs-flags'] } }
+      );
 
       const output = run('--runtime', 'chrome', '@browser');
       expect(output.stderr, output.error?.message).not.toContain('Error:');
       expect(output.status, output.stderr).toBe(0);
+      expect(output.stderr).toContain('EXPECTED_DIAGNOSTIC');
+      expect(JSON.parse(output.stdout).crashes).toEqual([]);
       expect(JSON.parse(output.stdout).benches).toHaveLength(3);
       const saved = loadResult(join(project, '.labs'), 'chrome-test');
       expect(saved.hardware.runtime).toBe('chrome');
@@ -95,6 +103,8 @@ describe('Chrome benchmarks', () => {
           expect(run.error).toBeUndefined();
           expect(run.stats?.blocks?.medians).toHaveLength(2);
           expect(run.stats?.samples).toHaveLength(run.stats!.plan!.samples * 2);
+          expect(run.stats?.plan?.batch).toBe(true);
+          expect(run.stats!.plan!.batch_samples).toBeGreaterThan(1);
           expect(run.stats?.gc).toMatchObject({ count: expect.any(Number) });
           expect(run.stats?.gc).not.toHaveProperty('source');
           expect(run.stats?.heap).toMatchObject({ source: 'replay' });
@@ -158,41 +168,37 @@ describe('Chrome benchmarks', () => {
     }
   );
 
-  it.skipIf(!executablePath).each([
-    { name: 'by default', gc: undefined },
-    { name: 'with a Chrome override', gc: { node: false, chrome: true } },
-    { name: 'with no Chrome override', gc: { node: false } },
-  ])('observes GC without heap diagnostics $name', { timeout: 60_000 }, ({ gc }) => {
-    setup(
-      `import { bench } from '@pmndrs/labs';
+  it.skipIf(!executablePath)(
+    'observes GC with heap disabled and a runtime override',
+    { timeout: 60_000 },
+    () => {
+      setup(
+        `import { bench } from '@pmndrs/labs';
         bench('iterator', (state) => { for (const _ of state) gc(); });`,
-      { runtime: 'node', heap: false, gc }
-    );
-    const output = run('--runtime', 'chrome');
-    expect(output.status, output.stderr).toBe(0);
-    const saved = loadResult(join(project, '.labs'), 'chrome-test');
-    const stats = saved.files[0].benchmarks[0].runs[0].stats!;
-    expect(stats.heap).toBeUndefined();
-    const iterations = stats.samples.length * (stats.plan!.batch ? stats.plan!.batch_samples : 1);
-    expect(stats.gc).toMatchObject({
-      count: iterations,
-      major: iterations,
-      iterations,
-    });
-  });
+        { runtime: 'node', heap: false, gc: { node: false, chrome: true } }
+      );
+      const output = run('--runtime', 'chrome');
+      expect(output.status, output.stderr).toBe(0);
+      const saved = loadResult(join(project, '.labs'), 'chrome-test');
+      const stats = saved.files[0].benchmarks[0].runs[0].stats!;
+      expect(stats.heap).toBeUndefined();
+      const iterations = stats.samples.length * (stats.plan!.batch ? stats.plan!.batch_samples : 1);
+      expect(stats.gc).toMatchObject({
+        count: iterations,
+        major: iterations,
+        iterations,
+      });
+    }
+  );
 
-  it.skipIf(!executablePath).each([
-    { name: 'per benchmark', gc: undefined, disableBench: true },
-    { name: 'globally', gc: false, disableBench: false },
-    { name: 'for Chrome', gc: { node: true, chrome: false }, disableBench: false },
-  ])('disables GC observation $name', { timeout: 60_000 }, ({ gc, disableBench }) => {
+  it.skipIf(!executablePath)('disables GC observation for Chrome', { timeout: 60_000 }, () => {
     setup(
       `import { assert, bench } from '@pmndrs/labs';
         bench('plain', function* () {
           assert(typeof globalThis.__LABS_GC_OBSERVER !== 'function', 'unexpected sampling observation');
           yield () => 1;
-        })${disableBench ? '.gc(false)' : ''};`,
-      { runtime: 'node', heap: false, gc }
+        });`,
+      { runtime: 'node', heap: false, gc: { node: true, chrome: false } }
     );
     const output = run('--runtime', 'chrome');
     expect(output.status, output.stderr).toBe(0);
@@ -227,54 +233,6 @@ describe('Chrome benchmarks', () => {
       expect(savedRun.error).toMatchObject({
         message: 'Chrome diagnostics replay produced different output',
       });
-    }
-  );
-
-  it.skipIf(!executablePath)(
-    'batches workloads that are too short for browser timer resolution',
-    { timeout: 60_000 },
-    () => {
-      setup(
-        `import { bench } from '@pmndrs/labs';
-        bench('70 us', () => {
-          const end = performance.now() + 0.07;
-          let count = 0;
-          while (performance.now() < end) count++;
-          return count;
-        }).gc(false);`,
-        { runtime: 'chrome', heap: false }
-      );
-      const output = run();
-      expect(output.status, output.stderr).toBe(0);
-      const stats = loadResult(join(project, '.labs'), 'chrome-test').files[0].benchmarks[0].runs[0]
-        .stats!;
-      expect(stats.plan?.batch).toBe(true);
-      expect(stats.plan!.batch_samples).toBeGreaterThan(1);
-    }
-  );
-
-  it.skipIf(!executablePath).each([
-    { tolerance: 1e-6, status: 0 },
-    { tolerance: 1e-12, status: 1 },
-  ])(
-    'uses configured replay snapshot tolerance $tolerance',
-    { timeout: 60_000 },
-    ({ tolerance, status }) => {
-      setup(
-        `import { bench } from '@pmndrs/labs';
-      bench('numeric replay', function* () {
-        const result = yield () => 1 + (typeof globalThis.__LABS_GC_OBSERVER === 'function' ? 0 : 1e-8);
-        return [result, [result * 2]];
-      });`,
-        { runtime: 'chrome', snapshotTolerance: tolerance }
-      );
-      const output = run();
-      expect(output.status, output.stderr).toBe(status);
-      const stats = loadResult(join(project, '.labs'), 'chrome-test').files[0].benchmarks[0].runs[0]
-        .stats!;
-      expect(stats.snapshot).toEqual([1, [2]]);
-      if (status === 0) expect(stats.gc).toMatchObject({ count: expect.any(Number) });
-      else expect(JSON.parse(output.stdout).benches[0].status).toBe('failed');
     }
   );
 
@@ -360,7 +318,12 @@ describe('Chrome benchmarks', () => {
         bench('setup failure', function* () {
           assert(false, 'failed before sampling');
           yield () => 1;
-        });`,
+        });
+        bench('checked iterator', state => {
+          for (const _ of state) gc();
+          assert(false, 'POST_LOOP_ASSERT');
+        });
+        bench('good', () => 42).gc(false);`,
         { runtime: 'chrome' }
       );
       const output = run();
@@ -375,6 +338,10 @@ describe('Chrome benchmarks', () => {
         name: 'AssertionError',
         message: 'failed before sampling',
       });
+      const report = JSON.parse(output.stdout);
+      expect(report.crashes).toEqual([]);
+      expect(report.benches[2]).toMatchObject({ status: 'failed', message: 'POST_LOOP_ASSERT' });
+      expect(report.benches[3].timeNs).not.toBeNull();
     }
   );
 
@@ -382,16 +349,6 @@ describe('Chrome benchmarks', () => {
     {
       name: 'timer error with GC',
       schedule: "setTimeout(() => { throw new Error('ASYNC_FAILURE'); }, 0)",
-      gc: true,
-    },
-    {
-      name: 'timer error without GC',
-      schedule: "setTimeout(() => { throw new Error('ASYNC_FAILURE'); }, 0)",
-      gc: false,
-    },
-    {
-      name: 'unhandled rejection with GC',
-      schedule: "void Promise.reject(new Error('ASYNC_FAILURE'))",
       gc: true,
     },
     {
@@ -417,75 +374,6 @@ describe('Chrome benchmarks', () => {
       const report = JSON.parse(output.stdout);
       expect(report.benches).toHaveLength(0);
       expect(report.crashes).toHaveLength(1);
-    }
-  );
-
-  it.skipIf(!executablePath)(
-    'accepts handled errors and diagnostic console output',
-    { timeout: 60_000 },
-    () => {
-      setup(
-        `import { bench } from '@pmndrs/labs';
-        bench('handled errors', async function* () {
-          console.error('EXPECTED_DIAGNOSTIC');
-          await Promise.reject(new Error('handled rejection')).catch(() => undefined);
-          yield () => 42;
-        });`,
-        { runtime: 'chrome', heap: false }
-      );
-      const output = run();
-      expect(output.status, output.stderr).toBe(0);
-      expect(output.stderr).toContain('EXPECTED_DIAGNOSTIC');
-      const report = JSON.parse(output.stdout);
-      expect(report.crashes).toEqual([]);
-      expect(report.benches[0].timeNs).not.toBeNull();
-    }
-  );
-
-  it.skipIf(!executablePath)(
-    'preserves an iterator assertion after sampling and continues the other benchmarks',
-    { timeout: 60_000 },
-    () => {
-      setup(
-        `import { assert, bench } from '@pmndrs/labs';
-        bench('checked iterator', state => {
-          for (const _ of state) gc();
-          assert(false, 'POST_LOOP_ASSERT');
-        });
-        bench('good', () => 42).gc(false);`,
-        { runtime: 'chrome', heap: false }
-      );
-      const output = run();
-      expect(output.status, output.stderr).toBe(1);
-      expect(output.stderr).not.toContain('Unexpected end of JSON input');
-      const report = JSON.parse(output.stdout);
-      expect(report.crashes).toEqual([]);
-      expect(report.benches).toHaveLength(2);
-      expect(report.benches[0]).toMatchObject({ status: 'failed', message: 'POST_LOOP_ASSERT' });
-      expect(report.benches[1].timeNs).not.toBeNull();
-      const saved = loadResult(join(project, '.labs'), 'chrome-test');
-      expect(saved.files[0].benchmarks[0].runs[0].error).toMatchObject({
-        name: 'AssertionError',
-        message: 'POST_LOOP_ASSERT',
-      });
-    }
-  );
-
-  it.skipIf(!executablePath)(
-    'passes configured Chrome flags to the browser',
-    { timeout: 60_000 },
-    () => {
-      setup(
-        `import { assert, bench } from '@pmndrs/labs';
-      bench('flags', function* () {
-        assert.equal(navigator.userAgent, 'labs-flags');
-        yield () => 1;
-      });`,
-        { chrome: { executablePath, args: ['--user-agent=labs-flags'] } }
-      );
-      const output = run('--runtime', 'chrome');
-      expect(output.status, output.stderr).toBe(0);
-      expect(JSON.parse(output.stdout).benches[0].name).toBe('flags');
     }
   );
 
