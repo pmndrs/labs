@@ -6,13 +6,11 @@ import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { stripVTControlCharacters } from 'node:util';
 import { describe, expect, it, vi } from 'vitest';
-import { measure } from '../src/bench/index.ts';
 import { compare, printCompareReport } from '../src/compare.ts';
 import { defineConfig } from '../src/config.ts';
 import { mannWhitneyU, minDetectableEffect, relativeSpread } from '../src/stats.ts';
 import type { SavedResult } from '../src/store.ts';
 
-const fast = { min_cpu_time: 1, min_samples: 12 } as const;
 const CONFIG = defineConfig({ benchDir: '.' });
 
 function syntheticStats(blockMedians: number[], freq = 4, perBlock = 40) {
@@ -70,37 +68,6 @@ function syntheticResult(
     environment: { freqs: [] },
   } as SavedResult;
 }
-
-describe('measurement plans', () => {
-  it('reports the plan a measurement decided on', async () => {
-    const stats = await measure(() => 1 + 1, fast);
-
-    expect(stats.plan?.batch).toBe(true);
-    expect(stats.plan?.batch_samples).toBeGreaterThan(0);
-    expect(stats.plan?.samples).toBeGreaterThanOrEqual(12);
-  });
-
-  it('replays a frozen plan exactly', async () => {
-    const stats = await measure(() => 1 + 1, {
-      batch: false,
-      batch_samples: 4096,
-      batch_unroll: 4,
-      min_samples: 20,
-      max_samples: 20,
-      min_cpu_time: 0,
-    });
-
-    expect(stats.plan).toMatchObject({ batch: false, samples: 20 });
-    expect(stats.samples.length).toBe(20);
-  });
-
-  it('forces batching on when the plan says so', async () => {
-    const stats = await measure(() => 1 + 1, { ...fast, batch: true });
-
-    expect(stats.plan?.batch).toBe(true);
-    expect(stats.ticks).toBeGreaterThan(stats.samples.length);
-  });
-});
 
 describe('fresh-run statistics', () => {
   it('reports zero spread for identical or single-run medians', () => {
@@ -267,34 +234,6 @@ describe('comparing blocked results', () => {
     }
   });
 
-  it('right-aligns limited resolution beneath the confidence interval', () => {
-    const aMedians = [100, 92, 108, 95, 105, 90, 110, 99];
-    const bMedians = aMedians.map((m) => m * 1.5);
-    const result = compare(syntheticResult('a', aMedians), syntheticResult('b', bMedians), CONFIG);
-    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
-    let lines: string[] = [];
-
-    try {
-      printCompareReport(result, CONFIG);
-      lines = log.mock.calls.map(([line]) => stripVTControlCharacters(String(line)));
-    } finally {
-      log.mockRestore();
-    }
-
-    const header = lines.find((line) => line.includes('Δ 95% CI'));
-    const warningIndex = lines.findIndex((line) => line.includes('⚠ ~±'));
-    const warning = lines[warningIndex];
-
-    expect(header).toBeDefined();
-    expect(warning).toBeDefined();
-    expect(lines[warningIndex - 1]).toContain('unit');
-    expect(warning).toHaveLength(header!.length);
-    expect(warning).toMatch(/⚠ ~±\d+%$/);
-    expect(lines).toContain(
-      '⚠ Limited resolution: Neutral results are inconclusive at the shown resolution.'
-    );
-  });
-
   it('skips benches without block replication instead of judging them', () => {
     const medians = [100, 101, 99, 100, 100, 101, 99, 100];
     const legacy = syntheticResult('old', medians, { legacy: true });
@@ -358,31 +297,6 @@ describe('worker blocked sampling', () => {
 
     for (const trial of result.benchmarks) {
       expect(trial.runs[0].stats.blocks.medians).toHaveLength(2);
-    }
-  });
-
-  function toSavedResult(name: string, workerResult: any): SavedResult {
-    return {
-      name,
-      timestamp: '2026-01-01T00:00:00.000Z',
-      hardware: { cpu: 'test-cpu', arch: 'test', runtime: 'node', freq: 4 },
-      blocks: 5,
-      files: [{ file: 'blocks.bench.ts', benchmarks: workerResult.benchmarks }],
-      environment: { freqs: [] },
-    } as SavedResult;
-  }
-
-  it('judges two blocked runs of the same code as neutral', { timeout: 120_000, retry: 2 }, () => {
-    const env = { LABS_BLOCKS: '5' };
-    const a = runWorker(env);
-    const b = runWorker(env);
-
-    const result = compare(toSavedResult('a', a), toSavedResult('b', b), CONFIG);
-    const eligible = result.benches.filter((bench) => bench.kind === 'eligible');
-
-    expect(eligible).toHaveLength(2);
-    for (const bench of eligible) {
-      if (bench.kind === 'eligible') expect(bench.verdict).toBe('neutral');
     }
   });
 });

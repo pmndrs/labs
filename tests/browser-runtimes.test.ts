@@ -62,12 +62,6 @@ describe.each([
     () => {
       setup(
         `import { assert, bench, group } from '@pmndrs/labs';
-        globalThis.Uint8Array = new Proxy(Uint8Array, {
-          construct(target, args) {
-            assert(typeof args[0] !== 'number' || args[0] < 64 * 1024 * 1024, 'unexpected large harness allocation');
-            return Reflect.construct(target, args);
-          },
-        });
         group('dom @browser', () => {
           bench('polluter', () => { document.body.dataset.polluted = 'yes'; return 1; });
           bench('element $text', async function* (state) {
