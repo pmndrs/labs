@@ -1,3 +1,4 @@
+/// <reference types="@webgpu/types" />
 /**
  * Measurement decisions made once by a pilot block and replayed verbatim by
  * every later block, so all blocks of a bench do identical work.
@@ -69,7 +70,7 @@ export interface Stats {
   samples: number[];
   /** Hardware counters supplied by the runtime backend. */
   counters?: any;
-  kind: 'fn' | 'iter' | 'yield';
+  kind: 'fn' | 'iter' | 'yield' | 'gpu';
   min: number;
   max: number;
   avg: number;
@@ -80,6 +81,8 @@ export interface Stats {
   p999: number;
   gc?: GcStats | LegacyGcStats;
   heap?: { min: number; max: number; p50: number; source?: 'replay' };
+  /** Bytes of buffers and textures a GPU bench holds after setup, and the net growth per pass. */
+  vram?: { resident: number; perPass: number };
   /** Decisions this measurement made, usable to freeze later blocks. */
   plan?: BlockPlan;
   /** Output compared with the baseline. */
@@ -114,7 +117,31 @@ export function isAssertionError(error: unknown): boolean {
   return typeof error === 'object' && error !== null && (error as any).name === 'AssertionError';
 }
 
-export type GeneratorBench = (state: any) => Generator<any, any, any>;
+/** What a generator bench receives: its arguments, the GPU device as a promise, and a shader cache buster. */
+export interface BenchState {
+  get(name: string): any;
+  gpu: Promise<GPUDevice>;
+  fresh: (code: string) => string;
+}
+export type GeneratorBench = (
+  state: BenchState
+) => Generator<any, any, any> | AsyncGenerator<any, any, any>;
+
+/** What a GPU bench's generator receives: the shared device and a shader cache buster. */
+export interface GpuState {
+  device: GPUDevice;
+  fresh: (code: string) => string;
+  get(name: string): any;
+}
+/** A GPU bench yields a pass timed on the GPU or a self-timed duration. */
+export type GpuYield =
+  | ({ compute: (pass: GPUComputePassEncoder) => void } & Record<string, unknown>)
+  | ({ render: GPURenderPassDescriptor; draw: (pass: GPURenderPassEncoder) => void } & Record<
+      string,
+      unknown
+    >)
+  | ({ time: () => number | Promise<number> } & Record<string, unknown>);
+export type GpuGeneratorBench = (state: GpuState) => Generator<GpuYield, any, any>;
 
 export interface MeasureOptions {
   now?: () => number;

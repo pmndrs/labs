@@ -105,6 +105,38 @@ describe('observed optimization tiers', () => {
     }
   );
 
+  it.each(
+    runtimes.filter(
+      ({ runtime, available }) => available && runtime !== 'bun' && runtime !== 'webkit'
+    )
+  )(
+    'compiles a workload whose timings never agree, and the loop around it, on $runtime',
+    { timeout: 70_000 },
+    ({ runtime, extra }) => {
+      // Alternating costs keep consecutive warm-up windows apart by far more
+      // than the tolerance, so agreement never ends the warm-up and the budget does
+      const stats = run(
+        runtime,
+        extra,
+        `import { bench } from '@pmndrs/labs';
+      let flip = 0;
+      bench('jitter', () => {
+        let sum = 0;
+        const n = (flip ^= 1) ? 200 : 2000;
+        for (let i = 0; i < n; i++) sum += Math.sqrt(i);
+        return sum;
+      });`
+      );
+      expect(stats.optimization?.mode).toBe('prepared');
+      expect(stats.optimization!.workload.map((sample) => sample?.tier)).toEqual(
+        Array(3).fill('TurboFan')
+      );
+      expect(stats.optimization!.harness!.map((sample) => sample?.tier)).toEqual(
+        Array(3).fill('TurboFan')
+      );
+    }
+  );
+
   it('prepares TurboFan in the pilot and each fresh worker even with delayed natural tiering', () => {
     const stats = run('node', {
       nodeFlags: [
@@ -127,7 +159,16 @@ describe('observed optimization tiers', () => {
     { name: 'first async call', costs: [150e6], async: true, warmupCalls: 1 },
     { name: 'feedback priming', costs: [1e6, 150e6], batchSamples: 2, warmupCalls: 2 },
     { name: 'validation', costs: [1e6, 150e6], warmupCalls: 2 },
-  ])('stops at an exhausted preparation budget after the $name', (scenario) => {
+    { name: 'self-timed first call', costs: [150e6], manual: true, warmupCalls: 1 },
+    { name: 'self-timed feedback priming', costs: [1e6, 150e6], manual: true, warmupCalls: 2 },
+    {
+      name: 'disabled self-timed warmup',
+      costs: [1e6],
+      manual: true,
+      disabled: true,
+      warmupCalls: 1,
+    },
+  ])('respects the preparation budget for $name', (scenario) => {
     const output = spawnSync(
       process.execPath,
       [
@@ -141,12 +182,14 @@ describe('observed optimization tiers', () => {
       let clock = 0, calls = 0, warmupCalls = 0;
       ${scenario.async ? 'async ' : ''}function work() {
         clock += costs[Math.min(calls, costs.length - 1)];
-        return ++calls;
+        calls++;
+        return ${scenario.manual ? '150e6' : 'calls'};
       }
-      const stats = await measure(work, {
+      const stats = await measure(${scenario.manual ? 'function* () { yield { time: work }; }' : 'work'}, {
         ${scenario.batchSamples ? `batch_samples: ${scenario.batchSamples},` : ''}
         batch: false, heap: false, min_samples: 1, max_samples: 1, min_cpu_time: 0,
-        warmup_time: 100e6, warmup_samples: 1, warmup_window: 1, warmup_settle: 0,
+        warmup_time: ${scenario.disabled ? 0 : 100e6}, warmup_samples: ${scenario.disabled ? 0 : 1},
+        warmup_window: 1, warmup_settle: 0,
         now: () => clock, gc: () => { warmupCalls = calls; },
       });
       console.log(JSON.stringify({ warmupCalls, samples: stats.samples }));`,
@@ -158,6 +201,83 @@ describe('observed optimization tiers', () => {
       warmupCalls: scenario.warmupCalls,
       samples: [150e6],
     });
+  });
+
+  it.each([true, false])('settles self-timed results after compilation when stable=%s', (stable) => {
+    const output = spawnSync(
+      process.execPath,
+      [
+        '--allow-natives-syntax',
+        '--import',
+        pathToFileURL(createRequire(import.meta.url).resolve('tsx')).href,
+        '--input-type=module',
+        '--eval',
+        `import { measure } from ${JSON.stringify(new URL('../src/bench/lib/measure.ts', import.meta.url).href)};
+      let clock = 0, preparedAt = 0, calls = 0;
+      const stats = await measure(function* () {
+        yield { time: async () => {
+          clock += 100000;
+          calls++;
+          return ${stable ? 'clock < 50e6 &&' : ''} calls % 2 ? 300000 : 100000;
+        } };
+      }, {
+        now: () => clock, gc: () => { preparedAt = clock; }, heap: false,
+        warmup_settle: 50e6, warmup_time: 100e6,
+        min_samples: 10, max_samples: 10, min_cpu_time: 0,
+      });
+      console.log(JSON.stringify({ preparedAt, stats }));`,
+      ],
+      { encoding: 'utf8', timeout: 30_000 }
+    );
+    expect(output.status, output.stderr || output.error?.message).toBe(0);
+    const { preparedAt, stats } = JSON.parse(output.stdout);
+    expect(stats.optimization.target).toBe('TurboFan');
+    expect(stats.optimization.benchmark[0].tier).toBe('TurboFan');
+    if (stable) {
+      expect(preparedAt).toBeGreaterThanOrEqual(50e6);
+      expect(preparedAt).toBeLessThan(100e6);
+      expect(stats.samples).toEqual(Array(10).fill(100000));
+      expect(stats.unsettled).toBeUndefined();
+    } else {
+      expect(preparedAt).toBe(100e6);
+      expect(stats.samples).toEqual([...Array(5).fill(100000), ...Array(5).fill(300000)]);
+      expect(stats.unsettled).toBe(true);
+    }
+  });
+
+  it('pairs self-timed preparation calls with parameter setup and cleanup', () => {
+    const output = spawnSync(
+      process.execPath,
+      [
+        '--allow-natives-syntax',
+        '--import',
+        pathToFileURL(createRequire(import.meta.url).resolve('tsx')).href,
+        '--input-type=module',
+        '--eval',
+        `import { measure } from ${JSON.stringify(new URL('../src/bench/lib/measure.ts', import.meta.url).href)};
+      let clock = 0, inputs = 0, calls = 0, cleanups = 0, pending = false;
+      const stats = await measure(function* () {
+        yield {
+          time: async (input) => {
+            if (pending || input !== calls + 1) throw new Error('unpaired setup or cleanup');
+            pending = true;
+            calls++;
+            clock += 1e6;
+            return 1e6;
+          },
+          0: async () => ++inputs,
+          after: async () => { pending = false; cleanups++; },
+        };
+      }, { now: () => clock, gc: false, heap: false, min_samples: 3, max_samples: 3, min_cpu_time: 0 });
+      console.log(JSON.stringify({ inputs, calls, cleanups, samples: stats.samples }));`,
+      ],
+      { encoding: 'utf8', timeout: 30_000 }
+    );
+    expect(output.status, output.stderr || output.error?.message).toBe(0);
+    const result = JSON.parse(output.stdout);
+    expect(result.inputs).toBe(result.calls);
+    expect(result.cleanups).toBe(result.calls);
+    expect(result.samples).toEqual(Array(3).fill(1e6));
   });
 
   it.each([

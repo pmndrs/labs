@@ -26,7 +26,7 @@ import {
 import { formatBytes, formatNs } from '../utils/units.ts';
 import type { TerminalFrame, TerminalViewState } from './screen.ts';
 import { TerminalCanvas, textWidth, wrapText } from './terminal.ts';
-import { runtimeLabel } from './utils.ts';
+import { clockBadge, runtimeLabel } from './utils.ts';
 
 type RunEntry = {
   file: string;
@@ -38,7 +38,16 @@ type RunEntry = {
   color: string;
   message: string;
   advice: string;
+  /** Verified tier outcomes per block when they differ, shown under the status. */
+  tiers?: string;
 };
+
+/** Blocks of a GPU bench that ran at a lower clock than the fastest block, or changed clock inside. */
+export function gpuClockShifts(stats: { blocks?: { freqs: number[]; spreads?: number[] } }): number {
+  const { freqs = [], spreads = [] } = stats.blocks ?? {};
+  const top = Math.max(...freqs);
+  return freqs.filter((rate, i) => rate < top * 0.9 || (spreads[i] ?? 0) > 0.1).length;
+}
 
 /**
  * Report status for one run, shared by the report and the live progress view.
@@ -56,6 +65,7 @@ export function runStatus(
     | 'unmeasured'
     | 'optimized-out'
     | 'nondeterministic'
+    | 'gpu-clock'
     | 'mixed-tiers'
     | 'deoptimized'
     | 'tier-drop'
@@ -93,7 +103,20 @@ export function runStatus(
     };
   const warning = samplingWarning(stats);
   if (warning && !stats.varyingOutput) return { symbol: '⚠', ...warning, advice: '' };
-  if (stats.unsettled || stats.varyingOutput)
+  if (stats.kind === 'gpu') {
+    // The GPU clock settles at one of a few levels per process and can move
+    // mid-block. Blocks probed slower than the fastest, or split inside, ran at
+    // another level. A minority leaves the median of blocks intact.
+    const shifted = gpuClockShifts(stats);
+    const total = stats.blocks?.freqs.length ?? 0;
+    if (stats.unsettled || shifted * 2 >= Math.max(total, 1))
+      return {
+        symbol: '⚠',
+        problem: 'gpu-clock',
+        message: `GPU clock shifted (${shifted}/${total})`,
+        advice: '',
+      };
+  } else if (stats.unsettled || stats.varyingOutput)
     return {
       symbol: '⚠',
       problem: 'nondeterministic',
@@ -110,7 +133,11 @@ export function runStatus(
       problem: 'imprecise',
       minDetectableChange: resolution,
       message: `min detectable change ±${Math.round(resolution * 100)}%`,
-      advice: machine ? 'rerun on an idle machine' : 'add blocks',
+      advice: machine
+        ? stats.kind === 'gpu'
+          ? 'rerun with an idle GPU'
+          : 'rerun on an idle machine'
+        : 'add blocks',
     };
   }
   return {
@@ -132,9 +159,7 @@ function entries(result: SavedResult, config: LabsConfig): RunEntry[] {
           config.minDelta
         );
         const tiers = samplingTiers(run.error === undefined ? run.stats?.optimization : undefined);
-        let summary = problem === 'late-optimization' || problem === 'tier-drop' ? '' : message;
-        if (tiers.length > 1 && problem !== 'mixed-tiers')
-          summary = [summary, tiers.join(' · ')].filter(Boolean).join(' · ');
+        const summary = problem === 'late-optimization' || problem === 'tier-drop' ? '' : message;
         return {
           file: file.file,
           group: trial.groupName ?? '',
@@ -145,10 +170,16 @@ function entries(result: SavedResult, config: LabsConfig): RunEntry[] {
           color: symbol === '✗' ? RED : symbol === '⚠' ? YELLOW : GREEN,
           message: summary,
           advice,
+          ...(tiers.length > 1 && problem !== 'mixed-tiers' ? { tiers: tiers.join('  ') } : {}),
         };
       })
     )
   );
+}
+
+/** Growth reads with its sign, so it is never mistaken for a total. */
+function signed(value: number, format: (value: number) => string): string {
+  return value > 0 ? `+${format(value)}` : value < 0 ? `-${format(-value)}` : format(0);
 }
 
 function bytes(value: number): string {
@@ -243,13 +274,15 @@ function details(entry: RunEntry | undefined, width: number, state: TerminalView
     return canvas.lines(colors);
   }
   const stats = entry.run.error === undefined ? entry.run.stats : undefined;
-  const title = `${entry.symbol} ${entry.name}`;
+  const badge = clockBadge(stats?.kind === 'gpu');
+  const title = `${entry.symbol} ${badge.text} ${entry.name}`;
   const metrics = warmupHeading(stats);
   const summaryWidth = textWidth(metrics.map(({ text }) => text).join('  '));
   const inlineSummary =
     summaryWidth > 0 && summaryWidth + 2 + Math.min(textWidth(title), 16) <= width;
   canvas.put(0, 0, title, BOLD, inlineSummary ? width - summaryWidth - 2 : width);
   canvas.put(0, 0, entry.symbol, entry.color, 1);
+  canvas.put(0, 2, badge.text, badge.style, 5);
   let y = 1;
   if (summaryWidth > width) {
     for (const { text, color } of metrics) canvas.put(y++, 0, text, color, width, true);
@@ -269,6 +302,7 @@ function details(entry: RunEntry | undefined, width: number, state: TerminalView
     for (const message of wrapText(entry.message, width)) canvas.put(y++, 0, message, entry.color);
     for (const line of wrapText(advice.trim(), width)) canvas.put(y++, 0, line, GRAY);
   }
+  if (entry.tiers) for (const line of wrapText(entry.tiers, width)) canvas.put(y++, 0, line, YELLOW);
   if (!stats) return canvas.lines(colors);
   y++;
   const range = (
@@ -283,25 +317,37 @@ function details(entry: RunEntry | undefined, width: number, state: TerminalView
       : `${min}–${max}`;
   };
   const gc = stats.gc;
-  const columns: Array<{ heading: string; qualifier?: string; value: string; detail: string }> = [
-    ...(gc && 'total' in gc
-      ? formatGcColumns(gc).map((column) => ({
-          ...column,
-          value: column.qualifier ? `${column.qualifier} ${column.value}` : column.value,
-        }))
-      : [
-          {
-            heading: 'gc',
-            value: gc ? duration(gc.p50) : entry.gcMode === false ? 'disabled' : '—',
-            detail: range(gc, duration),
-          },
-        ]),
+  // GPU memory is the bench's stat. The GPU clock is the environment's and
+  // sits with the CPU clock in the report.
+  const gpuColumns = () => [
     {
-      heading: stats.heap?.source === 'replay' ? 'heap replay' : 'heap',
-      value: stats.heap ? bytes(stats.heap.p50) : '—',
-      detail: range(stats.heap, bytes),
+      heading: 'vram',
+      value: stats.vram === undefined ? '—' : bytes(stats.vram.resident),
+      detail: stats.vram === undefined ? '—' : `${signed(stats.vram.perPass, bytes)}/pass`,
     },
   ];
+  const columns: Array<{ heading: string; qualifier?: string; value: string; detail: string }> =
+    stats.kind === 'gpu'
+      ? gpuColumns()
+      : [
+          ...(gc && 'total' in gc
+            ? formatGcColumns(gc).map((column) => ({
+                ...column,
+                value: column.qualifier ? `${column.qualifier} ${column.value}` : column.value,
+              }))
+            : [
+                {
+                  heading: 'gc',
+                  value: gc ? duration(gc.p50) : entry.gcMode === false ? 'disabled' : '—',
+                  detail: range(gc, duration),
+                },
+              ]),
+          {
+            heading: stats.heap?.source === 'replay' ? 'heap replay' : 'heap',
+            value: stats.heap ? bytes(stats.heap.p50) : '—',
+            detail: range(stats.heap, bytes),
+          },
+        ];
   const columnWidths = columns.map((column) =>
     Math.max(textWidth(column.heading), textWidth(column.value), textWidth(column.detail))
   );
@@ -446,7 +492,15 @@ export function renderRunView(
       canvas.put(
         y,
         nameWidth + 29,
-        bench ? (stats?.heap ? bytes(stats.heap.p50) : '—') : 'heap',
+        bench
+          ? stats?.kind === 'gpu'
+            ? stats.vram === undefined
+              ? '—'
+              : bytes(stats.vram.resident)
+            : stats?.heap
+              ? bytes(stats.heap.p50)
+              : '—'
+          : 'memory',
         GRAY,
         12,
         true
@@ -482,8 +536,10 @@ export function renderRunView(
       const bench = benches[row.index];
       const active = selected === row.index;
       if (active) canvas.fill(y, '\x1b[48;5;236m' + WHITE);
-      listRow(y, `${active ? '›' : ' '} ${bench.symbol} ${row.text}`, bench);
+      const badge = clockBadge(bench.run.error === undefined && bench.run.stats?.kind === 'gpu');
+      listRow(y, `${active ? '›' : ' '} ${bench.symbol} ${badge.text} ${row.text}`, bench);
       canvas.put(y, 3, bench.symbol, bench.color, 1);
+      canvas.put(y, 5, badge.text, badge.style, 5);
     }
   });
   canvas.put(detailTop - 1, 1, '━'.repeat(innerWidth), DARK_GRAY);

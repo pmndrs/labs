@@ -5,7 +5,7 @@ import { median } from '../stats.ts';
 import { CYAN, DARK_GRAY, GRAY, GREEN, RED, YELLOW } from '../utils/ansi.ts';
 import { formatNs } from '../utils/units.ts';
 import { TerminalCanvas, textWidth, wrapText } from './terminal.ts';
-import { runtimeLabel } from './utils.ts';
+import { runtimeLabel, clockBadge } from './utils.ts';
 
 const { version } = createRequire(import.meta.url)('../../package.json') as { version: string };
 
@@ -14,7 +14,7 @@ export type ProgressEvent =
   | {
       type: 'start';
       blocks: number;
-      benches: Array<{ index: number; name: string; group: string; cases: number }>;
+      benches: Array<{ index: number; name: string; group: string; cases: number; gpu?: boolean }>;
     }
   | { type: 'bench'; index: number; block: number }
   | {
@@ -37,6 +37,7 @@ interface BenchProgress {
   group: string;
   cases: number;
   running: boolean;
+  gpu?: boolean;
   medians: number[];
   durations: number[];
   error?: string;
@@ -206,7 +207,9 @@ export function renderProgress(
 
     const grouped = file.benches.some((bench) => bench.group);
     const nameWidth = Math.max(0, ...file.benches.map((bench) => textWidth(bench.name)));
-    const dotsX = (grouped ? 7 : 5) + Math.min(nameWidth, width - 40) + 2;
+    // Room for the clock badge between the status and the name
+    // Rows sit under their group heading without a further indent, as in the report
+    const dotsX = 5 + 6 + Math.min(nameWidth, width - 46) + 2;
     let group: string | undefined;
     for (const bench of file.benches) {
       if (grouped && bench.group !== group) {
@@ -214,7 +217,7 @@ export function renderProgress(
         const label = group;
         body.push((canvas, y) => canvas.put(y, 3, label, DARK_GRAY));
       }
-      const x = grouped ? 5 : 3;
+      const x = 3;
       if (bench.running) focus = body.length;
       const done = file.blocks - blocksLeft(bench, file.blocks);
       const symbol = bench.error !== undefined ? '✗' : bench.running ? tick : done ? ' ' : '·';
@@ -227,12 +230,14 @@ export function renderProgress(
             : '';
       body.push((canvas, y) => {
         canvas.put(y, x, symbol, color, 1);
+        const badge = clockBadge(!!bench.gpu);
+        canvas.put(y, x + 2, badge.text, badge.style, 5);
         canvas.put(
           y,
-          x + 2,
+          x + 8,
           bench.name,
           bench.durations.length || bench.running ? '' : GRAY,
-          dotsX - x - 4
+          dotsX - x - 10
         );
         canvas.put(y, dotsX, '●'.repeat(done), CYAN, done);
         canvas.put(y, dotsX + done, '○'.repeat(file.blocks - done), DARK_GRAY, file.blocks - done);

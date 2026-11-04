@@ -48,6 +48,7 @@ export class B {
   _name: string = '';
   _group: number = 0;
   _gc = true;
+  _gpu = false;
   flags: number = FLAGS;
   _highlight: string | false = false;
 
@@ -61,6 +62,11 @@ export class B {
 
   name(name: string, color: string | false = false): this {
     return ((this._name = name), this.highlight(color), this);
+  }
+
+  /** Hand the generator a WebGPU device and let it yield passes timed on the GPU. */
+  gpu(): this {
+    return ((this._gpu = true), this);
   }
 
   /** Observe GC during sampling. Heap estimation runs separately afterward. */
@@ -159,6 +165,7 @@ export class B {
     const tune = {
       $counters,
       ..._tune,
+      $gpu: this._gpu,
       sample_gc: gcMode,
       // Allow browser adapters to skip collection when no native hook exists.
       gc: _tune.gc === false || 'function' === typeof _tune.gc ? _tune.gc : undefined,
@@ -364,16 +371,21 @@ async function initCounters(arch: string | null, runtime: string | null): Promis
 }
 
 /** Run one registered trial by its global registration index. */
-export async function runTrialAt(
-  index: number,
-  tune: any = {},
-  plans?: Array<BlockPlan | undefined>
-): Promise<Trial> {
+export function trialAt(index: number): B {
   const trials = COLLECTIONS.flatMap((c) => c.trials) as B[];
   const trial = trials[index];
   if (!trial) {
     throw new RangeError(`no bench registered at index ${index} (${trials.length} registered)`);
   }
+  return trial;
+}
+
+export async function runTrialAt(
+  index: number,
+  tune: any = {},
+  plans?: Array<BlockPlan | undefined>
+): Promise<Trial> {
+  const trial = trialAt(index);
   await initCounters(await arch(), runtime());
   return await trial.run(false, tune, plans);
 }
@@ -546,7 +558,7 @@ const formats = {
             );
           else
             print(
-              `| ${run.name.padEnd(name_len)} | \`${`${formatNs(run.stats!.avg)}/iter`.padStart(14)}\` | \`${formatNs(run.stats!.min).padStart(9)}\` | \`${formatNs(run.stats!.p75).padStart(9)}\` | \`${formatNs(run.stats!.p99).padStart(9)}\` | \`${formatNs(run.stats!.max).padStart(9)}\` |`
+              `| ${run.name.padEnd(name_len)} | \`${`${formatNs(run.stats!.avg)}${run.stats!.kind === 'gpu' ? '/pass' : '/iter'}`.padStart(14)}\` | \`${formatNs(run.stats!.min).padStart(9)}\` | \`${formatNs(run.stats!.p75).padStart(9)}\` | \`${formatNs(run.stats!.p99).padStart(9)}\` | \`${formatNs(run.stats!.max).padStart(9)}\` |`
             );
         }
       }

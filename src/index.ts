@@ -1,5 +1,5 @@
 import { bench as _bench, group as _group, type B } from './bench/index.ts';
-import type { GeneratorBench } from './bench/types.ts';
+import type { GeneratorBench, GpuGeneratorBench } from './bench/types.ts';
 
 export { assert, AssertionError } from './assert.ts';
 export { defineConfig } from './config.ts';
@@ -63,6 +63,14 @@ export function bench(nameOrFn: string | ((...args: any[]) => any), fn?: any): B
   benchRegistry.push({ groupName: groupNameStack.at(-1) ?? '', alias: cleanName || 'anonymous' });
   return _bench(cleanName, fn);
 }
+
+/**
+ * A bench that uses the GPU. The generator receives the WebGPU device and a
+ * shader cache buster. Yield `{ compute }` or `{ render, draw }` to time a pass
+ * on the GPU, or a plain function to time CPU work such as encoding.
+ */
+bench.gpu = (name: string, gen: GpuGeneratorBench): B =>
+  bench(name, gen as unknown as GeneratorBench).gpu();
 
 export function group(f: () => any): void;
 export function group(name: string, f: () => any): void;

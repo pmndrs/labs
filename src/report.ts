@@ -35,6 +35,8 @@ export interface BenchDiagnostics {
   inconsistent: ReportBench[];
   /** Benches whose samples vary widely inside a single process. */
   noisy: ReportBench[];
+  /** GPU speed probed before each block of a GPU bench. */
+  gpuRates: number[];
 }
 
 export function emptyDiagnostics(): BenchDiagnostics {
@@ -44,14 +46,23 @@ export function emptyDiagnostics(): BenchDiagnostics {
     calibrationExplainedFractions: [],
     inconsistent: [],
     noisy: [],
+    gpuRates: [],
   };
 }
 
 type DiagnosableTrial = {
   alias: string;
   groupName?: string;
-  runs: Array<{ name: string; error?: unknown; stats?: Pick<Stats, 'blocks'> }>;
+  runs: Array<{ name: string; error?: unknown; stats?: Pick<Stats, 'blocks'> & { kind?: string } }>;
 };
+
+/** Relative range of GPU speed readings, the GPU's clock drift across blocks. */
+export function gpuRateDrift(rates: number[]): number {
+  if (rates.length === 0) return 0;
+  const min = Math.min(...rates);
+  const max = Math.max(...rates);
+  return (max - min) / ((max + min) / 2);
+}
 
 /** `group › bench`, trimming the group first so the bench name stays readable. */
 function benchLabel(groupName: string | undefined, name: string): string {
@@ -78,6 +89,7 @@ export function collectDiagnostics(
       if (isAssertionError(run.error)) into.failedChecks.push(name);
       const blocks = run.stats?.blocks;
       if (!blocks) continue;
+      if (run.stats?.kind === 'gpu') into.gpuRates.push(...blocks.freqs);
 
       const spread = relativeSpread(blocks.medians);
       into.medianSpreads.push(spread);
@@ -150,6 +162,19 @@ export function printReportBox(input: ReportInput): void {
       lines.push(
         `${GREEN}✔ Stable clock:${RESET} ${DIM}Readings ranged ${rangeStr} (${detail}).${RESET}`
       );
+    }
+    lines.push('');
+  }
+  if (diagnostics.gpuRates.length > 0) {
+    const drift = gpuRateDrift(diagnostics.gpuRates);
+    const detail = `${(drift * 100).toFixed(1)}% drift across ${diagnostics.gpuRates.length} blocks.`;
+    if (drift > 0.05) {
+      lines.push(`${YELLOW}⚠ Unstable GPU clock:${RESET} ${DIM}${detail}${RESET}`);
+      lines.push(
+        `  ${DIM}It climbs under load and falls when idle. Free the GPU or lengthen blocks.${RESET}`
+      );
+    } else {
+      lines.push(`${GREEN}✔ Stable GPU clock:${RESET} ${DIM}${detail}${RESET}`);
     }
     lines.push('');
   }
@@ -253,6 +278,13 @@ export function printRunSummary(
       `speed varied ${(drift * 100).toFixed(0)}%  ` +
         (pairDrift === undefined ? '' : `paired ${(pairDrift * 100).toFixed(0)}%  `) +
         `${stable ? `${GREEN}stable` : `${YELLOW}unstable`}${RESET}`,
+    ]);
+  }
+  if (diagnostics.gpuRates.length > 0) {
+    const drift = gpuRateDrift(diagnostics.gpuRates);
+    rows.push([
+      'GPU',
+      `speed varied ${(drift * 100).toFixed(0)}%  ${drift <= 0.05 ? `${GREEN}stable` : `${YELLOW}unstable`}${RESET}`,
     ]);
   }
   if (diagnostics.medianSpreads.length > 0) {

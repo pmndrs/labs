@@ -12,7 +12,7 @@
     "composite": true,
     "rewriteRelativeImportExtensions": true,
     "erasableSyntaxOnly": true,
-    "types": ["node"],
+    "types": ["node", "@webgpu/types"],
     "noUncheckedSideEffectImports": true,
     "libReplacement": false
   },

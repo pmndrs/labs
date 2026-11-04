@@ -58,9 +58,12 @@ export const optimization:
         return undefined;
       }
     }
-    const prepare = request(
-      'if (!%IsTurbofanEnabled() || %IsAsmWasmCode(fn)) return false; %EnsureFeedbackVectorForFunction(fn);'
-    );
+    // Chrome's V8 has dropped the asm.js probe, and a source naming a missing
+    // runtime function fails to parse, so that guard is used only where it exists
+    const prepare =
+      request(
+        'if (!%IsTurbofanEnabled() || %IsAsmWasmCode(fn)) return false; %EnsureFeedbackVectorForFunction(fn);'
+      ) ?? request('if (!%IsTurbofanEnabled()) return false; %EnsureFeedbackVectorForFunction(fn);');
     // The synchronous compiler can decline a function with optimization disabled.
     const compile = request('if (!%ActiveTierIsTurbofan(fn)) %BenchTurbofan(fn, 1);');
     let frame: string | undefined;
