@@ -31,7 +31,12 @@ export function freshShader(code: string): string {
  * so each call tops the queue up and returns the oldest pass's time. The
  * function keeps submission in the call path prepared before sampling.
  */
-export type TimedPass = (() => Promise<number>) & { calls: number };
+export type TimedPass = (() => Promise<number>) & {
+  calls: number;
+  encodes: number;
+  /** Waits for the passes still in flight and frees the timing resources. */
+  finish(): Promise<void>;
+};
 
 export function timedPass(
   device: GPUDevice,
@@ -49,6 +54,7 @@ export function timedPass(
   // Synchronous encoding and submission can inline into the prepared pass.
   // Only the readback waits.
   const enqueue = () => {
+    pass.encodes++;
     const { query, resolve, read } = slots[next++ % slots.length];
     const encoder = device.createCommandEncoder();
     encode(encoder, { querySet: query, beginningOfPassWriteIndex: 0, endOfPassWriteIndex: 1 });
@@ -71,7 +77,18 @@ export function timedPass(
       inflight.push(enqueue());
       return time;
     },
-    { calls: 0 }
+    {
+      calls: 0,
+      encodes: 0,
+      async finish() {
+        await Promise.all(inflight.splice(0));
+        for (const { query, resolve, read } of slots) {
+          query.destroy();
+          resolve.destroy();
+          read.destroy();
+        }
+      },
+    }
   );
   return pass;
 }
@@ -119,11 +136,15 @@ export function meterAllocations(device: GPUDevice): { bytes(): number; stop(): 
   };
   device.createBuffer = (descriptor) => track(createBuffer(descriptor), descriptor.size);
   device.createTexture = (descriptor) => track(createTexture(descriptor), textureBytes(descriptor));
+  let stopped = false;
   return {
     bytes: () => bytes,
     stop() {
-      device.createBuffer = createBuffer;
-      device.createTexture = createTexture;
+      if (!stopped) {
+        device.createBuffer = createBuffer;
+        device.createTexture = createTexture;
+        stopped = true;
+      }
       return bytes;
     },
   };
@@ -181,6 +202,7 @@ export async function probeGpuRate(device: GPUDevice): Promise<number> {
   const times: number[] = [];
   for (let i = 0; i < 64; i++) times.push(await pass());
   const settled = times.slice(32).sort((a, b) => a - b);
+  await pass.finish();
   buffer.destroy();
   return 1 / settled[settled.length >> 1];
 }

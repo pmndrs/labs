@@ -38,7 +38,6 @@ type RunEntry = {
   color: string;
   message: string;
   advice: string;
-  /** Verified tier outcomes per block when they differ, shown under the status. */
   tiers?: string;
 };
 
@@ -116,7 +115,8 @@ export function runStatus(
         message: `GPU clock shifted (${shifted}/${total})`,
         advice: '',
       };
-  } else if (stats.unsettled || stats.varyingOutput)
+  }
+  if (stats.varyingOutput || (stats.kind !== 'gpu' && stats.unsettled))
     return {
       symbol: '⚠',
       problem: 'nondeterministic',
