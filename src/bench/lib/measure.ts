@@ -212,7 +212,7 @@ export async function benchFn(fn: (...args: any[]) => any, opts: any = {}): Prom
     async function warmCalls(limit: number) {
       let duration = 0;
       let iterations = 0;
-      while (iterations < limit && (iterations === 0 || now() < warmup.deadline)) {
+      while (iterations < limit && now() < warmup.deadline) {
         for (let oo = 0; oo < params.length; oo++) {
           $p[oo] = await opts.params[oo]();
         }
@@ -226,21 +226,25 @@ export async function benchFn(fn: (...args: any[]) => any, opts: any = {}): Prom
       }
       if (iterations) recordWarmup(warmup, duration, iterations, opts, now());
       workload = observeWorkload(optimization?.tier(fn), now());
-      return duration / iterations;
+      return iterations ? duration / iterations : undefined;
     }
-    const prepared = opts.warmup_samples > 0 && opts.warmup_time > 0 && compiler?.prepare(fn);
+    const prepared =
+      opts.warmup_samples > 0 &&
+      opts.warmup_time > 0 &&
+      now() < warmup.deadline &&
+      compiler?.prepare(fn);
     while (
       !isWarmupDone(warmup, opts, now()) &&
       !(prepared && (warmup.stable || workload?.tier === 'TurboFan'))
     )
       await warmCalls(warmup.iterations);
     single = warmup.single;
-    if (prepared) {
+    if (prepared && now() < warmup.deadline) {
       if (opts.batch_samples) await warmCalls(opts.batch_samples);
-      if (compiler?.compile(fn)) {
+      if (now() < warmup.deadline && compiler?.compile(fn)) {
         requestedTurboFan = true;
         await warmCalls(1);
-        single = await warmCalls(1);
+        single = (await warmCalls(1)) ?? warmup.single;
         verifiedTurboFan = optimization?.tier(fn) === 'TurboFan';
       }
       if (!verifiedTurboFan) {
@@ -264,7 +268,13 @@ export async function benchFn(fn: (...args: any[]) => any, opts: any = {}): Prom
 
   // Size the final batch from a continuous loop without per-call clock reads.
   // Parameter generation requires separate timing.
-  if (opts.batch_samples === undefined && batch && !params.length && !opts.manual) {
+  if (
+    opts.batch_samples === undefined &&
+    batch &&
+    !params.length &&
+    !opts.manual &&
+    now() < warmup.deadline
+  ) {
     const t0 = now();
     for (let o = 0; o < batchSamples; o++) {
       const value = async ? await fn() : fn();
@@ -402,6 +412,7 @@ export async function benchFn(fn: (...args: any[]) => any, opts: any = {}): Prom
     '$settle',
     '$recordSamples',
     '$recordTime',
+    '$warmUntil',
     `
     ${opts.warmup_samples > 0 && optimization?.frame ? `$entry.tier = ${optimization.frame}; $entry.at = $now();` : ''}
     ${!opts.$counters ? '' : 'let _hc = false;'}
@@ -422,7 +433,7 @@ export async function benchFn(fn: (...args: any[]) => any, opts: any = {}): Prom
       const atLimit = _ >= ${samples.length} || (_ >= $minSamples && t >= $minTime);
       if (atLimit && !$settle) break;
       ${afterSample}
-      if (atLimit) {
+      if (atLimit || ($settle && $now() >= $warmUntil)) {
         if ($settle(t / _)) {
           $minSamples = $recordSamples;
           $minTime = $recordTime;
@@ -483,6 +494,7 @@ export async function benchFn(fn: (...args: any[]) => any, opts: any = {}): Prom
 
   const watchDeopts: MeasureOptions['$deopts'] = opts.$deopts;
   const deopts = requestedTurboFan ? watchDeopts?.(batch ? [fn, loop] : [fn]) : undefined;
+  let samplingWarmup = warmup;
 
   const run = (
     warm: boolean,
@@ -509,7 +521,8 @@ export async function benchFn(fn: (...args: any[]) => any, opts: any = {}): Prom
       dollar_vm,
       settle,
       warm ? minSamples : opts.min_samples,
-      warm ? 0 : opts.min_cpu_time
+      warm ? 0 : opts.min_cpu_time,
+      samplingWarmup.deadline
     );
 
   try {
@@ -525,7 +538,6 @@ export async function benchFn(fn: (...args: any[]) => any, opts: any = {}): Prom
       const tier = verifiedTier(workload?.tier, harness?.tier, !batch && !dollar_vm);
       return tier ? { tier, time: at - started } : null;
     }
-    let samplingWarmup = warmup;
     let optimizedAt = 0;
     let settle: Parameters<typeof run>[2];
     // Warm and verify the loop that records samples.
@@ -535,13 +547,14 @@ export async function benchFn(fn: (...args: any[]) => any, opts: any = {}): Prom
         opts.warmup_samples,
         now() + opts.warmup_settle
       );
-      const preparedLoop = verifiedTurboFan && compiler?.prepare(loop);
+      const preparedLoop =
+        verifiedTurboFan && now() < samplingWarmup.deadline && compiler?.prepare(loop);
       // Prime entry-path feedback before the hot loop can tier up through OSR.
-      for (let i = 0; i < 3; i++) {
+      for (let i = 0; i < 3 && now() < samplingWarmup.deadline; i++) {
         await run(true, 0);
         harness = readHarness();
       }
-      await run(true, 1);
+      if (now() < samplingWarmup.deadline) await run(true, 1);
       for (let i = 1; preparedLoop && i < opts.warmup_samples && now() < samplingWarmup.deadline; i++)
         await run(true, 1);
       harness = readHarness();
@@ -563,7 +576,7 @@ export async function benchFn(fn: (...args: any[]) => any, opts: any = {}): Prom
           );
         }
         const at = now();
-        recordWarmup(samplingWarmup, pass, 1, opts, at);
+        if (Number.isFinite(pass)) recordWarmup(samplingWarmup, pass, 1, opts, at);
         if (!isWarmupDone(samplingWarmup, opts, at)) return false;
         // A stable batch can still have an ambiguous tier while its caller is optimizing.
         if (at < samplingWarmup.deadline && workload && optimization?.frame) {
@@ -584,7 +597,13 @@ export async function benchFn(fn: (...args: any[]) => any, opts: any = {}): Prom
       // Prime the recording transition without executing benchmark calls.
       await run(true, 0, settle);
       harness = readHarness();
-      if (preparedLoop && optimization && compiler?.compile(loop)) {
+      if (
+        preparedLoop &&
+        optimization &&
+        now() < samplingWarmup.deadline &&
+        compiler?.compile(loop) &&
+        now() < samplingWarmup.deadline
+      ) {
         await run(true, 1);
         harness = readHarness();
         workload = observeWorkload(optimization.tier(fn), now());
@@ -602,6 +621,13 @@ export async function benchFn(fn: (...args: any[]) => any, opts: any = {}): Prom
             observation.start();
           }
         }
+      }
+      if (settle && now() >= samplingWarmup.deadline) {
+        if (opts.gc) opts.gc();
+        workload = observeWorkload(optimization?.tier(fn), now());
+        settle = undefined;
+        deopts?.start();
+        observation.start();
       }
     } else {
       if (opts.gc) opts.gc();

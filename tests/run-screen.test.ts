@@ -368,6 +368,31 @@ describe('run report', () => {
     expect(mixed).toContain('TurboFan (deopt) ×1 · TurboFan ×1');
   });
 
+  it('keeps an unverified workload tier out of loop deopt warnings', () => {
+    const result = fixture();
+    const stats = result.files[0].benchmarks[0].runs[0].stats!;
+    stats.optimization = {
+      mode: 'prepared',
+      target: 'TurboFan',
+      benchmark: [null],
+      benchmarkEnd: [null],
+      deoptimized: ['harness'],
+      workload: [{ tier: 'Maglev', time: 1e6 }],
+      harness: [{ tier: 'TurboFan', time: 1e6 }],
+    };
+    stats.warmup = { time: 20e6, phase: 'sampling' };
+    const text = render(result, 120, 0, 40).lines.join('\n');
+    expect(text).toMatch(/⚠ create entities +20.00 ms/);
+    expect(text).not.toMatch(/TurboFan|Maglev/);
+    expect(text).toContain('Sampling loop deoptimized during timing');
+    expect(runJson(result, defineConfig({ benchDir: '.' }), true).benches[0]).toMatchObject({
+      status: 'warning',
+      problem: 'deoptimized',
+      message: 'Sampling loop deoptimized during timing',
+      timeNs: { avg: stats.avg },
+    });
+  });
+
   it('shows an observed deoptimization instead of retaining the starting tier', () => {
     const result = fixture();
     result.files[0].benchmarks[0].runs[0].stats!.optimization = {

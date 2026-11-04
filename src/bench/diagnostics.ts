@@ -49,10 +49,11 @@ export function samplingTiers(optimization: Stats['optimization']) {
     const start = optimization?.benchmark?.[index]?.tier;
     const end = optimization?.benchmarkEnd?.[index];
     const tier = start ?? end;
-    if (tier) observed.add(tier);
+    if (!tier) continue;
+    observed.add(tier);
     const deopt = optimization?.deoptimized?.[index];
     if ((!start || !end) && !deopt) continue;
-    const pair = start && end && start !== end ? `${start} → ${end}` : (tier ?? 'TurboFan');
+    const pair = start && end && start !== end ? `${start} → ${end}` : tier;
     const label = deopt ? `${pair} (${deopt === 'harness' ? 'loop deopt' : 'deopt'})` : pair;
     groups.set(label, (groups.get(label) ?? 0) + 1);
   }

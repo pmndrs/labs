@@ -12,6 +12,45 @@ vi.mock('../src/bench/lib/optimization.ts', async (importOriginal) => ({
 
 describe('batched tier verification', () => {
   it.each([
+    { cleanup: 0, expected: 10_000 },
+    { cleanup: 2_000, expected: 12_000 },
+  ])(
+    'stops sampling warmup at its deadline with $cleanup ns cleanup',
+    async ({ cleanup, expected }) => {
+      let clock = 0;
+      let recordingStart = 0;
+      const stats = await measure(
+        function* () {
+          yield {
+            bench: () => (clock += 1_000),
+            after: () => {
+              clock += cleanup;
+            },
+          };
+        },
+        {
+          now: () => clock,
+          gc: () => {
+            recordingStart = clock;
+          },
+          batch: true,
+          batch_samples: 1,
+          warmup_samples: 5,
+          warmup_window: 1,
+          warmup_time: 5_000,
+          warmup_settle: 0,
+          min_samples: 2,
+          max_samples: 8,
+          min_cpu_time: 0,
+          heap: false,
+        }
+      );
+      expect(recordingStart).toBe(expected);
+      expect(stats.samples).toEqual([1_000, 1_000]);
+    }
+  );
+
+  it.each([
     { budget: 100_000, expected: 'TurboFan' },
     { budget: 10_000, expected: null },
   ])(

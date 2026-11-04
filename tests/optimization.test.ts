@@ -123,6 +123,44 @@ describe('observed optimization tiers', () => {
   });
 
   it.each([
+    { name: 'first sync call', costs: [150e6], async: false, warmupCalls: 1 },
+    { name: 'first async call', costs: [150e6], async: true, warmupCalls: 1 },
+    { name: 'feedback priming', costs: [1e6, 150e6], batchSamples: 2, warmupCalls: 2 },
+    { name: 'validation', costs: [1e6, 150e6], warmupCalls: 2 },
+  ])('stops at an exhausted preparation budget after the $name', (scenario) => {
+    const output = spawnSync(
+      process.execPath,
+      [
+        '--allow-natives-syntax',
+        '--import',
+        pathToFileURL(createRequire(import.meta.url).resolve('tsx')).href,
+        '--input-type=module',
+        '--eval',
+        `import { measure } from ${JSON.stringify(new URL('../src/bench/lib/measure.ts', import.meta.url).href)};
+      const costs = ${JSON.stringify(scenario.costs)};
+      let clock = 0, calls = 0, warmupCalls = 0;
+      ${scenario.async ? 'async ' : ''}function work() {
+        clock += costs[Math.min(calls, costs.length - 1)];
+        return ++calls;
+      }
+      const stats = await measure(work, {
+        ${scenario.batchSamples ? `batch_samples: ${scenario.batchSamples},` : ''}
+        batch: false, heap: false, min_samples: 1, max_samples: 1, min_cpu_time: 0,
+        warmup_time: 100e6, warmup_samples: 1, warmup_window: 1, warmup_settle: 0,
+        now: () => clock, gc: () => { warmupCalls = calls; },
+      });
+      console.log(JSON.stringify({ warmupCalls, samples: stats.samples }));`,
+      ],
+      { encoding: 'utf8', timeout: 30_000 }
+    );
+    expect(output.status, output.stderr || output.error?.message).toBe(0);
+    expect(JSON.parse(output.stdout)).toEqual({
+      warmupCalls: scenario.warmupCalls,
+      samples: [150e6],
+    });
+  });
+
+  it.each([
     ['early Maglev', ['--no-concurrent-recompilation', '--invocation-count-for-maglev=1']],
     ['disabled OSR', ['--no-use-osr', '--minimum-invocations-before-optimization=1000000']],
   ])('recognizes an executing Sparkplug frame with %s', (_name, flags) => {
