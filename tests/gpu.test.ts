@@ -48,7 +48,7 @@ bench('encode', async function* ({ gpu }) {
     pass.setBindGroup(0, bind);
     pass.dispatchWorkgroups(4096);
     pass.end();
-    device.queue.submit([encoder.finish()]);
+    return encoder.finish();
   };
 });
 bench.gpu('alloc', function* ({ device }) {

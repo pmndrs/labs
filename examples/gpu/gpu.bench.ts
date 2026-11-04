@@ -49,7 +49,10 @@ group('blur', () => {
     };
   });
 
-  // CPU time to encode and submit the same dispatch
+  // CPU time to encode the dispatch into a command buffer. Nothing here
+  // waits for the GPU, so nothing is submitted either. A compiled loop
+  // submits faster than the GPU process can take, and the queue backs up
+  // behind the measurement.
   bench('encode', async function* ({ gpu }) {
     const device = await gpu;
     const { pipeline, bind } = build(device, blur(16));
@@ -60,7 +63,7 @@ group('blur', () => {
       pass.setBindGroup(0, bind);
       pass.dispatchWorkgroups(4096);
       pass.end();
-      device.queue.submit([encoder.finish()]);
+      return encoder.finish();
     };
   });
 

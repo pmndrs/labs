@@ -105,6 +105,38 @@ describe('observed optimization tiers', () => {
     }
   );
 
+  it.each(
+    runtimes.filter(
+      ({ runtime, available }) => available && runtime !== 'bun' && runtime !== 'webkit'
+    )
+  )(
+    'compiles a workload whose timings never agree, and the loop around it, on $runtime',
+    { timeout: 70_000 },
+    ({ runtime, extra }) => {
+      // Alternating costs keep consecutive warm-up windows apart by far more
+      // than the tolerance, so agreement never ends the warm-up and the budget does
+      const stats = run(
+        runtime,
+        extra,
+        `import { bench } from '@pmndrs/labs';
+      let flip = 0;
+      bench('jitter', () => {
+        let sum = 0;
+        const n = (flip ^= 1) ? 200 : 2000;
+        for (let i = 0; i < n; i++) sum += Math.sqrt(i);
+        return sum;
+      });`
+      );
+      expect(stats.optimization?.mode).toBe('prepared');
+      expect(stats.optimization!.workload.map((sample) => sample?.tier)).toEqual(
+        Array(3).fill('TurboFan')
+      );
+      expect(stats.optimization!.harness!.map((sample) => sample?.tier)).toEqual(
+        Array(3).fill('TurboFan')
+      );
+    }
+  );
+
   it('prepares TurboFan in the pilot and each fresh worker even with delayed natural tiering', () => {
     const stats = run('node', {
       nodeFlags: [

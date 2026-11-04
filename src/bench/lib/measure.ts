@@ -301,9 +301,12 @@ export async function benchFn(fn: (...args: any[]) => any, opts: any = {}): Prom
     )
       await warmCalls(warmup.iterations);
     single = warmup.single;
-    if (!opts.manual && prepared && now() < warmup.deadline) {
-      if (opts.batch_samples) await warmCalls(opts.batch_samples);
-      if (now() < warmup.deadline && compiler?.compile(fn)) {
+    // The budget bounds the agreement loop, not the compile, which is a
+    // synchronous millisecond. Jittery workloads spend the whole budget
+    // without agreeing and still deserve the top tier.
+    if (!opts.manual && prepared) {
+      if (opts.batch_samples && now() < warmup.deadline) await warmCalls(opts.batch_samples);
+      if (compiler?.compile(fn)) {
         requestedTurboFan = true;
         await warmCalls(1);
         single = (await warmCalls(1)) ?? warmup.single;
@@ -609,8 +612,9 @@ export async function benchFn(fn: (...args: any[]) => any, opts: any = {}): Prom
         opts.warmup_samples,
         now() + opts.warmup_settle
       );
-      const preparedLoop =
-        verifiedTurboFan && now() < samplingWarmup.deadline && compiler?.prepare(loop);
+      // The loop is labs' own code and compiles whatever tier the workload
+      // reached, inlining it as it stands
+      const preparedLoop = compiler?.prepare(loop);
       // Prime entry-path feedback before the hot loop can tier up through OSR.
       for (let i = 0; i < 3 && now() < samplingWarmup.deadline; i++) {
         await run(true, 0);
@@ -659,13 +663,7 @@ export async function benchFn(fn: (...args: any[]) => any, opts: any = {}): Prom
       // Prime the recording transition without executing benchmark calls.
       await run(true, 0, settle);
       harness = readHarness();
-      if (
-        preparedLoop &&
-        optimization &&
-        now() < samplingWarmup.deadline &&
-        compiler?.compile(loop) &&
-        now() < samplingWarmup.deadline
-      ) {
+      if (preparedLoop && optimization && compiler?.compile(loop)) {
         await run(true, 1);
         harness = readHarness();
         workload = observeWorkload(optimization.tier(fn), now());

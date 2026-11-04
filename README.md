@@ -327,7 +327,7 @@ group('my-group @mytag', () => {
 
 ## GPU benches
 
-`bench.gpu` is a bench timed on the GPU. Its generator receives the WebGPU device and yields a pass, which labs times with timestamp queries. CPU work that uses the GPU, such as encoding or shader compilation, is an ordinary `bench` that awaits `gpu` from its state, and keeps the CPU clock.
+`bench.gpu` is a bench timed on the GPU. Its generator receives the WebGPU device and yields a pass, which labs times with timestamp queries. CPU work that uses the GPU, such as encoding or shader compilation, is an ordinary `bench` that awaits `gpu` from its state, and keeps the CPU clock. Such a bench never waits for the GPU, so it should not submit: a compiled loop submits faster than the GPU process can take, and the queue backs up behind the measurement. Encode into a command buffer and return it.
 
 ```ts
 import { bench } from '@pmndrs/labs'
