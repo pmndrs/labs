@@ -106,7 +106,7 @@ describe('GPU bench reporting', () => {
     const run = { name: 'dispatch', args: {}, stats: gpuStats(medians, rates) };
     const status = runStatus(trial as any, run as any, undefined, 0.05);
     expect(status.problem).toBe('gpu-clock');
-    expect(status.message).toBe('GPU clock shifted in 3 of 6 blocks');
+    expect(status.message).toBe('GPU clock shifted (3/6)');
     expect(status.advice).toBe('free the GPU or lengthen blocks');
   });
 
@@ -139,7 +139,7 @@ describe('GPU bench reporting', () => {
       printReportBox({ envData: [], blocks: 6, minDelta: 0.05, diagnostics })
     );
     expect(box.some((line) => line.includes('✔ Stable GPU clock:'))).toBe(true);
-    expect(box.some((line) => line.includes('across 6 GPU blocks'))).toBe(true);
+    expect(box.some((line) => line.includes('2.0% drift across 6 blocks.'))).toBe(true);
 
     const unstable = { ...emptyDiagnostics(), gpuRates: [1, 0.25, 1, 0.25] };
     const warned = captureReport(() =>

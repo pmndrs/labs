@@ -167,11 +167,12 @@ export function printReportBox(input: ReportInput): void {
   }
   if (diagnostics.gpuRates.length > 0) {
     const drift = gpuRateDrift(diagnostics.gpuRates);
-    const detail = `Probe readings varied ${(drift * 100).toFixed(1)}% across ${diagnostics.gpuRates.length} GPU blocks.`;
+    const detail = `${(drift * 100).toFixed(1)}% drift across ${diagnostics.gpuRates.length} blocks.`;
     if (drift > 0.05) {
       lines.push(`${YELLOW}⚠ Unstable GPU clock:${RESET} ${DIM}${detail}${RESET}`);
-      lines.push(`  ${DIM}The GPU clock climbs under load and falls when idle.${RESET}`);
-      lines.push(`  ${DIM}Free the GPU or lengthen blocks.${RESET}`);
+      lines.push(
+        `  ${DIM}It climbs under load and falls when idle. Free the GPU or lengthen blocks.${RESET}`
+      );
     } else {
       lines.push(`${GREEN}✔ Stable GPU clock:${RESET} ${DIM}${detail}${RESET}`);
     }
