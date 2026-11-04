@@ -243,5 +243,6 @@ describe('adaptive warmup', () => {
     expect(warmupCalls).toBeGreaterThan(3);
     expect(trial.runs[0].stats?.plan).toEqual(plan);
     expect(trial.runs[0].stats?.p50).toBe(1_000);
+    expect(trial.runs[0].stats?.optimization?.natural).toBeUndefined();
   });
 });

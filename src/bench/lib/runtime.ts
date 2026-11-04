@@ -118,7 +118,8 @@ export const now: () => number = (() => {
   try {
     const _now = performance.now.bind(performance);
     _now();
-    return () => 1e6 * _now();
+    // Fractional rounding noise can deoptimize a loop warmed with integer nanoseconds.
+    return () => Math.round(1e6 * _now());
   } catch {
     return () => 1e6 * Date.now();
   }

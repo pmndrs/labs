@@ -1,4 +1,5 @@
 import type { OptimizationSample, Stats } from '../types.ts';
+import { samplingTiers } from '../diagnostics.ts';
 import { median } from '../../stats.ts';
 import { formatNs } from '../../utils/units.ts';
 
@@ -23,11 +24,17 @@ export function formatOptimization(
     .join(' · ');
 }
 
-/** Interpret pre-sampling entry tiers without assuming that the workload was inlined. */
+/** Describe verified sampling outcomes and available entry-tier diagnostics. */
 export function optimizationRows(
   stats: Pick<Stats, 'kind' | 'optimization' | 'plan' | 'warmup'>
 ): Array<{ label: string; value: string }> {
   const rows: Array<{ label: string; value: string }> = [];
+  const tiers = samplingTiers(stats.optimization);
+  if (stats.optimization?.mode === 'prepared' || tiers.length > 1) {
+    const tier = tiers.length > 1 ? 'Mixed' : tiers[0];
+    const time = stats.warmup ? formatNs(stats.warmup.time) : undefined;
+    return tier || time ? [{ label: 'warmup', value: [tier, time].filter(Boolean).join(' ') }] : [];
+  }
   if (stats.optimization?.mode === 'natural') {
     const { benchmark, workload, harness } = stats.optimization;
     const mode =

@@ -8,7 +8,7 @@ import * as boxplotFmt from './format/boxplot.ts';
 import * as barplotFmt from './format/barplot.ts';
 import * as lineplotFmt from './format/lineplot.ts';
 import { isAssertionError, type Context, type GcMode, type Trial } from './types.ts';
-import { isLikelyOptimizedOut, lateOptimizationWarning } from './diagnostics.ts';
+import { isLikelyOptimizedOut, samplingWarning } from './diagnostics.ts';
 
 export interface RenderedTrial {
   highlight: false | string | null;
@@ -459,7 +459,7 @@ export function renderReport(
             }
           }
         }
-        const warning = lateOptimizationWarning(r.stats?.optimization);
+        const warning = samplingWarning(r.stats)?.message;
         if (warning)
           print(opts.colors ? `${ansi.yellow}  ⚠ ${warning}${ansi.reset}` : `  ⚠ ${warning}`);
       }

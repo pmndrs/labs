@@ -5,6 +5,7 @@ import { dollar_vm } from './runtime.ts';
 export const optimization:
   | {
       tier(fn: Function): OptimizationTier | undefined;
+      turboFan?: { prepare(fn: Function): boolean; compile(fn: Function): boolean };
       frame?: string;
     }
   | undefined = (() => {
@@ -41,29 +42,71 @@ export const optimization:
     const tier = new Function('fn', `return ${source}`) as (
       fn: Function
     ) => OptimizationTier | undefined;
+    function request(source: string) {
+      try {
+        // oxlint-disable-next-line typescript/no-implied-eval
+        const invoke = new Function('fn', source) as (fn: Function) => boolean | undefined;
+        return (fn: Function) => {
+          if (!isScript(fn)) return false;
+          try {
+            return invoke(fn) !== false;
+          } catch {
+            return false;
+          }
+        };
+      } catch {
+        return undefined;
+      }
+    }
+    const prepare = request(
+      'if (!%IsTurbofanEnabled() || %IsAsmWasmCode(fn)) return false; %EnsureFeedbackVectorForFunction(fn);'
+    );
+    // The synchronous compiler can decline a function with optimization disabled.
+    const compile = request('if (!%ActiveTierIsTurbofan(fn)) %BenchTurbofan(fn, 1);');
     let frame: string | undefined;
     try {
-      // Derive frame masks from a non-looping probe rather than fixed enum values.
+      // Separate frame markers from temporary compiler state.
       // oxlint-disable-next-line typescript/no-implied-eval
       const status = new Function('fn', 'return %GetOptimizationStatus(fn)');
-      // oxlint-disable-next-line typescript/no-implied-eval
-      const probe = new Function(
-        'return function probe() { return %GetOptimizationStatus(probe); }'
-      )();
       const masks = new Map<OptimizationTier, number>();
-      for (let i = 0; i < 512; i++) {
-        const before = tier(probe);
-        const active = probe();
-        const after = tier(probe);
-        const mask = active & ~status(probe);
-        if (before && before === after && mask) masks.set(before, mask);
+      for (const [name, body, setup] of [
+        ['Ignition', '', '%NeverOptimizeFunction(fn);'],
+        ['Sparkplug', '%BaselineOsr();', '%NeverOptimizeFunction(fn);'],
+        [
+          'Maglev',
+          '',
+          'if (%IsMaglevEnabled()) { %PrepareFunctionForOptimization(fn); fn(); %OptimizeMaglevOnNextCall(fn); }',
+        ],
+        ['Natural', '', ''],
+      ]) {
+        if (name === 'Natural' && masks.has('Sparkplug')) continue;
+        try {
+          // oxlint-disable-next-line typescript/no-implied-eval
+          const probe = new Function(
+            `return function probe${name}() { ${body} return %GetOptimizationStatus(probe${name}); }`
+          )();
+          // oxlint-disable-next-line typescript/no-implied-eval
+          new Function('fn', setup)(probe);
+          probe();
+          for (let i = 0; i < (name === 'Natural' ? 512 : 8); i++) {
+            const before = tier(probe);
+            const inactive = status(probe);
+            const active = probe();
+            const after = status(probe);
+            const mask = active & ~(inactive | after);
+            if (before && before === tier(probe) && mask)
+              masks.set(before, (masks.get(before) ?? mask) & mask);
+          }
+        } catch {}
       }
       frame = `%CurrentFrameIsTurbofan() ? 'TurboFan' : ${[...masks]
         .filter(([name]) => name !== 'TurboFan')
-        .map(
-          ([name, mask]) =>
-            `(%GetOptimizationStatus(%GetFunctionForCurrentFrame()) & ${mask}) === ${mask} ? '${name}' : `
-        )
+        .map(([name, mask]) => {
+          for (const [other, bits] of masks) if (other !== name) mask &= ~bits;
+          return mask
+            ? `(%GetOptimizationStatus(%GetFunctionForCurrentFrame()) & ${mask}) === ${mask} ? '${name}' : `
+            : '';
+        })
         .join('')}undefined`;
       // oxlint-disable-next-line typescript/no-implied-eval
       new Function(`return ${frame}`);
@@ -72,6 +115,7 @@ export const optimization:
     }
     return {
       frame,
+      turboFan: prepare && compile ? { prepare, compile } : undefined,
       tier(fn) {
         return isScript(fn) ? tier(fn) : undefined;
       },

@@ -1,5 +1,5 @@
 import { execFileSync, spawn } from 'node:child_process';
-import { readFileSync, rmSync, writeFileSync, writeSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync, writeSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { runBrowser } from '../browser-runner.ts';
@@ -11,6 +11,7 @@ import { _print } from './lib/runtime.ts';
 import { runTrialAt } from './main.ts';
 import type { ProgressEvent } from '../cli/progress.ts';
 import type { BlockPlan, GcStats, Stats, Trial } from './types.ts';
+import { observeNodeDeopts } from './node-deopts.ts';
 import { mergeGc } from './lib/gc.ts';
 import { colors } from './env.ts';
 import { renderReport } from './render.ts';
@@ -107,7 +108,13 @@ async function childMain(index: number): Promise<void> {
     const plans = process.env.LABS_BLOCK_PLANS
       ? (JSON.parse(process.env.LABS_BLOCK_PLANS) as BlockPlan[])
       : undefined;
-    const trial = await runTrialAt(index, parseTuneEnv(), plans);
+    const tune = parseTuneEnv();
+    const trace = process.env.LABS_DEOPT_DIR;
+    const trial = await runTrialAt(
+      index,
+      trace ? { ...tune, $deopts: observeNodeDeopts(trace) } : tune,
+      plans
+    );
     writeFileSync(
       process.env.LABS_RESULT_FILE!,
       JSON.stringify({ trial, calibrationRate }, errorReplacer)
@@ -131,10 +138,22 @@ async function runTrialChild(
   observeGc = true
 ): Promise<{ trial: Trial; calibrationRate: number }> {
   const resultFile = join(tmpdir(), `labs-trial-${process.pid}-${index}-${childSeq++}.json`);
+  // Preserve the destinations of explicitly requested V8 logs and traces.
+  const trace =
+    !(globalThis as any).Bun &&
+    process.execArgv.includes('--allow-natives-syntax') &&
+    !process.execArgv.some((flag) =>
+      /^--(?:no-)?(?:log(?:file)?(?:-|=|$)|redirect-code-traces|trace-(?:deopt|opt)|print-opt-code)/.test(
+        flag
+      )
+    )
+      ? mkdtempSync(join(tmpdir(), 'labs-deopt-'))
+      : undefined;
   try {
     const env = {
       ...process.env,
       ...extraEnv,
+      ...(trace ? { LABS_DEOPT_DIR: trace } : {}),
       LABS_ONLY_INDEX: String(index),
       LABS_RESULT_FILE: resultFile,
     };
@@ -150,7 +169,18 @@ async function runTrialChild(
       );
       await observeBunGc(child);
     } else {
-      execFileSync(process.execPath, [...process.execArgv, process.argv[1]], {
+      const flags = trace
+        ? [
+            '--log-code',
+            '--no-log-source-code',
+            '--log-deopt',
+            '--logfile-per-isolate',
+            '--logfile=' + join(trace, 'code.log'),
+            '--redirect-code-traces',
+            '--redirect-code-traces-to=' + join(trace, 'bailouts.txt'),
+          ]
+        : [];
+      execFileSync(process.execPath, [...process.execArgv, ...flags, process.argv[1]], {
         stdio: ['ignore', 'inherit', 'inherit'],
         env,
       });
@@ -161,6 +191,7 @@ async function runTrialChild(
       cause: err,
     });
   } finally {
+    if (trace) rmSync(trace, { recursive: true, force: true });
     rmSync(resultFile, { force: true });
   }
 }
@@ -225,14 +256,21 @@ function mergeStats(list: Stats[], calibrationRates: number[]): Stats {
     ...(list.some((stats) => stats.optimization)
       ? {
           optimization: {
-            ...(list.every((stats) => stats.optimization?.mode === 'natural')
-              ? { mode: 'natural' as const }
+            ...(list.every((stats) => stats.optimization?.mode === list[0].optimization?.mode)
+              ? { mode: list[0].optimization?.mode }
               : {}),
+            ...(list[0].optimization?.natural ? { natural: list[0].optimization.natural } : {}),
             ...(list.some((stats) => stats.optimization?.benchmark)
               ? { benchmark: list.flatMap((stats) => stats.optimization?.benchmark ?? [null]) }
               : {}),
             ...(list.some((stats) => stats.optimization?.benchmarkEnd)
               ? { benchmarkEnd: list.flatMap((stats) => stats.optimization?.benchmarkEnd ?? [null]) }
+              : {}),
+            ...(list.every((s) => s.optimization?.target === 'TurboFan')
+              ? { target: 'TurboFan' as const }
+              : {}),
+            ...(list.some((s) => s.optimization?.deoptimized)
+              ? { deoptimized: list.flatMap((s) => s.optimization?.deoptimized ?? [null]) }
               : {}),
             workload: list.flatMap((stats) => stats.optimization?.workload ?? [null]),
             ...(list.some((stats) => stats.optimization?.harness)
