@@ -168,6 +168,9 @@ export async function benchGenerator(gen: (...args: any[]) => any, opts: any = {
   }
 
   const stats = await benchFn($fn, opts);
+  // Tier records describe the JavaScript that submitted the passes, not the
+  // shader the GPU ran, so GPU time carries none
+  if (gpuTimed) delete stats.optimization;
   const allocated = meter?.stop() ?? 0;
   const vram = gpuTimed
     ? { resident, perPass: (allocated - resident - harness) / Math.max(1, passes) }

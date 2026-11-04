@@ -248,27 +248,27 @@ describe('run report', () => {
         .find((line) => line.trimEnd().endsWith('20.00 ms'));
       expect(heading).toMatch(/Mixed +20.00 ms/);
       expect(heading).not.toMatch(/Maglev|TurboFan|×/);
-      expect(text).toContain('Maglev ×4 · Maglev → TurboFan ×1');
-      expect(text.indexOf('Maglev ×4')).toBeLessThan(text.indexOf('Maglev → TurboFan ×1'));
+      expect(text).toContain('Maglev (4/5)  Maglev → TurboFan (1/5)');
+      expect(text.indexOf('Maglev (4/5)')).toBeLessThan(text.indexOf('Maglev → TurboFan (1/5)'));
     }
     expect(runJson(result, defineConfig({ benchDir: '.' }), true).benches[0]).toMatchObject({
       status: 'warning',
       problem: 'mixed-tiers',
-      message: 'Maglev ×4 · Maglev → TurboFan ×1',
+      message: 'Maglev (4/5)  Maglev → TurboFan (1/5)',
     });
     const log = vi.spyOn(console, 'log').mockImplementation(() => {});
     try {
       replayReport(result, defineConfig({ benchDir: '.' }));
       const report = stripVTControlCharacters(log.mock.calls.flat().join('\n'));
       expect(report).toMatch(/warmup +Mixed 20.00 ms/);
-      expect(report).toContain('⚠ Maglev ×4 · Maglev → TurboFan ×1');
+      expect(report).toContain('⚠ Maglev (4/5)  Maglev → TurboFan (1/5)');
     } finally {
       log.mockRestore();
     }
     stats.varyingOutput = true;
     const warning = render(result, 120, 0, 40).lines.join('\n');
     expect(warning).toContain('results change between runs');
-    expect(warning).toContain('Maglev ×4 · Maglev → TurboFan ×1');
+    expect(warning).toContain('Maglev (4/5)  Maglev → TurboFan (1/5)');
     stats.varyingOutput = false;
     stats.optimization.benchmarkEnd = ['TurboFan', null, null, null, null];
     const text = render(result, 100, 0, 40, true).lines.join('\n');
@@ -365,7 +365,7 @@ describe('run report', () => {
     stats.optimization.deoptimized!.push(false);
     const mixed = render(result, 105, 0, 40, true).lines.join('\n');
     expect(mixed).toContain(YELLOW + 'Mixed');
-    expect(mixed).toContain('TurboFan (deopt) ×1 · TurboFan ×1');
+    expect(mixed).toContain('TurboFan (deopt) (1/2)  TurboFan (1/2)');
   });
 
   it('keeps an unverified workload tier out of loop deopt warnings', () => {
@@ -420,12 +420,12 @@ describe('run report', () => {
     };
     const text = render(result, 100, 0, 40, true).lines.join('\n');
     expect(text).toContain(YELLOW + 'Mixed');
-    expect(text).toContain('Maglev ×1 · TurboFan ×1');
+    expect(text).toContain('Maglev (1/2)  TurboFan (1/2)');
     expect(text).not.toContain('→');
     expect(runJson(result, defineConfig({ benchDir: '.' }), true).benches[0]).toMatchObject({
       status: 'warning',
       problem: 'mixed-tiers',
-      message: 'Maglev ×1 · TurboFan ×1',
+      message: 'Maglev (1/2)  TurboFan (1/2)',
     });
   });
 

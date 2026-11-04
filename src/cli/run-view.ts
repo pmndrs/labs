@@ -38,6 +38,8 @@ type RunEntry = {
   color: string;
   message: string;
   advice: string;
+  /** Verified tier outcomes per block when they differ, shown under the status. */
+  tiers?: string;
 };
 
 /** Blocks of a GPU bench that ran at a lower clock than the fastest block, or changed clock inside. */
@@ -99,8 +101,7 @@ export function runStatus(
       message: 'likely optimized out',
       advice: 'return the result',
     };
-  // Tier warnings describe the CPU sampling loop, which GPU time does not run through
-  const warning = stats.kind === 'gpu' ? undefined : samplingWarning(stats);
+  const warning = samplingWarning(stats);
   if (warning && !stats.varyingOutput) return { symbol: '⚠', ...warning, advice: '' };
   if (stats.kind === 'gpu') {
     // The GPU clock settles at one of a few levels per process and can move
@@ -158,9 +159,7 @@ function entries(result: SavedResult, config: LabsConfig): RunEntry[] {
           config.minDelta
         );
         const tiers = samplingTiers(run.error === undefined ? run.stats?.optimization : undefined);
-        let summary = problem === 'late-optimization' || problem === 'tier-drop' ? '' : message;
-        if (tiers.length > 1 && problem !== 'mixed-tiers')
-          summary = [summary, tiers.join(' · ')].filter(Boolean).join(' · ');
+        const summary = problem === 'late-optimization' || problem === 'tier-drop' ? '' : message;
         return {
           file: file.file,
           group: trial.groupName ?? '',
@@ -171,6 +170,7 @@ function entries(result: SavedResult, config: LabsConfig): RunEntry[] {
           color: symbol === '✗' ? RED : symbol === '⚠' ? YELLOW : GREEN,
           message: summary,
           advice,
+          ...(tiers.length > 1 && problem !== 'mixed-tiers' ? { tiers: tiers.join('  ') } : {}),
         };
       })
     )
@@ -300,6 +300,7 @@ function details(entry: RunEntry | undefined, width: number, state: TerminalView
     for (const message of wrapText(entry.message, width)) canvas.put(y++, 0, message, entry.color);
     for (const line of wrapText(advice.trim(), width)) canvas.put(y++, 0, line, GRAY);
   }
+  if (entry.tiers) for (const line of wrapText(entry.tiers, width)) canvas.put(y++, 0, line, YELLOW);
   if (!stats) return canvas.lines(colors);
   y++;
   const range = (

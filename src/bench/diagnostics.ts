@@ -42,11 +42,11 @@ export function lateOptimizationWarning(optimization?: OptimizationStats): strin
 export function samplingTiers(optimization: Stats['optimization']) {
   const groups = new Map<string, number>();
   const observed = new Set<string>();
-  for (
-    let index = 0;
-    index < Math.max(optimization?.benchmark?.length ?? 0, optimization?.benchmarkEnd?.length ?? 0);
-    index++
-  ) {
+  const total = Math.max(
+    optimization?.benchmark?.length ?? 0,
+    optimization?.benchmarkEnd?.length ?? 0
+  );
+  for (let index = 0; index < total; index++) {
     const start = optimization?.benchmark?.[index]?.tier;
     const end = optimization?.benchmarkEnd?.[index];
     const tier = start ?? end;
@@ -59,7 +59,9 @@ export function samplingTiers(optimization: Stats['optimization']) {
     groups.set(label, (groups.get(label) ?? 0) + 1);
   }
   if (groups.size > 1)
-    return [...groups].sort((a, b) => b[1] - a[1]).map(([label, count]) => `${label} ×${count}`);
+    return [...groups]
+      .sort((a, b) => b[1] - a[1])
+      .map(([label, count]) => `${label} (${count}/${total})`);
   const summary =
     [...groups.keys()].find((label) => label.includes('deopt')) ??
     lateOptimizationWarning(optimization) ??
@@ -71,7 +73,7 @@ export function samplingTiers(optimization: Stats['optimization']) {
 export function samplingWarning(stats?: Pick<Stats, 'optimization'>) {
   const optimization = stats?.optimization;
   const tiers = samplingTiers(optimization);
-  if (tiers.length > 1) return { problem: 'mixed-tiers', message: tiers.join(' · ') } as const;
+  if (tiers.length > 1) return { problem: 'mixed-tiers', message: tiers.join('  ') } as const;
   if (optimization?.deoptimized?.includes('workload'))
     return { problem: 'deoptimized', message: 'TurboFan deoptimized during sampling' } as const;
   if (optimization?.deoptimized?.includes('harness'))
