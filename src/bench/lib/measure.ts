@@ -206,7 +206,7 @@ export async function benchFn(fn: (...args: any[]) => any, opts: any = {}): Prom
   const now: () => number = opts.now;
   const consume = opts.$consume ?? do_not_optimize;
   const started = now();
-  const warmup = createWarmup(
+  let warmup = createWarmup(
     started + opts.warmup_time,
     opts.warmup_samples,
     started + opts.warmup_settle
@@ -226,17 +226,6 @@ export async function benchFn(fn: (...args: any[]) => any, opts: any = {}): Prom
 
     for (let o = 0; o < params.length; o++) {
       $p[o] = await opts.params[o]();
-    }
-
-    // A self-timed function is its own harness. A few calls give it feedback,
-    // then it is compiled at the top tier where V8 allows, so every block
-    // runs it at the same speed.
-    if (opts.manual && compiler?.prepare(fn)) {
-      for (let i = 0; i < 16; i++) {
-        for (let o = 0; o < params.length; o++) $p[o] = await opts.params[o]();
-        await fn(...$p);
-      }
-      compiler.compile(fn);
     }
 
     observeWorkload = optimizationClock(now());
@@ -260,7 +249,7 @@ export async function benchFn(fn: (...args: any[]) => any, opts: any = {}): Prom
 
     if (opts.after) await opts.after();
 
-    recordWarmup(warmup, t1 - t0, 1, opts, now());
+    recordWarmup(warmup, opts.manual ? (first as number) : t1 - t0, 1, opts, now());
     workload = observeWorkload(optimization?.tier(fn), now());
     async function warmCalls(limit: number) {
       let duration = 0;
@@ -273,7 +262,7 @@ export async function benchFn(fn: (...args: any[]) => any, opts: any = {}): Prom
         const t0 = now();
         const value = async ? await fn(...$p) : fn(...$p);
         if (!opts.manual && value !== void 0) consume(value);
-        duration += now() - t0;
+        duration += opts.manual ? value : now() - t0;
         if (opts.after) await opts.after();
         iterations++;
       }
@@ -286,13 +275,21 @@ export async function benchFn(fn: (...args: any[]) => any, opts: any = {}): Prom
       opts.warmup_time > 0 &&
       now() < warmup.deadline &&
       compiler?.prepare(fn);
+    // Prepare self-timed submission code before settling its returned timings.
+    if (opts.manual && prepared) {
+      await warmCalls(15);
+      if (now() < warmup.deadline && compiler?.compile(fn)) {
+        requestedTurboFan = true;
+        warmup = createWarmup(warmup.deadline, opts.warmup_samples, warmup.settled);
+      }
+    }
     while (
       !isWarmupDone(warmup, opts, now()) &&
-      !(prepared && (warmup.stable || workload?.tier === 'TurboFan'))
+      !(prepared && !opts.manual && (warmup.stable || workload?.tier === 'TurboFan'))
     )
       await warmCalls(warmup.iterations);
     single = warmup.single;
-    if (prepared && now() < warmup.deadline) {
+    if (!opts.manual && prepared && now() < warmup.deadline) {
       if (opts.batch_samples) await warmCalls(opts.batch_samples);
       if (now() < warmup.deadline && compiler?.compile(fn)) {
         requestedTurboFan = true;
@@ -700,7 +697,7 @@ export async function benchFn(fn: (...args: any[]) => any, opts: any = {}): Prom
         }
       }
       benchmark = readBenchmark();
-      if (requestedTurboFan && benchmark?.tier === 'TurboFan') optimizedAt = now();
+      if (!opts.manual && requestedTurboFan && benchmark?.tier === 'TurboFan') optimizedAt = now();
       deopts?.start();
       observation.start();
     }
