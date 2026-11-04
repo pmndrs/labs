@@ -46,7 +46,7 @@ export interface OptimizationSample {
   time: number;
 }
 
-/** Entry tiers per block, with elapsed ns from that warmup phase's start. Null means unavailable. */
+/** Workload and sampling-body entry tiers per block, with elapsed ns from warmup. Null means unavailable. */
 export interface OptimizationStats {
   workload: Array<OptimizationSample | null>;
   harness?: Array<OptimizationSample | null>;

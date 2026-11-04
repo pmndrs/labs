@@ -98,6 +98,85 @@ describe('observed optimization tiers', () => {
     }
   });
 
+  it.each(runtimes.filter(({ available }) => available))(
+    'observes the sampling body for an async workload on $runtime',
+    { timeout: 70_000 },
+    ({ runtime, extra, tier }) => {
+      const stats = run(
+        runtime,
+        extra,
+        `import { bench } from '@pmndrs/labs';
+        bench('work', async () => { await 0; let sum = 0; for (let i = 0; i < 300; i++) sum += Math.sqrt(i); return sum; });`
+      );
+      if (runtime === 'bun' || runtime === 'webkit') {
+        for (const sample of stats.optimization!.harness!) {
+          expect(['LLInt', 'Baseline', 'DFG', 'FTL']).toContain(sample?.tier);
+          expect(sample?.time).toBeGreaterThanOrEqual(0);
+        }
+        expect(stats.optimization!.workload).toEqual([null, null, null]);
+      } else {
+        for (const sample of stats.optimization!.harness!) expect(sample?.tier).toBe(tier);
+        for (const sample of stats.optimization!.workload) expect(sample?.tier).toBeTruthy();
+      }
+    }
+  );
+
+  it.skipIf(bun.status !== 0)(
+    'matches the actual async sampling frame rather than its wrapper',
+    () => {
+      const output = spawnSync(
+        bun.stdout.trim(),
+        [
+          '--eval',
+          `import { measure } from ${JSON.stringify(new URL('../src/bench/lib/measure.ts', import.meta.url).href)};
+        const recording = new Uint8Array(1);
+        let actual;
+        function now() {
+          if (recording[0] && !actual) {
+            const frame = $vm.codeBlockFor($vm.codeBlockForFrame(1));
+            if (frame?.startsWith('anonymous#')) actual = frame.match(/, (FTL|DFG|Baseline|LLInt)FunctionCall,/)?.[1];
+          }
+          return Bun.nanoseconds();
+        }
+        $vm.noInline(now);
+        const stats = await measure(async () => { await 0; let sum = 0; for (let i = 0; i < 300; i++) sum += Math.sqrt(i); return sum; }, {
+          now, gc: () => { recording[0] = 1; }, heap: false,
+          batch: true, batch_samples: 2048, min_cpu_time: 0.02e9,
+        });
+        console.log(JSON.stringify({ actual, reported: stats.optimization.harness[0] }));`,
+        ],
+        {
+          encoding: 'utf8',
+          timeout: 30_000,
+          env: { ...process.env, BUN_JSC_useDollarVM: '1' },
+        }
+      );
+      expect(output.status, output.stderr || output.error?.message).toBe(0);
+      const result = JSON.parse(output.stdout);
+      expect(result.actual).toBeTruthy();
+      expect(result.reported.tier).toBe(result.actual);
+    }
+  );
+
+  it.each(
+    runtimes.filter(
+      ({ available, runtime }) => available && (runtime === 'bun' || runtime === 'webkit')
+    )
+  )(
+    'observes the sampling body for a parameterized workload on $runtime',
+    { timeout: 70_000 },
+    ({ runtime, extra }) => {
+      const stats = run(
+        runtime,
+        extra,
+        `import { bench } from '@pmndrs/labs';
+        bench('work', function* () { yield { 0: () => 300, bench: (n) => { let sum = 0; for (let i = 0; i < n; i++) sum += Math.sqrt(i); return sum; } }; });`
+      );
+      for (const sample of stats.optimization!.harness!) expect(sample?.tier).toBe('FTL');
+      for (const sample of stats.optimization!.workload) expect(sample?.tier).toBeTruthy();
+    }
+  );
+
   it.skipIf(bun.status !== 0)('reports DFG when FTL is disabled in Bun', () => {
     const stats = run('bun', {
       bun: { executablePath: bun.stdout.trim(), env: { BUN_JSC_useFTLJIT: 'false' } },

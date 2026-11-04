@@ -1,11 +1,12 @@
 import type { OptimizationSample, OptimizationTier } from '../types.ts';
 import { dollar_vm } from './runtime.ts';
 
-/** The native entry tier installed for the function's next invocation. */
+/** Workload entry tiers and an in-frame probe for JSC's sampling body. */
 export const optimization:
   | {
       tier(fn: Function): OptimizationTier | undefined;
       highest: OptimizationTier;
+      frame?: string;
     }
   | undefined = (() => {
   const scripts = new WeakMap<Function, boolean>();
@@ -14,8 +15,10 @@ export const optimization:
   function isScript(fn: Function) {
     let script = scripts.get(fn);
     if (script === undefined) {
-      // Native tier queries require ordinary JavaScript functions.
-      script = !/\{\s*\[native code\]\s*\}$/.test(stringify.call(fn));
+      const source = stringify.call(fn);
+      // Async JSC handles identify the wrapper rather than the executing body.
+      script =
+        !/\{\s*\[native code\]\s*\}$/.test(source) && (!dollar_vm || !/^\s*async\b/.test(source));
       scripts.set(fn, script);
     }
     return script;
@@ -31,6 +34,7 @@ export const optimization:
           OptimizationTier | undefined;
       },
       highest: 'FTL',
+      frame: `$vm.ftlTrue() ? 'FTL' : $vm.dfgTrue() ? 'DFG' : $vm.baselineJITTrue() ? 'Baseline' : $vm.llintTrue() ? 'LLInt' : undefined`,
     };
   }
   try {

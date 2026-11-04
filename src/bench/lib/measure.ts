@@ -2,6 +2,7 @@ import type {
   GeneratorBench,
   MeasureOptions,
   OptimizationSample,
+  OptimizationTier,
   Snapshot,
   Stats,
 } from '../types.ts';
@@ -336,6 +337,9 @@ export async function benchFn(fn: (...args: any[]) => any, opts: any = {}): Prom
   const observation = new GcScope(observer);
   const awaitGcOutsideLoop = !opts.heap;
   const after = !opts.after ? '' : 'await $after();';
+  const warmed = batch && opts.warmup_samples > 0 && !opts.$counters;
+  // Keep probe results outside the sampling loop's live locals.
+  const entry: { tier: OptimizationTier | undefined; at: number } = { tier: undefined, at: 0 };
 
   const loop: (...args: any[]) => Promise<any> = new AsyncFunction(
     '$fn',
@@ -353,7 +357,10 @@ export async function benchFn(fn: (...args: any[]) => any, opts: any = {}): Prom
     '$minSamples',
     '$minTime',
     '$warm',
+    '$entry',
+    '$vm',
     `
+    ${warmed && optimization?.frame ? `$entry.tier = ${optimization.frame}; $entry.at = $now();` : ''}
     ${!opts.$counters ? '' : 'let _hc = false;'}
     ${!opts.$counters ? '' : 'try { $counters.init(); _hc = true; } catch {}'}
 
@@ -434,13 +441,19 @@ export async function benchFn(fn: (...args: any[]) => any, opts: any = {}): Prom
       summarizeSamples,
       minSamples,
       warm ? 0 : opts.min_cpu_time,
-      warm
+      warm,
+      entry,
+      dollar_vm
     );
 
   try {
-    const warmed = batch && opts.warmup_samples > 0 && !opts.$counters;
     const observeHarness = optimizationClock(now());
     let harness: OptimizationSample | null = null;
+    function readHarness() {
+      return optimization?.frame
+        ? observeHarness(entry.tier, entry.at)
+        : observeHarness(optimization?.tier(loop), now());
+    }
     // The batched loop is fresh code that inlines the workload. Entered once,
     // it would tier up through on-stack replacement while recording, with the
     // engine dropping back to slower code at every batch for a while. Warm
@@ -448,7 +461,7 @@ export async function benchFn(fn: (...args: any[]) => any, opts: any = {}): Prom
     // be told, it then compiles the loop at the top tier for the recorded
     // pass. Elsewhere the passes repeat until their timings agree.
     if (warmed) {
-      const loopWarmup: WarmupState = createWarmup(
+      let loopWarmup: WarmupState = createWarmup(
         now() + opts.warmup_time,
         opts.warmup_samples,
         now() + opts.warmup_settle
@@ -456,16 +469,17 @@ export async function benchFn(fn: (...args: any[]) => any, opts: any = {}): Prom
       force_optimize?.prepare(loop);
       for (let i = 0; i < 3; i++) {
         await run(true, 0);
-        harness = observeHarness(optimization?.tier(loop), now());
+        harness = readHarness();
       }
-      let tier = optimization?.tier(loop);
       let wait: number | undefined;
       while (now() < loopWarmup.deadline) {
-        const entered = tier;
+        const previousTier = harness?.tier;
         const pass = await run(true);
-        tier = optimization?.tier(loop);
-        harness = observeHarness(tier, now());
+        harness = readHarness();
         workload = observeWorkload(optimization?.tier(fn), now());
+        if (optimization?.frame && harness?.tier !== previousTier) {
+          loopWarmup = createWarmup(loopWarmup.deadline, opts.warmup_samples, loopWarmup.settled);
+        }
         recordWarmup(loopWarmup, pass, 1, opts);
         if (wait === undefined) {
           wait = dollar_vm ? (2e6 * pass) / batchSamples : 0;
@@ -473,23 +487,23 @@ export async function benchFn(fn: (...args: any[]) => any, opts: any = {}): Prom
         }
         if (
           force_optimize ||
-          (loopWarmup.stable &&
-            (!optimization || (entered === optimization.highest && tier === optimization.highest)))
+          (loopWarmup.stable && (!optimization || harness?.tier === optimization.highest))
         )
           break;
       }
       if (force_optimize) {
         force_optimize.next(loop);
         await run(true, 0);
-        harness = observeHarness(optimization?.tier(loop), now());
+        harness = readHarness();
       }
     }
     workload = observeWorkload(optimization?.tier(fn), now());
     if (opts.gc) opts.gc();
-    if (warmed) harness = observeHarness(optimization?.tier(loop), now());
+    if (warmed && !optimization?.frame) harness = readHarness();
     observation.start();
 
     const recorded = await run(false);
+    if (warmed && optimization?.frame) harness = readHarness();
     const measured = {
       kind: 'fn' as const,
       debug: loop.toString(),
