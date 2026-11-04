@@ -117,6 +117,10 @@ export async function benchGenerator(gen: (...args: any[]) => any, opts: any = {
     if (n.value.compute) n.value = { ...n.value, time: computePass(device, n.value.compute) };
     else if (n.value.render) {
       n.value = { ...n.value, time: renderPass(device, n.value.render, n.value.draw) };
+    } else if (n.value.time) {
+      const time = n.value.time;
+      const counted = Object.assign(() => (counted.calls++, time()), { calls: 0 });
+      n.value = { ...n.value, time: counted };
     }
     gpuTimed = !!n.value.time;
   }
@@ -180,7 +184,7 @@ export async function benchGenerator(gen: (...args: any[]) => any, opts: any = {
   const vram = gpuTimed
     ? {
         resident,
-        perPass: (allocated - resident - harness) / Math.max(1, n.value.time.calls ?? 1),
+        perPass: (allocated - resident - harness) / Math.max(1, n.value.time.calls),
       }
     : undefined;
   const end = await g.next(first);

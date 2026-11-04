@@ -69,13 +69,17 @@ bench('compile', async function* ({ gpu, fresh }) {
 });`;
 
 describe('GPU benches', () => {
+  const runtimes = [
+    ['chrome', !!chrome, chrome ? { chrome: { executablePath: chrome } } : {}],
+    ['webkit', existsSync(webkit.executablePath()), {}],
+  ].filter(([, available]) => available) as Array<[string, boolean, Record<string, unknown>]>;
   let project: string;
 
   afterEach(() => {
     if (project) rmSync(project, { recursive: true, force: true });
   });
 
-  function setup(runtime: string, config: Record<string, unknown> = {}) {
+  function setup(runtime: string, config: Record<string, unknown> = {}, benches = source) {
     project = mkdtempSync(join(tmpdir(), `labs-gpu-${runtime}-`));
     writeFileSync(join(project, 'package.json'), '{"type":"module"}');
     writeFileSync(
@@ -90,7 +94,7 @@ describe('GPU benches', () => {
         ...config,
       })});`
     );
-    writeFileSync(join(project, 'gpu.bench.ts'), source);
+    writeFileSync(join(project, 'gpu.bench.ts'), benches);
     return spawnSync(
       process.execPath,
       [
@@ -105,12 +109,7 @@ describe('GPU benches', () => {
     );
   }
 
-  it.each(
-    [
-      ['chrome', !!chrome, chrome ? { chrome: { executablePath: chrome } } : {}],
-      ['webkit', existsSync(webkit.executablePath()), {}],
-    ].filter(([, available]) => available) as Array<[string, boolean, Record<string, unknown>]>
-  )(
+  it.each(runtimes)(
     'times passes on the GPU and the rest on the CPU in %s',
     { timeout: 120_000 },
     (runtime, _, extra) => {
@@ -149,6 +148,38 @@ describe('GPU benches', () => {
       expect(stats.compile.kind).toBe('yield');
       const compile = [...stats.compile.samples].sort((a, b) => a - b);
       expect(compile[compile.length >> 1]).toBeGreaterThan(1e5);
+    }
+  );
+
+  it.each(runtimes)(
+    'counts custom timer passes and runs their cleanup in %s',
+    { timeout: 120_000 },
+    (runtime, _, extra) => {
+      const output = setup(
+        runtime,
+        { ...extra, blocks: 2 },
+        `import { bench } from '@pmndrs/labs';
+        bench.gpu('custom', function* ({ device }) {
+          let pending = false;
+          yield {
+            time: async () => {
+              if (pending) throw new Error('previous pass was not cleaned up');
+              pending = true;
+              device.createBuffer({ size: 64, usage: GPUBufferUsage.STORAGE });
+              await device.queue.onSubmittedWorkDone();
+              return 100000;
+            },
+            after: () => { pending = false; },
+          };
+        });`
+      );
+      expect(output.status, output.stderr || output.error?.message).toBe(0);
+      const [bench] = JSON.parse(output.stdout).benches;
+      expect(bench.clock).toBe('gpu');
+      expect(bench.vramBytes).toEqual({ resident: 0, perPass: 64 });
+      const stats = loadResult(join(project, '.labs'), 'gpu').files[0].benchmarks[0].runs[0].stats!;
+      expect(stats.blocks!.medians).toHaveLength(2);
+      expect(stats.samples.every((sample) => sample === 100000)).toBe(true);
     }
   );
 
