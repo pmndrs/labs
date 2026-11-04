@@ -65,9 +65,9 @@ export function bench(nameOrFn: string | ((...args: any[]) => any), fn?: any): B
 }
 
 /**
- * A bench that uses the GPU. The generator receives the WebGPU device and a
- * shader cache buster. Yield `{ compute }` or `{ render, draw }` to time a pass
- * on the GPU, or a plain function to time CPU work such as encoding.
+ * A bench timed on the GPU. The generator receives the WebGPU device and a
+ * shader cache buster and yields `{ compute }` or `{ render, draw }` for a pass
+ * labs times with timestamp queries, or `{ time }` for its own GPU time.
  */
 bench.gpu = (name: string, gen: GpuGeneratorBench): B =>
   bench(name, gen as unknown as GeneratorBench).gpu();

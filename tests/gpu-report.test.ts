@@ -112,6 +112,21 @@ describe('GPU bench reporting', () => {
     expect(status.advice).toBe('');
   });
 
+  it('still reports changing output for a GPU bench', () => {
+    const run = {
+      name: 'dispatch',
+      args: {},
+      stats: {
+        ...gpuStats(
+          steady,
+          steady.map(() => 1)
+        ),
+        varyingOutput: true,
+      },
+    };
+    expect(runStatus(trial as any, run as any, undefined, 0.05).problem).toBe('nondeterministic');
+  });
+
   it('counts a block whose samples split between levels as shifted', () => {
     const spreads = [0.01, 0.01, 0.4, 0.01, 0.01, 0.01];
     expect(

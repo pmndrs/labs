@@ -105,103 +105,115 @@ export async function benchGenerator(gen: (...args: any[]) => any, opts: any = {
   if (device) ctx.device = device;
   else Object.defineProperty(ctx, 'gpu', { get: gpuDevice, enumerable: true });
 
-  const g = gen(ctx);
-  const n = await g.next();
+  try {
+    const g = gen(ctx);
+    const n = await g.next();
 
-  // A GPU bench yields a pass to fill, or its own GPU time
-  let gpuTimed = false;
-  // What setup built. The timing wrapper then adds readback buffers of its own.
-  const resident = meter?.bytes() ?? 0;
-  let harness = 0;
-  if (device && n.value && 'object' === typeof n.value) {
-    if (n.value.compute) n.value = { ...n.value, time: computePass(device, n.value.compute) };
-    else if (n.value.render) {
-      n.value = { ...n.value, time: renderPass(device, n.value.render, n.value.draw) };
-    } else if (n.value.time) {
-      const time = n.value.time;
-      const counted = Object.assign(() => (counted.calls++, time()), { calls: 0 });
-      n.value = { ...n.value, time: counted };
-    }
-    gpuTimed = !!n.value.time;
-  }
-  if (device && !gpuTimed) {
-    throw new TypeError('expected a GPU bench to yield { compute }, { render, draw } or { time }');
-  }
-  {
-    if (gpuTimed) {
-      harness = meter!.bytes() - resident;
-      // The CPU heap is idle while the GPU runs, so GC observation has no subject
-      opts.sample_gc = false;
-      // The GPU clock climbs over tens of milliseconds of continuous load, and
-      // passes agree long before that at whatever level it started from
-      opts.warmup_settle = Math.max(opts.warmup_settle ?? 0, 5e7);
-      opts.warmup_time = Math.max(opts.warmup_time ?? 0, 2e8);
-    }
-  }
-
-  let $fn = n.value;
-  if (!n.value?.heap && null != n.value?.heap) opts.heap = false;
-  opts.concurrency ??= n.value?.concurrency ?? opts.args?.concurrency;
-  if (!n.value?.counters && null != n.value?.counters) opts.$counters = false;
-  if (n.value?.after) opts.after = n.value.after;
-
-  const hook = n.value?.snapshot;
-  if (hook !== undefined && 'function' !== typeof hook)
-    throw new TypeError('expected snapshot to be a function');
-
-  let first: unknown;
-  let snapshot: Snapshot | undefined;
-  opts.$first = async (value: unknown) => {
-    first = value;
-    if (!hook) return;
-    const output = await hook();
-    if (output === undefined) throw new TypeError('expected a value to snapshot, got undefined');
-    snapshot = toSnapshot(output);
-  };
-
-  if (n.done || 'fn' !== kind($fn)) {
-    // Manual benches time themselves and return durations. `time` is the
-    // documented name, `manual` with a budget the earlier one.
-    const manual = n.value?.time || n.value?.manual;
-    $fn = n.value?.bench || manual;
-    if ('fn' !== kind($fn, true)) throw new TypeError('expected benchmarkable yield from generator');
-
-    opts.params ??= {};
-    const params: number = $fn.length;
-    opts.manual = !manual ? false : 'manual' !== n.value.budget ? 'real' : 'manual';
-
-    for (let o = 0; o < params; o++) {
-      opts.params[o] = n.value[o];
-      if ('fn' !== kind(n.value[o])) throw new TypeError('expected function for benchmark parameter');
-    }
-  }
-
-  const stats = await benchFn($fn, opts);
-  // Tier records describe the JavaScript that submitted the passes, not the
-  // shader the GPU ran, so GPU time carries none
-  if (gpuTimed) delete stats.optimization;
-  const allocated = meter?.stop() ?? 0;
-  const vram = gpuTimed
-    ? {
-        resident,
-        perPass: (allocated - resident - harness) / Math.max(1, n.value.time.calls),
+    // A GPU bench yields a pass to fill, or its own GPU time
+    let gpuTimed = false;
+    // What setup built. The timing wrapper then adds readback buffers of its own.
+    const resident = meter?.bytes() ?? 0;
+    let harness = 0;
+    if (device && n.value && 'object' === typeof n.value) {
+      if (n.value.compute) n.value = { ...n.value, time: computePass(device, n.value.compute) };
+      else if (n.value.render) {
+        n.value = { ...n.value, time: renderPass(device, n.value.render, n.value.draw) };
+      } else if (n.value.time) {
+        const time = n.value.time;
+        const counted = Object.assign(() => (counted.calls++, time()), { calls: 0 });
+        n.value = { ...n.value, time: counted };
       }
-    : undefined;
-  const end = await g.next(first);
-  if (!end.done) throw new TypeError('expected generator to yield once');
+      gpuTimed = !!n.value.time;
+    }
+    if (device && !gpuTimed) {
+      throw new TypeError('expected a GPU bench to yield { compute }, { render, draw } or { time }');
+    }
+    {
+      if (gpuTimed) {
+        harness = meter!.bytes() - resident;
+        // The CPU heap is idle while the GPU runs, so GC observation has no subject
+        opts.sample_gc = false;
+        // The GPU clock climbs over tens of milliseconds of continuous load, and
+        // passes agree long before that at whatever level it started from
+        opts.warmup_settle = Math.max(opts.warmup_settle ?? 0, 5e7);
+        opts.warmup_time = Math.max(opts.warmup_time ?? 0, 2e8);
+      }
+    }
 
-  if (end.value !== undefined) {
-    if (snapshot !== undefined)
-      throw new TypeError('expected one snapshot source, not both a hook and a generator return');
-    snapshot = toSnapshot(end.value);
+    let $fn = n.value;
+    if (!n.value?.heap && null != n.value?.heap) opts.heap = false;
+    opts.concurrency ??= n.value?.concurrency ?? opts.args?.concurrency;
+    if (!n.value?.counters && null != n.value?.counters) opts.$counters = false;
+    if (n.value?.after) opts.after = n.value.after;
+
+    const hook = n.value?.snapshot;
+    if (hook !== undefined && 'function' !== typeof hook)
+      throw new TypeError('expected snapshot to be a function');
+
+    let first: unknown;
+    let snapshot: Snapshot | undefined;
+    opts.$first = async (value: unknown) => {
+      first = value;
+      if (!hook) return;
+      const output = await hook();
+      if (output === undefined) throw new TypeError('expected a value to snapshot, got undefined');
+      snapshot = toSnapshot(output);
+    };
+
+    if (n.done || 'fn' !== kind($fn)) {
+      // Manual benches time themselves and return durations. `time` is the
+      // documented name, `manual` with a budget the earlier one.
+      const manual = n.value?.time || n.value?.manual;
+      $fn = n.value?.bench || manual;
+      if ('fn' !== kind($fn, true))
+        throw new TypeError('expected benchmarkable yield from generator');
+
+      opts.params ??= {};
+      const params: number = $fn.length;
+      opts.manual = !manual ? false : 'manual' !== n.value.budget ? 'real' : 'manual';
+
+      for (let o = 0; o < params; o++) {
+        opts.params[o] = n.value[o];
+        if ('fn' !== kind(n.value[o]))
+          throw new TypeError('expected function for benchmark parameter');
+      }
+    }
+
+    const stats = await benchFn($fn, opts);
+    // Tier records describe the JavaScript that submitted the passes, not the
+    // shader the GPU ran, so GPU time carries none
+    if (gpuTimed) delete stats.optimization;
+    const allocated = meter?.stop() ?? 0;
+    // Every encode allocates, including the ones left in flight when sampling
+    // stopped, and those finish before anything else uses the device
+    const vram = gpuTimed
+      ? {
+          resident,
+          perPass:
+            (allocated - resident - harness) /
+            Math.max(1, n.value.time.encodes ?? n.value.time.calls),
+        }
+      : undefined;
+    if (gpuTimed) await n.value.time.finish?.();
+    const end = await g.next(first);
+    if (!end.done) throw new TypeError('expected generator to yield once');
+
+    if (end.value !== undefined) {
+      if (snapshot !== undefined)
+        throw new TypeError('expected one snapshot source, not both a hook and a generator return');
+      snapshot = toSnapshot(end.value);
+    }
+
+    return {
+      ...stats,
+      kind: gpuTimed ? ('gpu' as const) : ('yield' as const),
+      ...(vram !== undefined ? { vram } : {}),
+      ...(snapshot !== undefined ? { snapshot } : {}),
+    };
+  } finally {
+    // A throw anywhere above must not leave the device patched for the next case
+    meter?.stop();
   }
-
-  return {
-    ...stats,
-    kind: gpuTimed ? ('gpu' as const) : ('yield' as const),
-    ...(vram !== undefined ? { vram } : {}),
-    ...(snapshot !== undefined ? { snapshot } : {}),
-  };
 }
 
 /**
