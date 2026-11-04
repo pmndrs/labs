@@ -23,6 +23,7 @@ export function createWarmup(deadline: number, capacity: number, settled = 0) {
     head: 0,
     resolvedWindows: 0,
     stable: false,
+    settledAt: 0,
   };
 }
 
@@ -49,7 +50,8 @@ export function recordWarmup(
   state: WarmupState,
   duration: number,
   iterations: number,
-  opts: Options
+  opts: Options,
+  now = 0
 ): WarmupState {
   const single = duration / iterations;
   if (opts.warmup_samples <= 0) {
@@ -82,6 +84,8 @@ export function recordWarmup(
   state.stable =
     state.resolvedWindows >= opts.warmup_samples &&
     sorted[count - 1] - sorted[0] <= median * opts.warmup_tolerance;
+  // The moment the windows first agreed, forgotten again if they diverge.
+  state.settledAt = !state.stable ? 0 : state.settledAt || now;
   state.iterations = Math.max(
     1,
     Math.min(

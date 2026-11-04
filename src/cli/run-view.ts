@@ -1,6 +1,7 @@
-import { isLikelyOptimizedOut } from '../bench/diagnostics.ts';
+import { isLikelyOptimizedOut, samplingTiers, samplingWarning } from '../bench/diagnostics.ts';
 import * as histogramFmt from '../bench/format/histogram.ts';
 import { formatGcColumns } from '../bench/format/gc.ts';
+import { optimizationRows } from '../bench/format/optimization.ts';
 import type { LabsConfig } from '../config.ts';
 import { calibrationExplainedFraction, comparisonResolution } from '../stats.ts';
 import {
@@ -50,7 +51,17 @@ export function runStatus(
   minDelta: number
 ): {
   symbol: string;
-  problem?: 'failed' | 'unmeasured' | 'optimized-out' | 'nondeterministic' | 'imprecise';
+  problem?:
+    | 'failed'
+    | 'unmeasured'
+    | 'optimized-out'
+    | 'nondeterministic'
+    | 'mixed-tiers'
+    | 'deoptimized'
+    | 'tier-drop'
+    | 'target-not-reached'
+    | 'late-optimization'
+    | 'imprecise';
   message: string;
   advice: string;
   minDetectableChange?: number;
@@ -80,6 +91,8 @@ export function runStatus(
       message: 'likely optimized out',
       advice: 'return the result',
     };
+  const warning = samplingWarning(stats);
+  if (warning && !stats.varyingOutput) return { symbol: '⚠', ...warning, advice: '' };
   if (stats.unsettled || stats.varyingOutput)
     return {
       symbol: '⚠',
@@ -112,12 +125,16 @@ function entries(result: SavedResult, config: LabsConfig): RunEntry[] {
   return result.files.flatMap((file) =>
     file.benchmarks.flatMap((trial) =>
       trial.runs.map((run) => {
-        const { symbol, message, advice } = runStatus(
+        const { symbol, problem, message, advice } = runStatus(
           trial,
           run,
           (file.context ?? result.context)?.noop,
           config.minDelta
         );
+        const tiers = samplingTiers(run.error === undefined ? run.stats?.optimization : undefined);
+        let summary = problem === 'late-optimization' || problem === 'tier-drop' ? '' : message;
+        if (tiers.length > 1 && problem !== 'mixed-tiers')
+          summary = [summary, tiers.join(' · ')].filter(Boolean).join(' · ');
         return {
           file: file.file,
           group: trial.groupName ?? '',
@@ -126,7 +143,7 @@ function entries(result: SavedResult, config: LabsConfig): RunEntry[] {
           gcMode: trial.gcMode,
           symbol,
           color: symbol === '✗' ? RED : symbol === '⚠' ? YELLOW : GREEN,
-          message,
+          message: summary,
           advice,
         };
       })
@@ -200,6 +217,24 @@ function consistency(
   canvas.put(y + 3, x + half, duration(high), GRAY, width - half, true);
 }
 
+function warmupHeading(stats: SavedBenchmarkRun['stats']) {
+  const parts: Array<{ text: string; color: string }> = [];
+  const tiers = samplingTiers(stats?.optimization);
+  for (const label of tiers.length > 1 ? ['Mixed'] : tiers)
+    parts.push({
+      text: label,
+      color:
+        label === 'Mixed' ||
+        label.includes(' → ') ||
+        label.includes('deopt') ||
+        (stats?.optimization?.target === 'TurboFan' && label.split(' ')[0] !== 'TurboFan')
+          ? YELLOW
+          : CYAN,
+    });
+  if (stats?.warmup) parts.push({ text: duration(stats.warmup.time), color: GRAY });
+  return parts;
+}
+
 function details(entry: RunEntry | undefined, width: number, state: TerminalViewState): string[] {
   const colors = state.colors !== false;
   const canvas = new TerminalCanvas(width);
@@ -207,9 +242,25 @@ function details(entry: RunEntry | undefined, width: number, state: TerminalView
     canvas.put(0, 0, 'No benchmarks', GRAY);
     return canvas.lines(colors);
   }
-  canvas.put(0, 0, `${entry.symbol} ${entry.name}`, BOLD);
+  const stats = entry.run.error === undefined ? entry.run.stats : undefined;
+  const title = `${entry.symbol} ${entry.name}`;
+  const metrics = warmupHeading(stats);
+  const summaryWidth = textWidth(metrics.map(({ text }) => text).join('  '));
+  const inlineSummary =
+    summaryWidth > 0 && summaryWidth + 2 + Math.min(textWidth(title), 16) <= width;
+  canvas.put(0, 0, title, BOLD, inlineSummary ? width - summaryWidth - 2 : width);
   canvas.put(0, 0, entry.symbol, entry.color, 1);
   let y = 1;
+  if (summaryWidth > width) {
+    for (const { text, color } of metrics) canvas.put(y++, 0, text, color, width, true);
+  } else if (metrics.length) {
+    const row = inlineSummary ? 0 : y++;
+    let x = width - summaryWidth;
+    for (const { text, color } of metrics) {
+      canvas.put(row, x, text, color);
+      x += textWidth(text) + 2;
+    }
+  }
   const advice = entry.advice ? ` ✦ ${entry.advice}` : '';
   if (textWidth(entry.message + advice) <= width) {
     canvas.put(y, 0, entry.message, entry.color);
@@ -218,8 +269,7 @@ function details(entry: RunEntry | undefined, width: number, state: TerminalView
     for (const message of wrapText(entry.message, width)) canvas.put(y++, 0, message, entry.color);
     for (const line of wrapText(advice.trim(), width)) canvas.put(y++, 0, line, GRAY);
   }
-  const stats = entry.run.stats;
-  if (!stats || entry.run.error !== undefined) return canvas.lines(colors);
+  if (!stats) return canvas.lines(colors);
   y++;
   const range = (
     value: { min: number; max: number } | undefined,
@@ -319,6 +369,15 @@ function details(entry: RunEntry | undefined, width: number, state: TerminalView
     for (const row of rows) {
       putColumns(y, place(row));
       y += 3;
+    }
+  }
+  if (stats.optimization && !stats.optimization.mode) {
+    y++;
+    const { kind, plan, optimization } = stats;
+    for (const { label, value } of optimizationRows({ kind, plan, optimization })) {
+      for (const line of wrapText(`${label.padEnd(12)}${value}`, width)) {
+        canvas.put(y++, 0, line, GRAY);
+      }
     }
   }
   canvas.put(y++, 0, '─'.repeat(width), DARK_GRAY);

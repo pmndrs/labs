@@ -8,6 +8,8 @@ export interface BlockPlan {
   batch_unroll: number;
   /** Untrimmed sample count the pilot collected and each block replays. */
   samples: number;
+  /** Replay target recorded by older pilot-based plans. */
+  targetTier?: OptimizationTier;
 }
 
 /** GC events during sampling or a diagnostic replay, with durations in nanoseconds. */
@@ -41,13 +43,22 @@ export interface LegacyGcStats {
 export type OptimizationTier =
   'Ignition' | 'Sparkplug' | 'Maglev' | 'TurboFan' | 'LLInt' | 'Baseline' | 'DFG' | 'FTL';
 
+export type SamplingDeopt = 'workload' | 'harness' | false;
+
 export interface OptimizationSample {
   tier: OptimizationTier;
   time: number;
 }
 
-/** Entry tiers per block, with elapsed ns from that warmup phase's start. Null means unavailable. */
+/** Per-block sampling tiers and the pilot's natural compilation probe. */
 export interface OptimizationStats {
+  mode?: 'natural' | 'prepared';
+  target?: 'TurboFan';
+  natural?: { tier: OptimizationTier | null; time: number };
+  benchmark?: Array<OptimizationSample | null>;
+  benchmarkEnd?: Array<OptimizationTier | null>;
+  /** Per-block TurboFan bailouts observed inside sampling. */
+  deoptimized?: Array<SamplingDeopt | null>;
   workload: Array<OptimizationSample | null>;
   harness?: Array<OptimizationSample | null>;
 }
@@ -76,6 +87,12 @@ export interface Stats {
   unsettled?: boolean;
   varyingOutput?: boolean;
   optimization?: OptimizationStats;
+  /** Elapsed ns until optimization was verified or warmup timings agreed. */
+  warmup?: {
+    time: number;
+    phase?: 'workload' | 'sampling';
+    blocks?: { settled: number; total: number };
+  };
   /** Per-block summaries when the benchmark ran in multiple fresh processes. */
   blocks?: {
     medians: number[];
@@ -133,6 +150,7 @@ export interface MeasureOptions {
   args?: Record<string, any>;
   /** Receives the first untimed result before warmup. */
   $first?: (value: unknown) => void | Promise<void>;
+  $deopts?: (functions: Function[]) => { start(): void; finish(): void; observed(): SamplingDeopt };
 }
 
 export type FnKind = 'fn' | 'iter' | 'yield';

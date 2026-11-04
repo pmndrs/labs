@@ -57,9 +57,9 @@ In an interactive terminal, a live view shows each benchmark's progress while it
 
 - **Node.js** is the default runtime.
 - **Chrome** requires a local installation and runs headlessly. Set extra flags with `chrome.args`.
-- **Bun** requires a local installation. GC diagnostics require the Labs CLI. Heap allocation diagnostics are unavailable. Set JSC options through `bun.env` with `BUN_JSC_*` names.
+- **Bun** requires a local installation. GC diagnostics require the Labs CLI. Heap allocation diagnostics and async workload tiers are unavailable. Set JSC options through `bun.env` with `BUN_JSC_*` names.
 - **Firefox** requires `pnpm dlx playwright-core@1.64.1 install firefox`. Heap allocation diagnostics are unavailable.
-- **WebKit** requires `pnpm dlx playwright-core@1.64.1 install webkit`. It runs Safari's engine in a separate browser build. Heap allocation diagnostics are unavailable. Set JSC options through `webkit.env` with `JSC_*` names. WebKit forwards these to its content process on macOS. Set `DEBUG=pw:browser` to see WebKit's diagnostic output.
+- **WebKit** requires `pnpm dlx playwright-core@1.64.1 install webkit`. It runs Safari's engine in a separate browser build. Heap allocation diagnostics and async workload tiers are unavailable. Set JSC options through `webkit.env` with `JSC_*` names. WebKit forwards these to its content process on macOS. Set `DEBUG=pw:browser` to see WebKit's diagnostic output.
 
 </details>
 
@@ -71,6 +71,7 @@ In an interactive terminal, a live view shows each benchmark's progress while it
 - **⚠ UNSTABLE**: The CPU speed probes taken during the run varied more than 5%, usually from background load, efficiency cores, or throttling. Treat comparisons with other runs carefully. With `--against`, Labs checks drift between paired blocks.
 - **✓, ⚠, ✗**: A warning shows one line with the most serious problem and what to do. `likely optimized out` means the work was removed by the JIT. `results change between runs` means warmup never settled or the output differed between fresh processes. `min detectable change ±N%` is the smallest change a comparison could detect, shown when it is larger than `minDelta`.
 - **avg, p75, p99**: Average time per iteration and the 75th and 99th percentiles. For batched work, percentiles describe batch averages rather than individual calls.
+- The heading shows sampling tiers and preparation time, using `Mixed` with warning details when outcomes differ. Yellow marks tier changes, detected deoptimization, or missed optimization targets. Detection depends on available runtime diagnostics.
 - **Histogram**: The fastest 99% of timing samples, with the minimum and upper cutoff below. Cyan marks samples below the average, yellow the average bin, and magenta samples above it.
 - **gc**: Observed GC time per iteration and its share of sampling time, including gaps between calls. Below is average GC event frequency. The share is not an exact GC contribution to `avg`.
 - **gc max**: Longest observed GC event, marked `major` when applicable. Below is the number of major GC events observed.
@@ -118,7 +119,7 @@ bench --against ../wt-a --candidate ../wt-b
 Labs promises to give results you can trust. To do this a number of guarantees are made when running benches.
 
 - Each bench block runs in its own isolated worker process, preventing benches in the same file from contaminating each other's JIT state, heap layout, or GC history. Reordering benches can otherwise skew results by 2x or more.
-- Every block warms the benchmark and harness before measurement to let the runtime optimize both and stabilize timings.
+- Each block warms up before timing. Observed optimization changes are reported, and deoptimization triggers a warning without discarding samples.
 - Samples run consecutively after one initial GC. Natural GC remains in timing, all samples are retained, and heap diagnostics run separately afterward.
 - Every bench is run in isolated blocks that are interleaved: `A₁ B₁ C₁ → A₂ B₂ C₂ → … → A₈ B₈ C₈`. This reduces bias from gradual changes such as CPU throttling or even boosting.
 - Timing overhead is controlled. If a sample's measurement time is so fast that the overhead of the timing itself would bias the results, then it is run in a batch sized so each sample lasts about a millisecond.

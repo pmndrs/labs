@@ -36,6 +36,7 @@ export interface SavedStats {
   unsettled?: boolean;
   varyingOutput?: boolean;
   optimization?: Stats['optimization'];
+  warmup?: Stats['warmup'];
   blocks?: {
     medians: number[];
     /** Software calibration rates. The `freqs` name is retained for schema compatibility. */
@@ -393,6 +394,7 @@ export function trimStats(stats: Stats): SavedStats {
     ...(stats.unsettled ? { unsettled: true } : {}),
     ...(stats.varyingOutput ? { varyingOutput: true } : {}),
     ...(stats.optimization ? { optimization: stats.optimization } : {}),
+    ...(stats.warmup ? { warmup: stats.warmup } : {}),
     ...(stats.blocks ? { blocks: stats.blocks } : {}),
     ...(stats.gc
       ? {
