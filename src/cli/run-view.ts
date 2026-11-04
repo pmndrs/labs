@@ -177,6 +177,11 @@ function entries(result: SavedResult, config: LabsConfig): RunEntry[] {
   );
 }
 
+/** Growth reads with its sign, so it is never mistaken for a total. */
+function signed(value: number, format: (value: number) => string): string {
+  return value > 0 ? `+${format(value)}` : value < 0 ? `-${format(-value)}` : format(0);
+}
+
 function bytes(value: number): string {
   return formatBytes(value, false).replace(/\b([kmgtp]?)b\b/g, (_, unit: string) =>
     unit ? unit.toUpperCase() + 'iB' : 'B'
@@ -315,7 +320,7 @@ function details(entry: RunEntry | undefined, width: number, state: TerminalView
     {
       heading: 'vram',
       value: stats.vram === undefined ? '—' : bytes(stats.vram.resident),
-      detail: stats.vram === undefined ? '—' : `${bytes(stats.vram.perPass)}/pass`,
+      detail: stats.vram === undefined ? '—' : `${signed(stats.vram.perPass, bytes)}/pass`,
     },
   ];
   const columns: Array<{ heading: string; qualifier?: string; value: string; detail: string }> =

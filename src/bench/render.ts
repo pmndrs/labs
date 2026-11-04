@@ -270,7 +270,10 @@ export function renderReport(
           if (r.stats!.vram !== undefined) {
             prev_run_gap = true;
             const resident = formatBytes(r.stats!.vram.resident, false).padStart(9);
-            const growth = formatBytes(r.stats!.vram.perPass, false).padStart(9);
+            const perPass = r.stats!.vram.perPass;
+            const growth = (
+              (perPass > 0 ? '+' : perPass < 0 ? '-' : '') + formatBytes(Math.abs(perPass), false)
+            ).padStart(10);
             l = ' '.repeat(k_legend - 5);
             if (!opts.colors) l += 'vram ' + resident + ' ' + growth + '/pass';
             else

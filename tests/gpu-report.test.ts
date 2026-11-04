@@ -158,7 +158,7 @@ describe('GPU bench reporting', () => {
       detailOffset: 0,
       colors: false,
     }).lines.join('\n');
-    expect(view).toMatch(/vram\n.*4\.00 MiB\n.*64\.00 KiB\/pass/);
+    expect(view).toMatch(/vram\n.*4\.00 MiB\n.*\+64\.00 KiB\/pass/);
     expect(view).not.toMatch(/clock/);
     expect(view).not.toMatch(/\bgc\b/);
   });
