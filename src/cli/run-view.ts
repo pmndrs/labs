@@ -309,24 +309,15 @@ function details(entry: RunEntry | undefined, width: number, state: TerminalView
       : `${min}–${max}`;
   };
   const gc = stats.gc;
-  const gpuColumns = () => {
-    const { freqs = [] } = stats.blocks ?? {};
-    const drift = freqs.length
-      ? (Math.max(...freqs) - Math.min(...freqs)) / ((Math.max(...freqs) + Math.min(...freqs)) / 2)
-      : 0;
-    return [
-      {
-        heading: 'clock',
-        value: freqs.length ? `${freqs.length - gpuClockShifts(stats)}/${freqs.length}` : '—',
-        detail: freqs.length ? `${(drift * 100).toFixed(0)}% drift` : '—',
-      },
-      {
-        heading: 'vram',
-        value: stats.vram === undefined ? '—' : bytes(stats.vram.resident),
-        detail: stats.vram === undefined ? '—' : `${bytes(stats.vram.perPass)}/pass`,
-      },
-    ];
-  };
+  // GPU memory is the bench's stat. The GPU clock is the environment's and
+  // sits with the CPU clock in the report.
+  const gpuColumns = () => [
+    {
+      heading: 'vram',
+      value: stats.vram === undefined ? '—' : bytes(stats.vram.resident),
+      detail: stats.vram === undefined ? '—' : `${bytes(stats.vram.perPass)}/pass`,
+    },
+  ];
   const columns: Array<{ heading: string; qualifier?: string; value: string; detail: string }> =
     stats.kind === 'gpu'
       ? gpuColumns()

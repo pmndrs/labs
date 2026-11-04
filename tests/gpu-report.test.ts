@@ -125,7 +125,7 @@ describe('GPU bench reporting', () => {
     ).toBe(1);
   });
 
-  it('shows the GPU clock and vram where CPU benches show gc and heap', () => {
+  it('shows vram where CPU benches show gc and heap', () => {
     const stats = {
       ...gpuStats(steady, [1, 1, 1, 1, 0.25, 1]),
       vram: { resident: 4 << 20, perPass: 65536 },
@@ -158,9 +158,8 @@ describe('GPU bench reporting', () => {
       detailOffset: 0,
       colors: false,
     }).lines.join('\n');
-    expect(view).toMatch(/clock\s+vram/);
-    expect(view).toMatch(/5\/6\s+4\.00 MiB/);
-    expect(view).toMatch(/120% drift\s+64\.00 KiB\/pass/);
+    expect(view).toMatch(/vram\n.*4\.00 MiB\n.*64\.00 KiB\/pass/);
+    expect(view).not.toMatch(/clock/);
     expect(view).not.toMatch(/\bgc\b/);
   });
 
