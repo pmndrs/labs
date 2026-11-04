@@ -281,6 +281,7 @@ function details(entry: RunEntry | undefined, width: number, state: TerminalView
     summaryWidth > 0 && summaryWidth + 2 + Math.min(textWidth(title), 16) <= width;
   canvas.put(0, 0, title, BOLD, inlineSummary ? width - summaryWidth - 2 : width);
   canvas.put(0, 0, entry.symbol, entry.color, 1);
+  if (stats?.kind === 'gpu') canvas.put(0, textWidth(title) + 1, 'gpu', GRAY, 3);
   let y = 1;
   if (summaryWidth > width) {
     for (const { text, color } of metrics) canvas.put(y++, 0, text, color, width, true);
@@ -477,6 +478,9 @@ export function renderRunView(
   const listRow = (y: number, label: string, bench?: RunEntry) => {
     const stats = bench?.run.error === undefined ? bench?.run.stats : undefined;
     canvas.put(y, 1, label, bench ? '' : GRAY, nameWidth);
+    // GPU time is the exception, so only it carries a tag
+    if (stats?.kind === 'gpu' && textWidth(label) + 5 <= nameWidth)
+      canvas.put(y, 2 + textWidth(label), 'gpu', GRAY, 3);
     canvas.put(y, nameWidth + 3, bench ? (stats ? duration(stats.avg) : '—') : 'avg', GRAY, 11, true);
     canvas.put(
       y,
