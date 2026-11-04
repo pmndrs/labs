@@ -1,6 +1,6 @@
 # Labs
 
-Labs is JS benchmarking you can trust. Trying to get good signal is harder than you might think. VMs are non-deterministic, environments are unstable, and typical benchmarks don't give you any sense of a comparison's validity. Labs detects variance, giving feedback on how to fix it, and uses statistical analysis to determine if two runs are actually different.
+Labs is JS benchmarking you can trust, with CPU and GPU benchmarks across multiple runtimes. Trying to get good signal is harder than you might think. VMs are non-deterministic, environments are unstable, and typical benchmarks don't give you any sense of a comparison's validity. Labs detects variance, giving feedback on how to fix it, and uses statistical analysis to determine if two runs are actually different.
 
 ```bash
 npm i @pmndrs/labs
@@ -113,6 +113,33 @@ bench --against ../wt-a --candidate ../wt-b
 - **spread**: The dot shows the estimated change and the line shows its confidence interval. Left of zero means faster, right means slower. A wider interval means more uncertainty. The shaded band marks changes below the configured minimum.
 
 </details>
+
+### GPU
+
+Use `bench.gpu` to time WebGPU compute or render passes. The generator receives a device for setup and yields the pass to measure.
+
+```ts
+import { bench } from '@pmndrs/labs'
+
+bench.gpu('blur', function* ({ device }) {
+  const { pipeline, bind } = build(device)
+  yield {
+    compute: (pass) => {
+      pass.setPipeline(pipeline)
+      pass.setBindGroup(0, bind)
+      pass.dispatchWorkgroups(4096)
+    },
+  }
+})
+```
+
+Run GPU benches in Chrome or WebKit. CPU and GPU benches can share a file and interleave their blocks.
+
+```sh
+bench --runtime chrome # or webkit
+```
+
+Results show time per pass and VRAM use. See the [GPU example](examples/gpu) for a complete suite.
 
 ## Guarantees
 
