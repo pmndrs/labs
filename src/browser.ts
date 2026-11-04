@@ -67,6 +67,7 @@ export const browserHarness = {
     const calibration = await measure(() => {}, {
       ...clock,
       batch_unroll: 1,
+      min_cpu_time: 1e8,
     });
     return jsonSafe({ ...result, environment: { postFreq: 1 / calibration.avg } });
   },
