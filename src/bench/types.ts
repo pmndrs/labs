@@ -71,7 +71,7 @@ export interface Stats {
   samples: number[];
   /** Hardware counters supplied by the runtime backend. */
   counters?: any;
-  kind: 'fn' | 'iter' | 'yield' | 'gpu';
+  kind: 'fn' | 'yield' | 'gpu';
   min: number;
   max: number;
   avg: number;
@@ -182,7 +182,7 @@ export interface MeasureOptions {
   $deopts?: (functions: Function[]) => { start(): void; finish(): void; observed(): SamplingDeopt };
 }
 
-export type FnKind = 'fn' | 'iter' | 'yield';
+export type FnKind = 'fn' | 'yield';
 export type GcMode = boolean | 'once' | 'inner';
 
 export type Color =
@@ -215,7 +215,7 @@ export interface Context {
   version: string | null;
   runtime: string | null;
   cpu: { freq: number; name: string | null };
-  noop: { fn?: Stats; iter?: Stats; fn_gc?: Stats };
+  noop: { fn?: Stats; fn_gc?: Stats };
 }
 
 export interface RunOptions {

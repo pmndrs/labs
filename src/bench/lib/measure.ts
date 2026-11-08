@@ -9,7 +9,6 @@ import type {
 import {
   AsyncFunction,
   do_not_optimize,
-  GeneratorFunction,
   dollar_vm,
   kind,
   never_optimize,
@@ -64,23 +63,16 @@ function summarizeSamples(samples: Float64Array, count: number) {
 }
 
 /**
- * Measure the performance of `f` by dispatching to the appropriate benchmark
- * engine ({@link benchFn}, {@link benchIter}, or {@link benchGenerator})
- * based on its {@link kind}.
+ * Measure the performance of `f`. A generator goes through
+ * {@link benchGenerator}, which unwraps the function it yields for
+ * {@link benchFn}.
  */
 export function measure(gen: GeneratorBench, opts?: MeasureOptions): Promise<Stats>;
 export function measure(f: (...args: any[]) => any, opts?: MeasureOptions): Promise<Stats>;
 export async function measure(f: (...args: any[]) => any, opts: MeasureOptions = {}): Promise<Stats> {
-  switch (kind(f)) {
-    case 'fn':
-      return await benchFn(f, opts);
-    case 'iter':
-      return await benchIter(f, opts);
-    case 'yield':
-      return await benchGenerator(f, opts);
-    default:
-      throw new TypeError('expected iterator, generator or one-shot function');
-  }
+  const k = kind(f);
+  if (!k) throw new TypeError('expected generator or one-shot function');
+  return k === 'yield' ? benchGenerator(f, opts) : benchFn(f, opts);
 }
 
 /**
@@ -762,156 +754,4 @@ export async function benchFn(fn: (...args: any[]) => any, opts: any = {}): Prom
   } finally {
     observation.cancel();
   }
-}
-
-/**
- * Benchmark engine for iterator-style benchmarks.
- *
- * The caller receives an iterable context. Each `for..of` / `for await..of`
- * iteration is one timed sample.  Internally a {@link GeneratorFunction} loop
- * is code-generated with the same stopping and batching logic as
- * {@link benchFn}.
- */
-export async function benchIter(iter: (...args: any[]) => any, opts: any = {}): Promise<Stats> {
-  defaults(opts);
-  // Shared with the generated loop. Every key exists from the start so the shape never changes.
-  const _: any = {
-    next: null,
-    batch: false,
-    unsettled: false,
-    warmup: undefined,
-    debug: '',
-    count: 0,
-    timed: 0,
-    iterations: undefined,
-    gc: undefined,
-  };
-  const now: () => number = opts.now;
-  let batchSamples = 0;
-  let observeWorkload!: ReturnType<typeof optimizationClock>;
-  let workload: OptimizationSample | null = null;
-  const samples = createSamples(opts.max_samples);
-  const observation = new GcScope(opts.sample_gc ? await GcObservation.create() : undefined);
-  const _i = {
-    next() {
-      return _.next();
-    },
-  };
-
-  const ctx = {
-    [Symbol.iterator]() {
-      return _i;
-    },
-    [Symbol.asyncIterator]() {
-      return _i;
-    },
-    get(name: string) {
-      return opts.args?.[name];
-    },
-  };
-
-  const gen: Generator = (function* () {
-    let batch = false;
-    const started = now();
-    const warmup = createWarmup(
-      started + opts.warmup_time,
-      opts.warmup_samples,
-      started + opts.warmup_settle
-    );
-    do {
-      let iterations = 0;
-      const t0 = now();
-      do {
-        yield void 0;
-        iterations++;
-      } while (iterations < warmup.iterations && now() < warmup.deadline);
-      recordWarmup(warmup, now() - t0, iterations, opts, now());
-      workload = observeWorkload(optimization?.tier(iter), now());
-    } while (!isWarmupDone(warmup, opts, now()));
-
-    const single = warmup.single;
-    _.unsettled = isWarmupUnsettled(warmup, opts);
-    if (warmup.settledAt) _.warmup = { time: warmup.settledAt - started };
-    batch = single <= opts.batch_threshold;
-
-    if (opts.batch !== undefined) batch = !!opts.batch;
-    batchSamples = opts.batch_samples ?? (batch ? batchSize(opts, single) : 0);
-    if (batch && batchSamples < 1)
-      throw new TypeError('expected at least one iteration per batched sample');
-
-    const body = !batch
-      ? 'yield void 0;'
-      : `
-        for (let o = 0; o < ${(batchSamples / opts.batch_unroll) | 0}; o++) {
-          ${Array.from({ length: opts.batch_unroll }, () => 'yield void 0;').join(' ')}
-        }
-        ${Array.from({ length: batchSamples % opts.batch_unroll }, () => 'yield void 0;').join(' ')}
-      `;
-    const loop: Generator = new GeneratorFunction(
-      '$gc',
-      '$now',
-      '$samples',
-      '$state',
-      '$observation',
-      (_.debug = `
-      let _ = 0; let t = 0;
-      ${!opts.gc ? '' : '$gc();'}
-      $observation.start();
-
-      for (; _ < ${samples.length}; _++) {
-        if (_ >= ${opts.min_samples} && t >= ${opts.min_cpu_time}) break;
-        const t0 = $now();
-        ${body}
-        const diff = $now() - t0;
-        $samples[_] = diff ${!batch ? '' : `/ ${batchSamples}`};
-        t += diff;
-      }
-
-      $state.count = _;
-      $state.timed = t;
-      $state.iterations = _ * ${batch ? batchSamples : 1};
-      $state.gc = $observation.finish(t, $state.iterations, ${now === runtimeNow});
-    `)
-    )(opts.gc, opts.now, samples, _, observation);
-
-    _.batch = batch;
-    _.next = loop.next.bind(loop);
-    yield void 0;
-  })();
-
-  try {
-    observeWorkload = optimizationClock(now());
-    await iter(((_.next = gen.next.bind(gen)), ctx));
-    if (_.gc) _.gc = await _.gc;
-  } finally {
-    observation.cancel();
-  }
-  if (_.iterations === undefined)
-    throw new TypeError('expected iterator to consume all measurement iterations');
-  if (_.count < opts.min_samples)
-    throw new TypeError(`expected at least ${opts.min_samples} samples from iterator`);
-
-  return {
-    ...summarizeSamples(samples, _.count),
-    kind: 'iter' as const,
-    plan: {
-      batch: !!_.batch,
-      batch_samples: batchSamples,
-      batch_unroll: opts.batch_unroll,
-      samples: _.count,
-    },
-    debug: _.debug,
-    ...(_.unsettled ? { unsettled: true } : {}),
-    ...(_.warmup ? { warmup: _.warmup } : {}),
-    ...(opts.warmup_samples > 0
-      ? {
-          optimization: {
-            mode: 'prepared' as const,
-            workload: [workload],
-          },
-        }
-      : {}),
-    ticks: _.count * (!_.batch ? 1 : batchSamples),
-    ...(_.gc ? { gc: _.gc } : {}),
-  };
 }

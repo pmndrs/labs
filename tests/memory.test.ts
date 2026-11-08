@@ -5,18 +5,6 @@ describe('memory diagnostics', () => {
   const benchmarks = [
     ['function', (work: () => void) => work],
     ['async function', (work: () => void) => async () => work()],
-    [
-      'iterator',
-      (work: () => void) => (state: any) => {
-        for (const _ of state) work();
-      },
-    ],
-    [
-      'async iterator',
-      (work: () => void) => async (state: any) => {
-        for await (const _ of state) work();
-      },
-    ],
   ] as const;
 
   describe.each([false, true])('batching %s', (batch) => {

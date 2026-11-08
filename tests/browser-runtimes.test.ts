@@ -75,7 +75,7 @@ describe.each([
             assert.equal(result, state.get('text').toUpperCase());
             return result;
           }).args('text', ['one', 'two']);
-          bench('iterator', state => { for (const _ of state) document.body.tagName; }).gc(false);
+          bench('plain', () => document.body.tagName).gc(false);
         });
         bench('filtered @other', () => { throw new Error('unexpected benchmark'); });`,
         { runtime: 'node' }
@@ -87,7 +87,7 @@ describe.each([
       expect(report.benches).toHaveLength(4);
       for (const row of report.benches) {
         expect(row.timeNs.avg).toBeGreaterThan(0);
-        if (row.name === 'iterator') expect(row.gc).toBeNull();
+        if (row.name === 'plain') expect(row.gc).toBeNull();
         else expect(row.gc).toHaveProperty('events', expect.any(Number));
         expect(row.heapBytes).toBeNull();
       }
@@ -164,7 +164,7 @@ describe.each([
       setup(
         `import { assert, bench } from '@pmndrs/labs';
         bench('wrong', function* () { yield () => 42; assert(false, 'BROWSER_ASSERT'); });
-        bench('iterator', state => { for (const _ of state) Math.sqrt(2); assert(false, 'BROWSER_ITERATOR_ASSERT'); });
+        bench('async teardown', async function* () { yield async () => Math.sqrt(2); assert(false, 'BROWSER_TEARDOWN_ASSERT'); });
         bench('good', () => document.createElement('div').tagName);`,
         {}
       );
@@ -175,7 +175,7 @@ describe.each([
       expect(report.benches[0]).toMatchObject({ status: 'failed', message: 'BROWSER_ASSERT' });
       expect(report.benches[1]).toMatchObject({
         status: 'failed',
-        message: 'BROWSER_ITERATOR_ASSERT',
+        message: 'BROWSER_TEARDOWN_ASSERT',
       });
       expect(report.benches[2].timeNs.avg).toBeGreaterThan(0);
     }

@@ -28,13 +28,6 @@ describe('measuring work', () => {
     ['a synchronous function', () => () => 1 + 1, 'fn'],
     ['an asynchronous function', () => async () => 1 + 1, 'fn'],
     [
-      'an iterator benchmark',
-      () => (state: any) => {
-        for (const _ of state);
-      },
-      'iter',
-    ],
-    [
       'a generator benchmark',
       () =>
         function* () {
@@ -86,38 +79,28 @@ describe('measuring work', () => {
     );
   });
 
-  it.each(['function', 'iterator'])(
-    'preserves large sample floors and frozen plans for %s benchmarks',
-    async (kind) => {
-      for (const fixed of [false, true]) {
-        let clock = 0;
-        const work = () => {
-          clock++;
-        };
-        const stats = await measure(
-          kind === 'function'
-            ? work
-            : (state: Iterable<unknown>) => {
-                for (const _ of state) work();
-              },
-          {
-            now: () => clock,
-            gc: false,
-            warmup_samples: 0,
-            batch: false,
-            min_samples: 2 ** 20 + 1,
-            ...(fixed ? { max_samples: 2 ** 20 + 1 } : {}),
-            min_cpu_time: 0,
-          }
-        );
+  it('preserves large sample floors and frozen plans', async () => {
+    for (const fixed of [false, true]) {
+      let clock = 0;
+      const work = () => {
+        clock++;
+      };
+      const stats = await measure(work, {
+        now: () => clock,
+        gc: false,
+        warmup_samples: 0,
+        batch: false,
+        min_samples: 2 ** 20 + 1,
+        ...(fixed ? { max_samples: 2 ** 20 + 1 } : {}),
+        min_cpu_time: 0,
+      });
 
-        expect(stats.samples).toHaveLength(2 ** 20 + 1);
-        expect(stats.plan?.samples).toBe(2 ** 20 + 1);
-        expect(stats.ticks).toBe(2 ** 20 + 1);
-        expect(stats.avg).toBe(1);
-      }
+      expect(stats.samples).toHaveLength(2 ** 20 + 1);
+      expect(stats.plan?.samples).toBe(2 ** 20 + 1);
+      expect(stats.ticks).toBe(2 ** 20 + 1);
+      expect(stats.avg).toBe(1);
     }
-  );
+  });
 
   it('protects returned benchmark results from dead-code elimination', async () => {
     let result = 0;
@@ -169,14 +152,8 @@ describe('measuring work', () => {
             0: () => 42,
           };
         },
-      (work: () => void) => (state: any) => {
-        for (const _ of state) work();
-      },
-      (work: () => void) => async (state: any) => {
-        for await (const _ of state) work();
-      },
     ];
-    for (const [index, create] of factories.entries()) {
+    for (const create of factories) {
       let clock = 0;
       let calls = 0;
       const stats = await measure(
@@ -196,19 +173,17 @@ describe('measuring work', () => {
           min_cpu_time: 0,
         }
       );
-      expect(calls).toBe((index >= 3 ? 2 : 1) + 3 * batchSamples);
+      expect(calls).toBe(1 + 3 * batchSamples);
       expect(stats.ticks).toBe(3 * batchSamples);
       expect(stats.samples).toEqual([10, 10, 10]);
       expect(stats.avg).toBe(10);
     }
   });
 
-  it('rejects an iterator that stops before completing measurement', async () => {
-    await expect(
-      measure((state: any) => {
-        for (const _ of state) break;
-      }, fast)
-    ).rejects.toThrow('expected iterator to consume all measurement iterations');
+  it('rejects a function that takes parameters', async () => {
+    await expect(measure(((state: any) => state) as any, fast)).rejects.toThrow(
+      'expected generator or one-shot function'
+    );
   });
 });
 
@@ -281,22 +256,21 @@ describe('composing a benchmark suite', () => {
     bench('generator', function* () {
       yield () => 42;
     });
-    bench('iterator', (state: Iterable<unknown>) => {
-      for (const _ of state);
+    bench('empty generator', function* () {
+      yield () => {};
     });
 
     const result = await run({
       format: 'quiet',
-      filter: /^iterator$/,
+      filter: /^empty generator$/,
       tune: fast,
       calibrate: fast,
     });
 
-    expect(result.benchmarks.map((trial) => trial.alias)).toEqual(['iterator']);
+    expect(result.benchmarks.map((trial) => trial.alias)).toEqual(['empty generator']);
     expect(result.context.cpu.freq).toBeGreaterThan(0);
-    expect(result.context.noop.fn).toBeUndefined();
-    expect(result.context.noop.fn_gc).toBeUndefined();
-    expect(result.context.noop.iter?.avg).toBeGreaterThan(0);
+    expect(result.context.noop.fn?.avg).toBeGreaterThan(0);
+    expect(result.context.noop.fn_gc?.avg).toBeGreaterThan(0);
   });
 
   it('runs grouped and parameterized benchmarks with readable names', async () => {

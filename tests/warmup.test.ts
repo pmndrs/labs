@@ -3,7 +3,7 @@ import { B, measure } from '../src/bench/index.ts';
 import type { BlockPlan, MeasureOptions } from '../src/bench/types.ts';
 
 describe('adaptive warmup', () => {
-  it.each(['sync', 'async', 'iterator'])(
+  it.each(['sync', 'async'])(
     'batches %s work that becomes fast after cold first calls',
     async (kind) => {
       let clock = 0;
@@ -12,14 +12,7 @@ describe('adaptive warmup', () => {
         clock += [2_000_000, 200_000, 100_000][calls++] ?? 1_000;
         return calls;
       };
-      const fn =
-        kind === 'async'
-          ? async () => work()
-          : kind === 'iterator'
-            ? (state: Iterable<unknown>) => {
-                for (const _ of state) work();
-              }
-            : work;
+      const fn = kind === 'async' ? async () => work() : work;
 
       const stats = await measure(fn as any, {
         now: () => clock,

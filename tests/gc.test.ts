@@ -14,18 +14,6 @@ describe('observed GC', () => {
   it.each([
     ['function', (work: () => void) => work],
     ['async function', (work: () => void) => async () => work()],
-    [
-      'iterator',
-      (work: () => void) => (state: any) => {
-        for (const _ of state) work();
-      },
-    ],
-    [
-      'async iterator',
-      (work: () => void) => async (state: any) => {
-        for await (const _ of state) work();
-      },
-    ],
   ] as const)('counts only sampling collections for a %s', async (_name, create) => {
     const stats = await measure(
       create(() => globalThis.gc!()),

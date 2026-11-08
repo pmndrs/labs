@@ -57,7 +57,7 @@ export class B {
   constructor(name: string, f: any) {
     this.f = f;
     this.name(name);
-    if (!kind(f)) throw new TypeError('expected iterator, generator or one-shot function');
+    if (!kind(f)) throw new TypeError('expected generator or one-shot function');
   }
 
   name(name: string, color: string | false = false): this {
@@ -400,18 +400,12 @@ export async function run(
   const cal = { min_cpu_time: 1e8, ...opts.calibrate };
   const filter = new RegExp(opts.filter);
   filter.lastIndex = opts.filter.lastIndex;
-  const kinds = new Set(
-    COLLECTIONS.flatMap((collection) => collection.trials)
-      .filter((trial) => filter.test(trial._name))
-      .map((trial) => kind(trial.f))
+  // Every bench times a function, so one empty call calibrates them all.
+  const selected = COLLECTIONS.some((collection) =>
+    collection.trials.some((trial) => filter.test(trial._name))
   );
-  const noop = kinds.has('fn') || kinds.has('yield') ? await measure(() => {}, cal) : undefined;
+  const noop = selected ? await measure(() => {}, cal) : undefined;
   const _cpu = await measure(() => {}, { ...cal, batch_unroll: 1 });
-  const noop_iter = kinds.has('iter')
-    ? await measure((state: any) => {
-        for (const _ of state);
-      }, cal)
-    : undefined;
 
   const context: Context = {
     now: t,
@@ -426,8 +420,8 @@ export async function run(
 
     noop: {
       // Retain the field used by saved results with separate GC calibration.
-      ...(noop ? { fn: noop, fn_gc: noop } : {}),
-      ...(noop_iter ? { iter: noop_iter } : {}),
+      fn: noop,
+      fn_gc: noop,
     },
   };
 

@@ -277,41 +277,41 @@ describe('run report', () => {
     expect(render(result, 120, 0, 40).lines.join('\n')).toMatch(/^\s*✓  cpu  create entities *$/m);
   });
 
-  it.each([
-    ['fn', true, 'fn_gc'],
-    ['iter', true, 'iter'],
-  ] as const)('preserves optimization warnings for %s timings with GC %s', (kind, gcMode, mode) => {
-    const result = fixture();
-    const trial = result.files[0].benchmarks[0];
-    trial.gcMode = gcMode;
-    trial.runs[0].stats!.kind = kind;
-    trial.runs[0].stats!.blocks!.spreads = Array(8).fill(0);
-    result.context = { noop: { fn: { avg: 0 }, iter: { avg: 0 }, fn_gc: { avg: 0 } } };
-    result.context.noop![mode].avg = 1000;
+  it.each([['fn', true, 'fn_gc']] as const)(
+    'preserves optimization warnings for %s timings with GC %s',
+    (kind, gcMode, mode) => {
+      const result = fixture();
+      const trial = result.files[0].benchmarks[0];
+      trial.gcMode = gcMode;
+      trial.runs[0].stats!.kind = kind;
+      trial.runs[0].stats!.blocks!.spreads = Array(8).fill(0);
+      result.context = { noop: { fn: { avg: 0 }, fn_gc: { avg: 0 } } };
+      result.context.noop![mode].avg = 1000;
 
-    const text = render(result).lines.join('\n');
-    expect(text).toContain('⚠  cpu  create entities');
-    expect(text).toContain('likely optimized out');
-    expect(text).toContain('1 warning');
-    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
-    try {
-      replayReport(result, defineConfig({ benchDir: '.' }));
-      expect(log.mock.calls.flat().join('\n')).toContain('likely optimized out');
-    } finally {
-      log.mockRestore();
+      const text = render(result).lines.join('\n');
+      expect(text).toContain('⚠  cpu  create entities');
+      expect(text).toContain('likely optimized out');
+      expect(text).toContain('1 warning');
+      const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+      try {
+        replayReport(result, defineConfig({ benchDir: '.' }));
+        expect(log.mock.calls.flat().join('\n')).toContain('likely optimized out');
+      } finally {
+        log.mockRestore();
+      }
+
+      result.files[0].context = {
+        cpu: { freq: 4, name: 'test cpu' },
+        arch: 'arm64',
+        runtime: 'node',
+        noop: { fn: { avg: 100 }, fn_gc: { avg: 100 } },
+      };
+      const calibrated = render(result).lines.join('\n');
+      expect(calibrated).toContain('✓  cpu  create entities');
+      expect(calibrated).not.toContain('likely optimized out');
+      expect(calibrated).not.toContain('warning');
     }
-
-    result.files[0].context = {
-      cpu: { freq: 4, name: 'test cpu' },
-      arch: 'arm64',
-      runtime: 'node',
-      noop: { fn: { avg: 100 }, iter: { avg: 100 }, fn_gc: { avg: 100 } },
-    };
-    const calibrated = render(result).lines.join('\n');
-    expect(calibrated).toContain('✓  cpu  create entities');
-    expect(calibrated).not.toContain('likely optimized out');
-    expect(calibrated).not.toContain('warning');
-  });
+  );
 
   it('flags an unstable machine in the header', () => {
     const result = fixture();

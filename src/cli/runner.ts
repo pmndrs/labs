@@ -199,7 +199,6 @@ class Collection {
           version: workerResult.context.version,
           noop: {
             fn: { avg: workerResult.context.noop.fn?.avg ?? 0 },
-            iter: { avg: workerResult.context.noop.iter?.avg ?? 0 },
             fn_gc: { avg: workerResult.context.noop.fn_gc?.avg ?? 0 },
           },
         };
@@ -805,7 +804,6 @@ function trimContext(context: WorkerResult['context']): SavedContext {
       ? {
           noop: {
             ...(context.noop.fn ? { fn: { avg: context.noop.fn.avg } } : {}),
-            ...(context.noop.iter ? { iter: { avg: context.noop.iter.avg } } : {}),
             ...(context.noop.fn_gc ? { fn_gc: { avg: context.noop.fn_gc.avg } } : {}),
           },
         }

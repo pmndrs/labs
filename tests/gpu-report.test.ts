@@ -54,7 +54,7 @@ describe('GPU bench reporting', () => {
         version: 'test',
         arch: 'test',
         now: 0,
-        noop: { fn: { avg: 50 }, iter: { avg: 50 }, fn_gc: { avg: 50 } },
+        noop: { fn: { avg: 50 }, fn_gc: { avg: 50 } },
       } as any,
       { print: (line) => lines.push(line), colors: false },
       [

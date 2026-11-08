@@ -37,13 +37,11 @@ export function optimizationRows(
   if (stats.optimization?.mode === 'natural') {
     const { benchmark, workload, harness } = stats.optimization;
     const mode =
-      stats.kind === 'iter'
-        ? 'iterator'
-        : stats.plan?.batch === true
-          ? 'batched'
-          : stats.plan?.batch === false
-            ? 'unbatched'
-            : 'mode not recorded';
+      stats.plan?.batch === true
+        ? 'batched'
+        : stats.plan?.batch === false
+          ? 'unbatched'
+          : 'mode not recorded';
     const missing =
       workload.some(Boolean) || harness?.some(Boolean) ? 'tier unverified' : 'tier unavailable';
     rows.push({
@@ -58,13 +56,11 @@ export function optimizationRows(
         label: 'harness',
         value: harness
           ? `${formatOptimization(harness)} (batched)`
-          : stats.kind === 'iter'
-            ? 'not used (iterator benchmark)'
-            : stats.plan?.batch === false
-              ? 'not warmed (unbatched, one call per sample)'
-              : stats.plan?.batch === true
-                ? 'not observed (batched)'
-                : 'not recorded',
+          : stats.plan?.batch === false
+            ? 'not warmed (unbatched, one call per sample)'
+            : stats.plan?.batch === true
+              ? 'not observed (batched)'
+              : 'not recorded',
       }
     );
   }

@@ -396,7 +396,6 @@ function replayContext(file: SavedFile, result: SavedResult): Context {
     },
     noop: {
       fn: noopStats(context.noop?.fn?.avg ?? 0),
-      iter: noopStats(context.noop?.iter?.avg ?? 0),
       fn_gc: noopStats(context.noop?.fn_gc?.avg ?? 0),
     },
   };

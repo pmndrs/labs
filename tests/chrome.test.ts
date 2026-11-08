@@ -174,7 +174,7 @@ describe('Chrome benchmarks', () => {
     () => {
       setup(
         `import { bench } from '@pmndrs/labs';
-        bench('iterator', (state) => { for (const _ of state) gc(); });`,
+        bench('collector', () => { gc(); return 1; });`,
         { runtime: 'node', heap: false, gc: { node: false, chrome: true } }
       );
       const output = run('--runtime', 'chrome');
@@ -319,9 +319,9 @@ describe('Chrome benchmarks', () => {
           assert(false, 'failed before sampling');
           yield () => 1;
         });
-        bench('checked iterator', state => {
-          for (const _ of state) gc();
-          assert(false, 'POST_LOOP_ASSERT');
+        bench('async teardown', async function* () {
+          yield async () => { gc(); return 1; };
+          assert(false, 'TEARDOWN_ASSERT');
         });
         bench('good', () => 42).gc(false);`,
         { runtime: 'chrome' }
@@ -340,7 +340,7 @@ describe('Chrome benchmarks', () => {
       });
       const report = JSON.parse(output.stdout);
       expect(report.crashes).toEqual([]);
-      expect(report.benches[2]).toMatchObject({ status: 'failed', message: 'POST_LOOP_ASSERT' });
+      expect(report.benches[2]).toMatchObject({ status: 'failed', message: 'TEARDOWN_ASSERT' });
       expect(report.benches[3].timeNs).not.toBeNull();
     }
   );

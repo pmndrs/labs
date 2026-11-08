@@ -79,7 +79,7 @@ describe('Bun benchmarks', () => {
             assert.equal(result, input + value);
             return result;
           }).args('input', [1, 2]);
-          bench('iterator', state => { for (const _ of state) Math.sqrt(value); });
+          bench('plain', () => Math.sqrt(value));
           bench('manual', function* () { yield { budget: 'manual', manual: () => 50 }; }).gc(false);
         });
         bench('filtered @other', () => { throw new Error('tag was not filtered'); });`,
@@ -182,7 +182,7 @@ describe('Bun benchmarks', () => {
           yield () => { Bun.gc(true); return 42; };
           Bun.gc(true);
         });
-        bench('iterator', state => { for (const _ of state) Bun.gc(true); });
+        bench('plain', () => { Bun.gc(true); return 42; });
         bench('minor', () => { edenGC(); return 42; });`);
       const output = run();
       expect(output.status, output.stderr).toBe(0);
@@ -241,9 +241,9 @@ describe('Bun benchmarks', () => {
     () => {
       setup(`import { assert, bench } from '@pmndrs/labs';
         bench('wrong', function* () { yield () => 42; assert(false, 'BUN_ASSERT'); });
-        bench('iterator', state => {
-          for (const _ of state) Bun.gc(true);
-          assert(false, 'BUN_ITERATOR_ASSERT');
+        bench('async teardown', async function* () {
+          yield async () => 42;
+          assert(false, 'BUN_TEARDOWN_ASSERT');
         });
         bench('good', () => 42);`);
       const output = run();
@@ -251,7 +251,7 @@ describe('Bun benchmarks', () => {
       const report = JSON.parse(output.stdout);
       expect(report.crashes).toEqual([]);
       expect(report.benches[0]).toMatchObject({ status: 'failed', message: 'BUN_ASSERT' });
-      expect(report.benches[1]).toMatchObject({ status: 'failed', message: 'BUN_ITERATOR_ASSERT' });
+      expect(report.benches[1]).toMatchObject({ status: 'failed', message: 'BUN_TEARDOWN_ASSERT' });
       expect(report.benches[2].timeNs).not.toBeNull();
     }
   );

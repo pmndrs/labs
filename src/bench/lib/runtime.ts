@@ -2,8 +2,8 @@ import type { FnKind } from '../types.ts';
 
 /**
  * Async/generator function constructors obtained from runtime instances.
- * Used for `instanceof` checks in {@link kind} and for codegen in the
- * benchmark loops ({@link benchFn}, {@link benchIter}).
+ * The generator ones classify benches in {@link kind} and {@link AsyncFunction}
+ * builds the sampling loop in {@link benchFn}.
  */
 export const AsyncFunction = (async () => {}).constructor as any;
 export const GeneratorFunction = function* () {}.constructor as any;
@@ -126,26 +126,12 @@ export const now: () => number = (() => {
 })();
 
 /**
- * Classifies a callable as `'fn'` (zero-arg), `'iter'` (takes an iterator
- * context), or `'yield'` (generator/async-generator).  Returns `undefined`
- * for non-functions.
- *
- * @param fn - The value to classify.
- * @param _ - When `true`, skip the zero-arg check (allows parameterised fns).
+ * Classifies a callable as `'yield'` (generator or async generator) or `'fn'`
+ * (zero-arg function). Returns `undefined` for anything else, including
+ * functions that take parameters unless `params` allows them.
  */
-export function kind(fn: any, _: boolean = false): FnKind | undefined {
-  if (!(
-    fn instanceof Function ||
-    fn instanceof AsyncFunction ||
-    fn instanceof GeneratorFunction ||
-    fn instanceof AsyncGeneratorFunction
-  ))
-    return;
-
+export function kind(fn: any, params = false): FnKind | undefined {
+  if ('function' !== typeof fn) return;
   if (fn instanceof GeneratorFunction || fn instanceof AsyncGeneratorFunction) return 'yield';
-
-  if ((_ ? true : 0 === fn.length) && (fn instanceof Function || fn instanceof AsyncFunction))
-    return 'fn';
-
-  if (0 !== fn.length && (fn instanceof Function || fn instanceof AsyncFunction)) return 'iter';
+  if (params || 0 === fn.length) return 'fn';
 }

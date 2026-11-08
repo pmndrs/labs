@@ -4,11 +4,10 @@ import type { GcMode, OptimizationStats, OptimizationTier, Stats } from './types
 export function isLikelyOptimizedOut(
   stats: Pick<Stats, 'kind' | 'avg'>,
   gcMode: GcMode,
-  noop?: Partial<Record<'fn' | 'iter' | 'fn_gc', Pick<Stats, 'avg'>>>
+  noop?: Partial<Record<'fn' | 'fn_gc', Pick<Stats, 'avg'>>>
 ): boolean {
   if (stats.kind === 'gpu') return false;
-  const mode =
-    stats.kind === 'iter' ? 'iter' : gcMode === true || gcMode === 'inner' ? 'fn_gc' : 'fn';
+  const mode = gcMode === true || gcMode === 'inner' ? 'fn_gc' : 'fn';
   return stats.avg < 1.42 * (noop?.[mode]?.avg ?? 0);
 }
 

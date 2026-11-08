@@ -161,7 +161,7 @@ describe('measurement report', () => {
         version: 'test',
         arch: 'test',
         now: 0,
-        noop: { fn: noop, iter: noop, fn_gc: noop },
+        noop: { fn: noop, fn_gc: noop },
       } as any,
       { print: (line) => lines.push(line), colors: false },
       [

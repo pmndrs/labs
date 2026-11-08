@@ -97,7 +97,6 @@ export interface WorkerResult {
     version?: string | null;
     noop?: {
       fn?: { avg: number };
-      iter?: { avg: number };
       fn_gc?: { avg: number };
     };
   };
@@ -113,7 +112,6 @@ export interface SavedContext {
   version?: string | null;
   noop?: {
     fn?: { avg: number };
-    iter?: { avg: number };
     fn_gc?: { avg: number };
   };
 }
@@ -146,7 +144,6 @@ export interface SavedResult {
     version?: string | null;
     noop?: {
       fn: { avg: number };
-      iter: { avg: number };
       fn_gc: { avg: number };
     };
   };
