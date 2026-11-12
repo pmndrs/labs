@@ -503,7 +503,9 @@ export async function benchFn(fn: (...args: any[]) => any, opts: any = {}): Prom
       if (atLimit && !$settle) break;
       ${afterSample}
       if (atLimit || ($settle && $now() >= $warmUntil)) {
-        if ($settle(t / _)) {
+        const settled = $settle(t / _);
+        if (settled === null) return;
+        if (settled) {
           $minSamples = $recordSamples;
           $minTime = $recordTime;
           $settle = null;
@@ -568,7 +570,7 @@ export async function benchFn(fn: (...args: any[]) => any, opts: any = {}): Prom
   const run = (
     warm: boolean,
     minSamples = warm ? opts.warmup_samples : opts.min_samples,
-    settle?: (duration: number) => boolean
+    settle?: (duration: number) => boolean | null
   ) =>
     loop(
       fn,
@@ -608,6 +610,22 @@ export async function benchFn(fn: (...args: any[]) => any, opts: any = {}): Prom
       return tier ? { tier, time: at - started } : null;
     }
     let optimizedAt = 0;
+    // The batch estimate comes from calls made by this function, which cost
+    // more than the same calls inlined into the compiled sampling loop. A warm
+    // sample that falls short of half its target duration gives the true cost,
+    // and the pilot restarts with a batch sized from it.
+    let resized = 0;
+    function undersized(pass: number): boolean {
+      const size = batchSize(opts, pass / batchSamples);
+      if (
+        opts.batch_samples === undefined &&
+        !params.length &&
+        pass * 2 < opts.batch_duration &&
+        size > batchSamples
+      )
+        resized = size;
+      return resized > 0;
+    }
     let settle: Parameters<typeof run>[2];
     // Warm and verify the loop that records samples.
     if (warmed) {
@@ -653,6 +671,8 @@ export async function benchFn(fn: (...args: any[]) => any, opts: any = {}): Prom
           const tier = readBenchmark(at)?.tier;
           if (!tier || (requestedTurboFan && tier !== 'TurboFan')) return false;
         }
+        // Null abandons the loop without recording
+        if (undersized(pass)) return null;
         if (opts.gc) opts.gc();
         workload = observeWorkload(optimization?.tier(fn), now());
         if (requestedTurboFan && workload?.tier !== 'TurboFan' && now() < samplingWarmup.deadline)
@@ -668,10 +688,11 @@ export async function benchFn(fn: (...args: any[]) => any, opts: any = {}): Prom
       await run(true, 0, settle);
       harness = readHarness();
       if (preparedLoop && optimization && compiler?.compile(loop)) {
-        await run(true, 1);
+        const pass = await run(true, 1);
         harness = readHarness();
         workload = observeWorkload(optimization.tier(fn), now());
         if (
+          !undersized(pass) &&
           benchmarkEnd === 'TurboFan' &&
           harness?.tier === 'TurboFan' &&
           optimization.tier(loop) === 'TurboFan'
@@ -716,7 +737,11 @@ export async function benchFn(fn: (...args: any[]) => any, opts: any = {}): Prom
       observation.start();
     }
 
-    const recorded = await run(false, opts.min_samples, settle);
+    const recorded = resized ? undefined : await run(false, opts.min_samples, settle);
+    // The restart replays the new size like a planned block. The first result
+    // was already delivered.
+    if (!recorded)
+      return benchFn(fn, { ...opts, batch: true, batch_samples: resized, $first: undefined });
     if (opts.warmup_samples > 0 && optimization?.frame) {
       harness = readHarness();
       benchmark = readBenchmark(entry.at);
