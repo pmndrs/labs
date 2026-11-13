@@ -42,6 +42,7 @@ describe('clock-aware browser sampling', () => {
       batch_threshold: 20e6,
       batch_duration: 20e6,
       batch_max: 20e6,
+      batch_floor: 10e6,
       warmup_window: 20e6,
     });
     expect(() => calibrateClock(() => 0)).toThrow('clock did not advance');

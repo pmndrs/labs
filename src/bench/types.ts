@@ -160,6 +160,8 @@ export interface MeasureOptions {
   /** Target ns per batched sample. */
   batch_duration?: number;
   batch_max?: number;
+  /** Shortest batched sample in ns the clock can time. A pilot falling short resizes its batch. */
+  batch_floor?: number;
   /** Forces the batching decision instead of probing for it. */
   batch?: boolean;
   /** Consecutive stable warm-up windows. Zero disables warm-up after the first call. */

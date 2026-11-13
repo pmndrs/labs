@@ -69,7 +69,7 @@ describe('measuring work', () => {
     expect(stats.samples.length).toBeGreaterThanOrEqual(12);
   });
 
-  it('resizes the pilot batch when the work turns out faster than estimated', async () => {
+  it('resizes the pilot batch when samples are too short for a coarse clock', async () => {
     // Costs 50 ns while the batch is estimated and 5 ns once the sampling loop
     // is warm, as work does when an engine inlines it into that loop
     let calls = 0;
@@ -78,7 +78,12 @@ describe('measuring work', () => {
       elapsed += ++calls > 200_000 ? 5 : 50;
       return elapsed;
     };
-    const stats = await measure(work, { ...fast, now: () => elapsed, gc: false });
+    const stats = await measure(work, {
+      ...fast,
+      now: () => elapsed,
+      gc: false,
+      batch_floor: 5e5,
+    });
 
     expect(stats.plan?.batch).toBe(true);
     const sampleNs = stats.plan!.batch_samples * 5;
