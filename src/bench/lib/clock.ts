@@ -5,7 +5,10 @@ import { now } from './runtime.ts';
 /** Keep timer quantization below one part in 200 of a sampling window. */
 export function calibrateClock(
   read = now
-): Pick<MeasureOptions, 'batch_threshold' | 'batch_duration' | 'warmup_window'> {
+): Pick<
+  MeasureOptions,
+  'batch_threshold' | 'batch_duration' | 'batch_max' | 'batch_floor' | 'warmup_window'
+> {
   const start = read();
   let previous = start;
   let resolution = Infinity;
@@ -20,6 +23,9 @@ export function calibrateClock(
   return {
     batch_threshold: Math.max(tuning.batch_threshold, window),
     batch_duration: Math.max(tuning.batch_duration, window),
+    // Batch sizing assumes a call costs at least a nanosecond
+    batch_max: Math.max(tuning.batch_max, window),
+    batch_floor: window / 2,
     warmup_window: Math.max(tuning.warmup_window, window),
   };
 }
