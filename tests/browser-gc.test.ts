@@ -83,30 +83,32 @@ describe.each([
   );
 });
 
-describe('WebKit GC clock calibration', () => {
-  it.each([
-    ['keeps GC stats when one round misses a forced collection', 1, true],
-    ['measures without GC stats when every round misses one', Infinity, false],
-  ])('%s', async (_, missedRounds, observed) => {
+describe('WebKit GC observation', () => {
+  it('keeps GC stats when a collection event arrives after the next reply', async () => {
     const listeners = new Set<(value: any) => void>();
+    const roundTrip = () => new Promise((resolve) => setImmediate(resolve));
     let clock = 0;
-    let forced = 0;
+    let queued: object[] = [];
     const session = {
       on: (_: string, listener: (value: any) => void) => listeners.add(listener),
       off: (_: string, listener: (value: any) => void) => listeners.delete(listener),
       async send(method: string) {
-        if (method !== 'Heap.gc') return;
-        // One collection goes unreported in each round of sixteen that misses
-        const call = forced++;
-        if (call % 16 === 1 && call / 16 < missedRounds) return;
-        const collection = { type: 'full', startTime: clock / 1e9, endTime: clock / 1e9 };
-        for (const listener of listeners) listener({ collection });
+        await roundTrip();
+        // Collections forced by earlier commands are reported once this one has replied
+        const late = queued;
+        queued = [];
+        if (method === 'Heap.gc') {
+          queued.push({ type: 'full', startTime: clock / 1e9, endTime: clock / 1e9 });
+        }
+        setImmediate(() => {
+          for (const collection of late) for (const listener of listeners) listener({ collection });
+        });
       },
     };
-    let finish!: (window: object) => Promise<GcStats | undefined>;
+    let finish!: (window: object) => Promise<GcStats>;
     const page = {
       _connection: { toImpl: () => ({ delegate: { _session: session } }) },
-      evaluate: async () => clock++,
+      evaluate: async () => (await roundTrip(), clock++),
       exposeFunction: async (_: string, expose: typeof finish) => void (finish = expose),
     };
 
@@ -114,6 +116,6 @@ describe('WebKit GC clock calibration', () => {
       finish({ start: clock, end: clock + 10, timed: 5, iterations: 1, comparable: false })
     );
 
-    expect(gc?.iterations).toBe(observed ? 1 : undefined);
+    expect(gc).toMatchObject({ iterations: 1, count: 0 });
   });
 });
