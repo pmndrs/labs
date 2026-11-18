@@ -82,3 +82,38 @@ describe.each([
     }
   );
 });
+
+describe('WebKit GC clock calibration', () => {
+  it.each([
+    ['keeps GC stats when one round misses a forced collection', 1, true],
+    ['measures without GC stats when every round misses one', Infinity, false],
+  ])('%s', async (_, missedRounds, observed) => {
+    const listeners = new Set<(value: any) => void>();
+    let clock = 0;
+    let forced = 0;
+    const session = {
+      on: (_: string, listener: (value: any) => void) => listeners.add(listener),
+      off: (_: string, listener: (value: any) => void) => listeners.delete(listener),
+      async send(method: string) {
+        if (method !== 'Heap.gc') return;
+        // One collection goes unreported in each round of sixteen that misses
+        const call = forced++;
+        if (call % 16 === 1 && call / 16 < missedRounds) return;
+        const collection = { type: 'full', startTime: clock / 1e9, endTime: clock / 1e9 };
+        for (const listener of listeners) listener({ collection });
+      },
+    };
+    let finish!: (window: object) => Promise<GcStats | undefined>;
+    const page = {
+      _connection: { toImpl: () => ({ delegate: { _session: session } }) },
+      evaluate: async () => clock++,
+      exposeFunction: async (_: string, expose: typeof finish) => void (finish = expose),
+    };
+
+    const gc = await observeWebkitGc(page as any, () =>
+      finish({ start: clock, end: clock + 10, timed: 5, iterations: 1, comparable: false })
+    );
+
+    expect(gc?.iterations).toBe(observed ? 1 : undefined);
+  });
+});
