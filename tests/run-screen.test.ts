@@ -339,13 +339,22 @@ describe('run report', () => {
     {
       name: 'unsettled',
       change: { unsettled: true },
+      line: 'warmup never settled',
+    },
+    {
+      name: 'nondeterministic',
+      change: { varyingOutput: true },
       line: 'results change between runs ✦ make the work deterministic',
     },
   ])('gives one line of feedback for a $name bench', ({ change, line }) => {
     const result = fixture();
     const stats = result.files[0].benchmarks[0].runs[0].stats!;
-    const { unsettled, ...blocks } = change as { unsettled?: boolean };
-    Object.assign(stats, { unsettled, blocks: { ...stats.blocks!, spreads: [0], ...blocks } });
+    const { unsettled, varyingOutput, ...blocks } = change as Partial<typeof stats>;
+    Object.assign(stats, {
+      unsettled,
+      varyingOutput,
+      blocks: { ...stats.blocks!, spreads: [0], ...blocks },
+    });
     const text = render(result).lines.join('\n');
 
     expect(text).toContain(line ? '⚠  cpu  create entities' : '✓  cpu  create entities');
