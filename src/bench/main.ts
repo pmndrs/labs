@@ -157,7 +157,13 @@ export class B {
     }
   }
 
-  async run(thrw = false, _tune: any = {}, plans?: Array<BlockPlan | undefined>): Promise<Trial> {
+  /** Measures every case, or only the case at index `only`, leaving the others without stats. */
+  async run(
+    thrw = false,
+    _tune: any = {},
+    plans?: Array<BlockPlan | undefined>,
+    only?: number
+  ): Promise<Trial> {
     const gcMode = _tune.sample_gc === false ? false : this._gc;
     const args = Object.keys(this._args);
     const kind = 0 === args.length ? 'static' : 1 === args.length ? 'args' : 'multi-args';
@@ -237,7 +243,8 @@ export class B {
           for (let oo = 0; oo < args.length; oo++)
             _name = _name.replaceAll(`\$${args[oo]}`, _args[args[oo]]);
           try {
-            stats = await measure(this.f!, { ...tune, args: _args, ...planOverrides(plans?.[o]) });
+            if (only === undefined || only === o)
+              stats = await measure(this.f!, { ...tune, args: _args, ...planOverrides(plans?.[o]) });
           } catch (err) {
             error = err;
             if (thrw) throw err;
@@ -383,11 +390,12 @@ export function trialAt(index: number): B {
 export async function runTrialAt(
   index: number,
   tune: any = {},
-  plans?: Array<BlockPlan | undefined>
+  plans?: Array<BlockPlan | undefined>,
+  only?: number
 ): Promise<Trial> {
   const trial = trialAt(index);
   await initCounters(await arch(), runtime());
-  return await trial.run(false, tune, plans);
+  return await trial.run(false, tune, plans, only);
 }
 
 export async function run(
