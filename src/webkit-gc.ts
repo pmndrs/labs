@@ -24,16 +24,23 @@ export async function observeWebkitGc<T>(page: Page, run: () => Promise<T>): Pro
   try {
     await session.send('Heap.gc');
     await session.send('Console.enable');
-    events.length = 0;
-    const probes = [];
-    for (let i = 0; i < 16; i++) {
-      const before = await page.evaluate(() => performance.now() * 1e6);
-      await session.send('Heap.gc');
-      const after = await page.evaluate(() => performance.now() * 1e6);
-      probes.push({ before, after });
+    // A calibration round can miss a forced collection. It is repeated, and a
+    // block left without a clock is measured without GC stats.
+    let clock: ReturnType<typeof jscGcClock> | undefined;
+    for (let round = 0; round < 3 && !clock; round++) {
+      events.length = 0;
+      const probes = [];
+      for (let i = 0; i < 16; i++) {
+        const before = await page.evaluate(() => performance.now() * 1e6);
+        await session.send('Heap.gc');
+        const after = await page.evaluate(() => performance.now() * 1e6);
+        probes.push({ before, after });
+      }
+      await session.send('Console.enable');
+      try {
+        clock = jscGcClock(probes, events);
+      } catch {}
     }
-    await session.send('Console.enable');
-    const clock = jscGcClock(probes, events);
     events.length = 0;
     await page.exposeFunction(
       '__labsFinishGc',
@@ -41,7 +48,7 @@ export async function observeWebkitGc<T>(page: Page, run: () => Promise<T>): Pro
         (pending = (async () => {
           await session.send('Heap.gc');
           await session.send('Console.enable');
-          return jscGcStats(events.splice(0), window, clock);
+          return clock && jscGcStats(events.splice(0), window, clock);
         })())
     );
     return await run();
