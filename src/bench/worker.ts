@@ -8,7 +8,7 @@ import { getBenchRegistry } from '../index.ts';
 import { median, relativeSpread } from '../stats.ts';
 import { measure, run } from './index.ts';
 import { _print } from './lib/runtime.ts';
-import { runTrialAt, trialAt } from './main.ts';
+import { runTrialAt } from './main.ts';
 import type { ProgressEvent } from '../cli/progress.ts';
 import type { BlockPlan, GcStats, Stats, Trial } from './types.ts';
 import { observeNodeDeopts } from './node-deopts.ts';
@@ -110,12 +110,11 @@ async function childMain(index: number): Promise<void> {
       : undefined;
     const tune = parseTuneEnv();
     const trace = process.env.LABS_DEOPT_DIR;
-    const only = process.env.LABS_ONLY_CASE;
     const trial = await runTrialAt(
       index,
       trace ? { ...tune, $deopts: observeNodeDeopts(trace) } : tune,
       plans,
-      only === undefined ? undefined : Number(only)
+      Number(process.env.LABS_ONLY_CASE)
     );
     writeFileSync(
       process.env.LABS_RESULT_FILE!,
@@ -359,16 +358,22 @@ function mergeWarmup(stats: Stats[]): Pick<Stats, 'warmup'> {
 }
 
 /**
- * Runs every bench as `blocks` fresh child processes. Block 0 is the pilot:
- * it samples until the block budget and sample floor are both met, and its
- * measurement plan freezes the remaining blocks. Blocks are scheduled round
- * robin across benches so each bench's blocks span the whole sitting and
- * between-block spread samples real environment drift, not just adjacent
- * seconds.
+ * Runs every bench as `blocks` blocks with a fresh child process for each of
+ * its cases, so a case never times code the engine shaped for an earlier one.
+ * Block 0 is the pilot: it samples until the block budget and sample floor are
+ * both met, and its measurement plan freezes the remaining blocks. Blocks are
+ * scheduled round robin across benches so each bench's blocks span the whole
+ * sitting and between-block spread samples real environment drift, not just
+ * adjacent seconds.
  */
 function makeBlockExecutor(
   blocks: number,
-  runTrial: (index: number, plans?: BlockPlan[], observeGc?: boolean) => Promise<BlockResult>
+  runTrial: (
+    index: number,
+    only: number,
+    plans?: BlockPlan[],
+    observeGc?: boolean
+  ) => Promise<BlockResult>
 ) {
   return async (jobs: BlockJob[]): Promise<Map<number, Trial>> => {
     const collected = new Map<number, Array<{ trial: Trial; calibrationRate: number }>>();
@@ -380,13 +385,19 @@ function makeBlockExecutor(
     });
 
     for (let block = 0; block < blocks; block++) {
-      for (const { index, gc } of jobs) {
+      for (const { index, cases, gc } of jobs) {
         // A pilot without a full set of plans (errored runs) is not replayable
         if (block > 0 && !plans.has(index)) continue;
         await takeTurn();
         emit({ type: 'bench', index, block });
         const started = performance.now();
-        const out = await runTrial(index, block === 0 ? undefined : plans.get(index), gc);
+        const plan = block === 0 ? undefined : plans.get(index);
+        const parts = [];
+        for (let only = 0; only < cases; only++) parts.push(await runTrial(index, only, plan, gc));
+        const out = {
+          ...parts[0],
+          trial: { ...parts[0].trial, runs: parts.map((part, only) => part.trial.runs[only]) },
+        };
         const runs = out.trial.runs;
         const failed = runs.find((run) => run.error !== undefined);
         emit({
@@ -462,29 +473,17 @@ async function main(): Promise<void> {
   } else {
     await import(file!);
     const registry = getBenchRegistry();
-    const execute = makeBlockExecutor(blockCount(), async (index, plans, observeGc) => {
-      const child = (only?: number) =>
-        runTrialChild(
-          { _name: registry[index]?.alias },
-          index,
-          {
-            ...(plans ? { LABS_BLOCK_PLANS: JSON.stringify(plans) } : {}),
-            ...(only === undefined ? {} : { LABS_ONLY_CASE: String(only) }),
-          },
-          observeGc
-        );
-      // Bun's JavaScriptCore compiles setup state as a constant only for the
-      // first run of a generator in a process, so the later cases of a sweep
-      // would time different code than the first. Each case gets its own process.
-      const cases = (globalThis as any).Bun ? [...trialAt(index)._names()].length : 1;
-      if (cases < 2) return child();
-      const parts = [];
-      for (let only = 0; only < cases; only++) parts.push(await child(only));
-      return {
-        trial: { ...parts[0].trial, runs: parts.map((part, only) => part.trial.runs[only]) },
-        calibrationRate: median(parts.map((part) => part.calibrationRate)),
-      };
-    });
+    const execute = makeBlockExecutor(blockCount(), async (index, only, plans, observeGc) =>
+      runTrialChild(
+        { _name: registry[index]?.alias },
+        index,
+        {
+          LABS_ONLY_CASE: String(only),
+          ...(plans ? { LABS_BLOCK_PLANS: JSON.stringify(plans) } : {}),
+        },
+        observeGc
+      )
+    );
     const measured = await run({
       tune: parseTuneEnv(),
       execute: (jobs: Array<{ trial: any; index: number }>) =>

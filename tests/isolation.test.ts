@@ -67,4 +67,17 @@ describe('worker bench isolation', () => {
     expect(victim.runs[0].stats.samples.length).toBeGreaterThan(0);
     expect(victim.groupName).toBe('isolation');
   });
+
+  it(
+    "keeps the cases of a bench from observing each other's process state",
+    { timeout: 60_000 },
+    () => {
+      const cases = new URL('./fixtures/cases.bench.ts', import.meta.url).href;
+      const { runs } = runWorker({ LABS_BENCH_FILE: cases }).benchmarks[0];
+
+      expect(runs.map((run: any) => run.name)).toEqual(['case 1', 'case 2']);
+      expect(runs.map((run: any) => run.error)).toEqual([undefined, undefined]);
+      expect(runs.map((run: any) => run.stats.blocks.medians.length)).toEqual([2, 2]);
+    }
+  );
 });
