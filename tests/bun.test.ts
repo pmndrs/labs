@@ -236,6 +236,27 @@ describe('Bun benchmarks', () => {
   );
 
   it.skipIf(!available)(
+    'does not warn about the tier of a thin function around slow work',
+    { timeout: 60_000 },
+    () => {
+      // Too slow to batch, so the function is called once per sample and climbs
+      // the lower tiers by call count while the sort takes all the time
+      setup(
+        `import { bench } from '@pmndrs/labs';
+        bench('sort', function* () {
+          const unsorted = Array.from({ length: 4096 }, (_, i) => (i * 7919) % 4096);
+          yield () => unsorted.slice().sort((a, b) => a - b);
+        });`,
+        { blockTime: 0.05 }
+      );
+      const output = run();
+      expect(output.status, output.stderr).toBe(0);
+      const [sort] = JSON.parse(output.stdout).benches;
+      expect(['mixed-tiers', 'late-optimization']).not.toContain(sort.problem);
+    }
+  );
+
+  it.skipIf(!available)(
     'preserves correctness failures and continues other benchmarks',
     { timeout: 60_000 },
     () => {
