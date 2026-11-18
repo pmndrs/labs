@@ -131,6 +131,28 @@ describe('Bun benchmarks', () => {
     }
   );
 
+  it.skipIf(!available)(
+    'measures each case of a sweep in its own process',
+    { timeout: 60_000 },
+    () => {
+      setup(`import { assert, bench } from '@pmndrs/labs';
+        let runs = 0;
+        bench('sweep $n', function* (state) {
+          assert.equal(++runs, 1, 'cases must have fresh process state');
+          const n: number = state.get('n');
+          yield () => n + 1;
+          return n;
+        }).args('n', [1, 2, 3]);`);
+      const output = run();
+      expect(output.status, output.stderr).toBe(0);
+      const saved = loadResult(join(project, '.labs'), 'bun-test');
+      const runs = saved.files[0].benchmarks[0].runs;
+      expect(runs.map((run) => run.name)).toEqual(['sweep 1', 'sweep 2', 'sweep 3']);
+      expect(runs.map((run) => run.stats?.snapshot)).toEqual([1, 2, 3]);
+      expect(runs.map((run) => run.stats?.blocks?.medians.length)).toEqual([2, 2, 2]);
+    }
+  );
+
   it.skipIf(!available)('passes launch arguments and JSC settings to every block', () => {
     vi.stubEnv('BUN_JSC_useDollarVM', '0');
     vi.stubEnv('BENCH_LAUNCH_VALUE', 'inherited');
