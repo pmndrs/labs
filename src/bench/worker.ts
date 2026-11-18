@@ -8,7 +8,7 @@ import { getBenchRegistry } from '../index.ts';
 import { median, relativeSpread } from '../stats.ts';
 import { measure, run } from './index.ts';
 import { _print } from './lib/runtime.ts';
-import { runTrialAt } from './main.ts';
+import { runTrialAt, trialAt } from './main.ts';
 import type { ProgressEvent } from '../cli/progress.ts';
 import type { BlockPlan, GcStats, Stats, Trial } from './types.ts';
 import { observeNodeDeopts } from './node-deopts.ts';
@@ -110,10 +110,12 @@ async function childMain(index: number): Promise<void> {
       : undefined;
     const tune = parseTuneEnv();
     const trace = process.env.LABS_DEOPT_DIR;
+    const only = process.env.LABS_ONLY_CASE;
     const trial = await runTrialAt(
       index,
       trace ? { ...tune, $deopts: observeNodeDeopts(trace) } : tune,
-      plans
+      plans,
+      only === undefined ? undefined : Number(only)
     );
     writeFileSync(
       process.env.LABS_RESULT_FILE!,
@@ -460,14 +462,29 @@ async function main(): Promise<void> {
   } else {
     await import(file!);
     const registry = getBenchRegistry();
-    const execute = makeBlockExecutor(blockCount(), async (index, plans, observeGc) =>
-      runTrialChild(
-        { _name: registry[index]?.alias },
-        index,
-        plans ? { LABS_BLOCK_PLANS: JSON.stringify(plans) } : {},
-        observeGc
-      )
-    );
+    const execute = makeBlockExecutor(blockCount(), async (index, plans, observeGc) => {
+      const child = (only?: number) =>
+        runTrialChild(
+          { _name: registry[index]?.alias },
+          index,
+          {
+            ...(plans ? { LABS_BLOCK_PLANS: JSON.stringify(plans) } : {}),
+            ...(only === undefined ? {} : { LABS_ONLY_CASE: String(only) }),
+          },
+          observeGc
+        );
+      // Bun's JavaScriptCore compiles setup state as a constant only for the
+      // first run of a generator in a process, so the later cases of a sweep
+      // would time different code than the first. Each case gets its own process.
+      const cases = (globalThis as any).Bun ? [...trialAt(index)._names()].length : 1;
+      if (cases < 2) return child();
+      const parts = [];
+      for (let only = 0; only < cases; only++) parts.push(await child(only));
+      return {
+        trial: { ...parts[0].trial, runs: parts.map((part, only) => part.trial.runs[only]) },
+        calibrationRate: median(parts.map((part) => part.calibrationRate)),
+      };
+    });
     const measured = await run({
       tune: parseTuneEnv(),
       execute: (jobs: Array<{ trial: any; index: number }>) =>
