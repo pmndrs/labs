@@ -69,6 +69,29 @@ describe('measuring work', () => {
     expect(stats.samples.length).toBeGreaterThanOrEqual(12);
   });
 
+  it('resizes the pilot batch when samples are too short for a coarse clock', async () => {
+    // Costs 50 ns while the batch is estimated and 5 ns once the sampling loop
+    // is warm, as work does when an engine inlines it into that loop
+    let calls = 0;
+    let elapsed = 0;
+    const work = () => {
+      elapsed += ++calls > 200_000 ? 5 : 50;
+      return elapsed;
+    };
+    const stats = await measure(work, {
+      ...fast,
+      now: () => elapsed,
+      gc: false,
+      batch_floor: 5e5,
+    });
+
+    expect(stats.plan?.batch).toBe(true);
+    const sampleNs = stats.plan!.batch_samples * 5;
+    expect(sampleNs).toBeGreaterThanOrEqual(1e6);
+    expect(sampleNs).toBeLessThan(2e6);
+    expect(stats.p50).toBeCloseTo(5);
+  });
+
   it('runs at least the sample floor and the time budget', async () => {
     const stats = await measure(busy(100), { min_cpu_time: 20e6, min_samples: 12 });
 
