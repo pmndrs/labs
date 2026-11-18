@@ -454,6 +454,10 @@ export async function benchFn(fn: (...args: any[]) => any, opts: any = {}): Prom
       harnessTier: OptimizationTier | undefined,
       direct: boolean
     ): OptimizationTier | null {
+      // JavaScriptCore tiers a function up by how much of its own code has run.
+      // One still below the optimizing tiers when sampled once per call spends
+      // its time in what it calls, so its tier says nothing about the work.
+      if (dollar_vm && !batch && (tier === 'LLInt' || tier === 'Baseline')) return null;
       return tier &&
         (direct ||
           tier === harnessTier ||
