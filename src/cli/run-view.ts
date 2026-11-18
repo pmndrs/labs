@@ -64,6 +64,7 @@ export function runStatus(
     | 'unmeasured'
     | 'optimized-out'
     | 'nondeterministic'
+    | 'unsettled'
     | 'gpu-clock'
     | 'mixed-tiers'
     | 'deoptimized'
@@ -116,13 +117,15 @@ export function runStatus(
         advice: '',
       };
   }
-  if (stats.varyingOutput || (stats.kind !== 'gpu' && stats.unsettled))
+  if (stats.varyingOutput)
     return {
       symbol: '⚠',
       problem: 'nondeterministic',
       message: 'results change between runs',
       advice: 'make the work deterministic',
     };
+  if (stats.kind !== 'gpu' && stats.unsettled)
+    return { symbol: '⚠', problem: 'unsettled', message: 'warmup never settled', advice: '' };
   const medians = stats.blocks?.medians ?? [];
   const resolution = comparisonResolution(medians);
   if (medians.length >= 2 && resolution > minDelta) {
