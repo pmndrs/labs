@@ -52,6 +52,8 @@ it('serves benchmarks as stripped modules while rejecting paths and symlinks out
     expect(code).toContain('const scale');
     expect(code).not.toContain(': number');
     expect(code).not.toContain("'@pmndrs/labs'");
+    const fetched = await fetch(module.url, { headers: { 'sec-fetch-dest': 'empty' } });
+    expect(await fetched.text()).toContain('const scale: number');
     const response = await fetch(`${server.url}/fixture.json`);
     expect(response.status).toBe(200);
     expect(response.headers.get('Content-Type')).toBe('application/json');
@@ -71,6 +73,41 @@ it('serves benchmarks as stripped modules while rejecting paths and symlinks out
       ).status
     ).toBe(403);
     expect((await fetch(`${server.url}/missing.json`)).status).toBe(404);
+  } finally {
+    await server?.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+it('ends the run only when a static import cannot be served', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'labs-graph-'));
+  let server: Awaited<ReturnType<typeof startBrowserServer>> | undefined;
+  try {
+    const file = join(directory, 'work.bench.ts');
+    writeFileSync(join(directory, 'package.json'), '{"type":"module"}');
+    writeFileSync(join(directory, 'style.css'), 'body {}');
+    writeFileSync(
+      join(directory, 'wasm-worker.js'),
+      'onmessage = (event) => postMessage(event.data.instance.exports.run());'
+    );
+    writeFileSync(
+      file,
+      `import { bench } from '@pmndrs/labs';
+      import './style.css';
+      const optional = await import('optional-package').catch(() => null);
+      const generated = await import('./generated.js').catch(() => null);
+      bench('test', () => [optional, generated]);`
+    );
+    server = await startBrowserServer(pathToFileURL(file).href);
+    const local = (name: string) =>
+      `${server!.url}/_labs/fs${pathToFileURL(realpathSync(directory)).pathname}/${name}`;
+    const script = { headers: { 'sec-fetch-dest': 'script' } };
+    expect((await fetch(local('work.bench.ts'), script)).status).toBe(200);
+    expect((await fetch(local('wasm-worker.js'), script)).status).toBe(200);
+    expect((await fetch(local('generated.js'), script)).status).toBe(404);
+    expect(await Promise.race([server.failed, Promise.resolve('running')])).toBe('running');
+    expect((await fetch(local('style.css'), script)).status).toBe(500);
+    await expect(server.failed).rejects.toThrow(/work\.bench\.ts imports .*style\.css/);
   } finally {
     await server?.close();
     rmSync(directory, { recursive: true, force: true });

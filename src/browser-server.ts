@@ -60,9 +60,14 @@ export async function startBrowserServer(file: string) {
     }
     return root;
   };
+  const linked = new Map<string, string>();
   // Assets beside any module in the graph stay reachable through import.meta.url.
-  const allow = async (path: string): Promise<string> => {
+  // A static import also records its importer because the page cannot run
+  // without it, so a failure to serve it ends the run with both files named.
+  const allow = async (path: string, importer?: string): Promise<string> => {
+    if (importer) linked.set(path, importer);
     const real = await realpath(path);
+    if (importer) linked.set(real, importer);
     roots.add((await packageRoot(dirname(real))) ?? dirname(real));
     return '/_labs/fs' + pathToFileURL(real).pathname.replaceAll("'", '%27');
   };
@@ -79,7 +84,11 @@ export async function startBrowserServer(file: string) {
       }
     }
     const [imports, , , hasModuleSyntax] = parse(code, path);
-    if (!hasModuleSyntax && /\b(?:require\s*\(|module\.exports\b|exports\.\w)/.test(code))
+    if (
+      linked.has(path) &&
+      !hasModuleSyntax &&
+      /(?<![.\w$])(?:require\s*\(|module\.exports\b|exports\.\w)/.test(code)
+    )
       throw new Error(
         `${path} is CommonJS. Browsers load ES modules only, so build it as an ES module before running Labs.`
       );
@@ -89,29 +98,37 @@ export async function startBrowserServer(file: string) {
       if (entry.type === 'import-meta' || !entry.specifier) continue;
       if (entry.type === 'dynamic' && entry.glob) continue;
       const { specifier } = entry;
+      // Attributes mark JSON and CSS modules, which browsers load as they are.
+      const importer = entry.type === 'dynamic' || entry.attributes ? undefined : path;
       // Relative imports and URLs resolve in the browser against the module URL.
       if (/^\.{0,2}\//.test(specifier)) {
         if (specifier.startsWith('.'))
-          await allow(resolve(dirname(path), specifier.replace(/[?#].*$/, ''))).catch(() => {});
+          await allow(resolve(dirname(path), specifier.replace(/[?#].*$/, '')), importer).catch(
+            () => {}
+          );
         continue;
       }
       if (/^(?:https?|data|blob):/.test(specifier)) continue;
-      const resolved =
-        specifier === '@pmndrs/labs'
-          ? pathToFileURL(harness)
-          : /^[a-z]+:/.test(specifier)
-            ? new URL(specifier)
-            : moduleResolve(
-                specifier,
-                pathToFileURL(path),
-                new Set(['browser', 'import', 'default'])
-              );
-      if (resolved.protocol !== 'file:') {
+      let target: string;
+      try {
+        const resolved =
+          specifier === '@pmndrs/labs'
+            ? pathToFileURL(harness)
+            : /^[a-z]+:/.test(specifier)
+              ? new URL(specifier)
+              : moduleResolve(
+                  specifier,
+                  pathToFileURL(path),
+                  new Set(['browser', 'import', 'default'])
+                );
+        if (resolved.protocol !== 'file:')
+          throw new Error(`${path} imports ${specifier}, which browsers cannot load.`);
+        target = await allow(fileURLToPath(resolved), importer);
+      } catch (error) {
         // A guarded dynamic import may never run in the browser.
         if (entry.type === 'dynamic') continue;
-        throw new Error(`${path} imports ${specifier}, which browsers cannot load.`);
+        throw error;
       }
-      const target = await allow(fileURLToPath(resolved));
       output +=
         code.slice(end, entry.start) + (entry.type === 'dynamic' ? JSON.stringify(target) : target);
       end = entry.end;
@@ -119,13 +136,14 @@ export async function startBrowserServer(file: string) {
     return output + code.slice(end);
   };
 
-  const main = `import { browserHarness } from ${JSON.stringify(await allow(harness))};
-import ${JSON.stringify(await allow(benchFile))};
+  const main = `import { browserHarness } from ${JSON.stringify(await allow(harness, '/bench.js'))};
+import ${JSON.stringify(await allow(benchFile, '/bench.js'))};
 globalThis.__labs = browserHarness;
 `;
   let url: string;
   let fail: (error: Error) => void;
-  // Rejects when the browser is refused a module, which it would report as a timeout.
+  // Rejects when a static import cannot be served, which the browser would
+  // only report as a timeout.
   const failed = new Promise<never>((_, reject) => (fail = reject));
   failed.catch(() => {});
 
@@ -133,9 +151,7 @@ globalThis.__labs = browserHarness;
     response.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
     response.setHeader('Cross-Origin-Embedder-Policy', 'require-corp');
     const pathname = new URL(request.url!, url).pathname;
-    const module = /^(?:script|worker|sharedworker)$/.test(String(request.headers['sec-fetch-dest']));
-    const local = (address: string) =>
-      decodeURIComponent(new URL(address, url).pathname.replace(/^\/_labs\/fs/, ''));
+    let path = pathname;
     void (async () => {
       if (pathname === '/') {
         response.setHeader('Content-Type', 'text/html');
@@ -151,43 +167,47 @@ globalThis.__labs = browserHarness;
         response.writeHead(204).end();
         return;
       }
-      const path = await realpath(
-        pathname.startsWith('/_labs/fs/')
-          ? fileURLToPath(new URL('file://' + pathname.slice('/_labs/fs'.length)))
-          : resolve(dirname(benchFile), '.' + decodeURIComponent(pathname))
-      );
+      path = pathname.startsWith('/_labs/fs/')
+        ? fileURLToPath(new URL('file://' + pathname.slice('/_labs/fs'.length)))
+        : resolve(dirname(benchFile), '.' + decodeURIComponent(pathname));
+      const importer = linked.get(path);
+      path = await realpath(path);
       if (
         ![...roots].some((root) => {
           const suffix = relative(root, path);
           return suffix !== '..' && !suffix.startsWith('..' + sep) && !isAbsolute(suffix);
         })
       ) {
-        if (module) fail(new Error(`${path} is outside the directories Labs serves.`));
         response.writeHead(403).end();
         return;
       }
-      if (!(await stat(path)).isFile()) {
-        response.writeHead(404).end();
-        return;
-      }
-      if (/\.[cm]?[jt]sx?$/.test(path)) {
+      if (!(await stat(path)).isFile())
+        throw Object.assign(new Error(`${path} is not a file.`), { code: 'ENOENT' });
+      // A script that fetches a file wants its bytes, even when the file is code.
+      if (request.headers['sec-fetch-dest'] !== 'empty' && /\.[cm]?[jt]sx?$/.test(path)) {
         let code = modules.get(path);
         if (!code) modules.set(path, (code = load(path)));
         const body = await code;
         response.setHeader('Content-Type', 'text/javascript');
         response.end(body);
       } else {
+        if (importer && request.headers['sec-fetch-dest'] !== 'empty')
+          throw new Error(
+            `${importer} imports ${path}, which is not JavaScript. Browsers cannot load it as a module, so build it before running Labs.`
+          );
         response.setHeader('Content-Type', contentType(path));
         response.end(await readFile(path));
       }
     })().catch((error: NodeJS.ErrnoException) => {
       const missing = error.code === 'ENOENT' || error.code === 'ENOTDIR';
-      if (!missing) fail(error);
-      else if (module)
+      const importer = linked.get(path);
+      if (importer)
         fail(
-          new Error(
-            `Cannot find module ${local(request.url!)} imported from ${local(request.headers.referer ?? '/')}. Browsers need the exact file name with its extension.`
-          )
+          missing
+            ? new Error(
+                `Cannot find module ${path} imported from ${importer}. Browsers need the exact file name with its extension.`
+              )
+            : error
         );
       response.writeHead(missing ? 404 : 500).end(String(error.message));
     });

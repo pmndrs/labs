@@ -1,7 +1,6 @@
 import { createHash } from 'node:crypto';
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import * as module from 'node:module';
-import { tmpdir, userInfo } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as labs from './index.ts';
@@ -12,13 +11,15 @@ if (process.env.LABS_BENCH_FILE && !(globalThis as any).Bun) {
     import.meta.url.endsWith('.ts') ? './index.ts' : './index.mjs',
     import.meta.url
   ).href;
-  const cache = join(tmpdir(), `labs-strip-${userInfo().uid}`);
-  mkdirSync(cache, { recursive: true });
+  const cache = join(process.cwd(), 'node_modules', '.cache', 'labs-strip');
 
   module.registerHooks({
     // Benchmarks and the worker must register trials in the same Labs instance.
     resolve(specifier, context, nextResolve) {
-      return nextResolve(specifier === '@pmndrs/labs' ? entry : specifier, context);
+      return nextResolve(
+        specifier === '@pmndrs/labs' && !context.conditions.includes('require') ? entry : specifier,
+        context
+      );
     },
     // TypeScript runs as the text Node's own type stripping produces. Reading
     // that text from disk spares every block from loading the stripper.
@@ -39,8 +40,14 @@ if (process.env.LABS_BENCH_FILE && !(globalThis as any).Bun) {
           // Node reports unsupported syntax with the file and position.
           return nextLoad(url, context);
         }
-        writeFileSync(`${file}.${process.pid}`, code);
-        renameSync(`${file}.${process.pid}`, file);
+        try {
+          mkdirSync(cache, { recursive: true });
+          writeFileSync(`${file}.${process.pid}`, code);
+          renameSync(`${file}.${process.pid}`, file);
+        } catch {
+          // The stripped text is already in hand, so a cache that cannot be
+          // written only costs the next block its stripper load.
+        }
       }
       return { format: 'module', source: code, shortCircuit: true };
     },

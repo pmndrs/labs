@@ -256,37 +256,41 @@ describe('comparing checkouts through the CLI', () => {
     }
   );
 
-  it('runs a CommonJS benchmark that requires Labs', { timeout: 40_000 }, () => {
-    installLabs(repo);
-    // The published package gives require its own CommonJS entry.
-    const pkg = join(repo, 'node_modules', '@pmndrs', 'labs');
-    writeFileSync(join(pkg, 'index.cjs'), 'throw new Error("second Labs instance");');
-    writeFileSync(
-      join(pkg, 'package.json'),
-      JSON.stringify({
-        name: '@pmndrs/labs',
-        type: 'module',
-        exports: { import: './src/index.ts', require: './index.cjs' },
-      })
-    );
-    writeFileSync(join(project, 'package.json'), JSON.stringify({ type: 'commonjs' }));
-    writeFileSync(
-      join(project, 'labs.config.ts'),
-      `const { defineConfig } = require(${JSON.stringify(fileURLToPath(new URL('../src/config.ts', import.meta.url)))});
-       module.exports = defineConfig({ benchDir: 'benches', blocks: 2, blockTime: 0.001, minSamples: 2, heap: false });`
-    );
-    writeFileSync(
-      join(project, 'benches', 'value.bench.ts'),
-      `const { bench } = require('@pmndrs/labs');
-       const value: number = 42;
+  it.each(['ts', 'js'])(
+    'runs a CommonJS .%s benchmark that requires Labs',
+    { timeout: 40_000 },
+    (extension) => {
+      installLabs(repo);
+      // The published package gives require its own CommonJS entry.
+      const pkg = join(repo, 'node_modules', '@pmndrs', 'labs');
+      writeFileSync(join(pkg, 'index.cjs'), 'throw new Error("second Labs instance");');
+      writeFileSync(
+        join(pkg, 'package.json'),
+        JSON.stringify({
+          name: '@pmndrs/labs',
+          type: 'module',
+          exports: { import: './src/index.ts', require: './index.cjs' },
+        })
+      );
+      writeFileSync(join(project, 'package.json'), JSON.stringify({ type: 'commonjs' }));
+      writeFileSync(
+        join(project, 'labs.config.ts'),
+        `const { defineConfig } = require(${JSON.stringify(fileURLToPath(new URL('../src/config.ts', import.meta.url)))});
+       module.exports = defineConfig({ benchDir: 'benches', benchMatch: '**/*.bench.${extension}', blocks: 2, blockTime: 0.001, minSamples: 2, heap: false });`
+      );
+      writeFileSync(
+        join(project, 'benches', `value.bench.${extension}`),
+        `const { bench } = require('@pmndrs/labs');
+       const value${extension === 'ts' ? ': number' : ''} = 42;
        bench('required', () => value);`
-    );
-    const child = cli('--no-save', '--json');
-    expect(child.status, child.stderr).toBe(0);
-    const result = JSON.parse(child.stdout);
-    expect(result.crashes).toEqual([]);
-    expect(result.benches.map((bench: { name: string }) => bench.name)).toEqual(['required']);
-  });
+      );
+      const child = cli('--no-save', '--json');
+      expect(child.status, child.stderr).toBe(0);
+      const result = JSON.parse(child.stdout);
+      expect(result.crashes).toEqual([]);
+      expect(result.benches.map((bench: { name: string }) => bench.name)).toEqual(['required']);
+    }
+  );
 
   it.each([false, true])('fails when a worker crashes with JSON output %s', (json) => {
     writeFileSync(
