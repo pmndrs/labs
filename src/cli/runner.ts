@@ -1,5 +1,4 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
-import { createRequire } from 'node:module';
 import { basename, dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { resolve as resolveModule } from 'import-meta-resolve';
@@ -58,7 +57,6 @@ function freqSample(workerResult: WorkerResult, file: string): FreqSample {
 
 const WORKER_EXT = import.meta.url.endsWith('.ts') ? 'ts' : 'mjs';
 const WORKER = fileURLToPath(new URL(`../worker.${WORKER_EXT}`, import.meta.url));
-const TSX_LOADER = pathToFileURL(createRequire(import.meta.url).resolve('tsx')).href;
 
 function globBenchFiles(dir: string, pattern: string): string[] {
   const suffix = pattern.replace(/^\*\*\/\*/, '');
@@ -584,7 +582,7 @@ export async function runCLI(args: string[]) {
                 ...(config.bun?.args ?? []),
                 WORKER,
               ]
-            : ['--import', TSX_LOADER, ...config.nodeFlags, WORKER],
+            : [...config.nodeFlags, WORKER],
         cwd: s.cwd,
         env: {
           ...workerEnv(file, benchTune, tagEnv, resultFile),

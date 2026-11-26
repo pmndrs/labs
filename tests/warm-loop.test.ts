@@ -1,6 +1,5 @@
 import { execFileSync } from 'node:child_process';
 import { readFileSync, rmSync } from 'node:fs';
-import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -14,7 +13,6 @@ import { describe, expect, it } from 'vitest';
 describe('sampling loop warm-up', () => {
   const WORKER = fileURLToPath(new URL('../src/worker.ts', import.meta.url));
   const FIXTURE = fileURLToPath(new URL('./fixtures/warm-loop.bench.ts', import.meta.url));
-  const TSX = pathToFileURL(createRequire(import.meta.url).resolve('tsx')).href;
 
   it('keeps short blocks comparable when V8 promotes hot code early', { timeout: 120_000 }, () => {
     const resultFile = join(tmpdir(), `labs-warm-loop-test-${process.pid}.json`);
@@ -28,8 +26,6 @@ describe('sampling loop warm-up', () => {
           '--no-maglev',
           '--no-concurrent-recompilation',
           '--invocation-count-for-turbofan=2',
-          '--import',
-          TSX,
           WORKER,
         ],
         {

@@ -352,6 +352,14 @@ group('my-group @mytag', () => {
 })
 ```
 
+## Your code runs as written
+
+Labs measures the code you wrote, so it never compiles or bundles it. If your code needs a build step, run the build first and point `benchMatch` at the output.
+
+- **Node** runs TypeScript with its built-in type stripping, which only erases type annotations. Imports name the real file with its extension, such as `./vector.ts`. Enums, parameter properties, namespaces, decorators, JSX, and tsconfig `paths` need a build. Use `imports` in `package.json` for aliases. A file runs in the module format Node gives it, so a `"type": "commonjs"` project uses `require`, not `import`.
+- **Bun** runs your files with its own TypeScript support.
+- **Browsers** load each file as an ES module. TypeScript is stripped the same way as in Node, and package imports resolve as Node resolves them, with the `browser` condition. CommonJS packages and non-JavaScript imports such as CSS or images need a build. Reach assets with `new URL('./image.png', import.meta.url)`.
+
 ## GPU benches
 
 `bench.gpu` times a pass on the GPU with timestamp queries. The generator receives the device and yields the pass. CPU work that uses the GPU, such as encoding or compiling, stays an ordinary `bench` that awaits `gpu` from its state. It never waits for the GPU, so it should encode and return the command buffer rather than submit it, or a compiled loop floods the queue.

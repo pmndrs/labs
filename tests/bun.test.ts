@@ -1,9 +1,8 @@
 import { spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { defineConfig } from '../src/config.ts';
 import { renderRunView } from '../src/cli/run-view.ts';
@@ -23,9 +22,9 @@ describe('Bun benchmarks', () => {
     if (project) rmSync(project, { recursive: true, force: true });
   });
 
-  function setup(source: string, config: Record<string, unknown> = {}, type = 'module') {
+  function setup(source: string, config: Record<string, unknown> = {}) {
     project = mkdtempSync(join(tmpdir(), 'labs-bun-'));
-    writeFileSync(join(project, 'package.json'), JSON.stringify({ type }));
+    writeFileSync(join(project, 'package.json'), JSON.stringify({ type: 'module' }));
     writeFileSync(
       join(project, 'labs.config.ts'),
       `import { defineConfig } from ${JSON.stringify(new URL('../src/index.ts', import.meta.url).href)};
@@ -46,8 +45,6 @@ describe('Bun benchmarks', () => {
     return spawnSync(
       process.execPath,
       [
-        '--import',
-        pathToFileURL(createRequire(import.meta.url).resolve('tsx')).href,
         fileURLToPath(new URL('../src/cli/cli.ts', import.meta.url)),
         '--json',
         '-n',
@@ -58,16 +55,12 @@ describe('Bun benchmarks', () => {
     );
   }
 
-  it.skipIf(!available).each(['module', 'commonjs'])(
-    'runs native TypeScript in a %s project with isolated blocks and frozen plans',
+  it.skipIf(!available)(
+    'runs native TypeScript with isolated blocks and frozen plans',
     { timeout: 60_000 },
-    (type) => {
+    () => {
       setup(
-        `${
-          type === 'module'
-            ? `import { assert, bench, group } from '@pmndrs/labs'; import { value } from '@fixture/value';`
-            : `const { assert, bench, group } = require('@pmndrs/labs'); const { value } = require('@fixture/value');`
-        }
+        `import { assert, bench, group } from '@pmndrs/labs'; import { value } from '@fixture/value';
         let polluted = false;
         group('native @bun', () => {
           bench('polluter', () => { polluted = true; Bun.gc(true); return 1; });
@@ -83,12 +76,7 @@ describe('Bun benchmarks', () => {
           bench('manual', function* () { yield { budget: 'manual', manual: () => 50 }; }).gc(false);
         });
         bench('filtered @other', () => { throw new Error('tag was not filtered'); });`,
-        {
-          runtime: 'node',
-          nodeFlags: ['--not-a-bun-flag'],
-          ...(type === 'commonjs' ? { gc: { node: true, bun: false } } : {}),
-        },
-        type
+        { runtime: 'node', nodeFlags: ['--not-a-bun-flag'] }
       );
       mkdirSync(join(project, 'config'));
       mkdirSync(join(project, 'helpers'));
@@ -106,7 +94,7 @@ describe('Bun benchmarks', () => {
       expect(report.benches).toHaveLength(5);
       for (const bench of report.benches) {
         expect(bench.timeNs).not.toBeNull();
-        if (type === 'module' && bench.name !== 'manual') {
+        if (bench.name !== 'manual') {
           expect(bench.gc).toHaveProperty('perIterationNs');
           expect(bench.gc.durationKind).toBe('collection');
         } else expect(bench.gc).toBeNull();
@@ -119,7 +107,7 @@ describe('Bun benchmarks', () => {
       expect(saved.files[0].benchmarks).toHaveLength(4);
       for (const trial of saved.files[0].benchmarks) {
         expect(trial.groupName).toBe('native');
-        expect(trial.gcMode).toBe(type === 'module' && trial.alias !== 'manual');
+        expect(trial.gcMode).toBe(trial.alias !== 'manual');
         for (const run of trial.runs) {
           expect(run.error).toBeUndefined();
           expect(run.stats?.blocks?.medians).toHaveLength(2);
@@ -285,7 +273,7 @@ describe('Bun benchmarks', () => {
         env: { ...process.env, LOG: log, TURNS: '3', ID: 'a' },
       },
       {
-        args: ['--import', pathToFileURL(createRequire(import.meta.url).resolve('tsx')).href, worker],
+        args: [worker],
         env: { ...process.env, LOG: log, TURNS: '3', ID: 'b' },
       },
     ]);

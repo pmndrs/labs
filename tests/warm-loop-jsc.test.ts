@@ -1,9 +1,8 @@
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
 import { webkit } from 'playwright-core';
 import { afterEach, describe, expect, it } from 'vitest';
 import { loadResult } from '../src/store.ts';
@@ -78,14 +77,7 @@ describe('sampling loop warm-up on JavaScriptCore', () => {
       );
       const output = spawnSync(
         process.execPath,
-        [
-          '--import',
-          pathToFileURL(createRequire(import.meta.url).resolve('tsx')).href,
-          fileURLToPath(new URL('../src/cli/cli.ts', import.meta.url)),
-          '--json',
-          '-n',
-          'warm-loop',
-        ],
+        [fileURLToPath(new URL('../src/cli/cli.ts', import.meta.url)), '--json', '-n', 'warm-loop'],
         { cwd: project, encoding: 'utf8', timeout: 170_000 }
       );
       expect(output.status, output.stderr || output.error?.message).toBe(0);

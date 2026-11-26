@@ -8,9 +8,6 @@ importers:
 
   .:
     dependencies:
-      '@babel/parser':
-        specifier: ^7.29.12
-        version: 7.29.12
       '@clack/prompts':
         specifier: ^1.7.0
         version: 1.7.0
@@ -20,9 +17,9 @@ importers:
       '@webgpu/types':
         specifier: ^0.1.74
         version: 0.1.74
-      esbuild:
-        specifier: ^0.27.4
-        version: 0.27.4
+      es-module-lexer:
+        specifier: ^3.0.5
+        version: 3.0.5
       fast-string-width:
         specifier: ^3.0.2
         version: 3.0.2
@@ -35,9 +32,6 @@ importers:
       playwright-core:
         specifier: 1.64.1
         version: 1.64.1
-      tsx:
-        specifier: ^4.23.12
-        version: 4.23.12
     devDependencies:
       '@types/node':
         specifier: ^25.9.5
@@ -62,23 +56,6 @@ importers:
         version: 4.1.10(@types/node@25.9.5)(vite@8.0.1(@types/node@25.9.5)(esbuild@0.27.4)(jiti@2.7.0)(tsx@4.23.12))
 
 packages:
-
-  '@babel/helper-string-parser@7.29.11':
-    resolution: {integrity: sha512-snZbO7MEDOof+hvNa97EjEY7qD7h2kwvQr5AJC3ZhQudKW5dnej6k3kP9NQV88hJwaS8vDqRLFo9rivLEhle2g==}
-    engines: {node: '>=6.9.0'}
-
-  '@babel/helper-validator-identifier@7.29.7':
-    resolution: {integrity: sha512-qehxGkRj55h/ff8EMaJ+cYhyaKlHIxqYDn682wQD7RNp9UujOQsHog2uS0r2vzr4pW+sXf90NeeayjcNaX3fFg==}
-    engines: {node: '>=6.9.0'}
-
-  '@babel/parser@7.29.12':
-    resolution: {integrity: sha512-WJ7JBp/Q4+z/ImydtI7jS6NVco5++632ExBemSX+Ysb+G1lCwQ5BVo3SY+jGGOcZXI4ZccbZSUSJLNBW6eEpJg==}
-    engines: {node: '>=6.0.0'}
-    hasBin: true
-
-  '@babel/types@7.29.11':
-    resolution: {integrity: sha512-WCsemW40Cpc6gouC1SrY6PBaZ+oLRlEVY9XBvZBI7il/HyUrb2nJ505wE1MHEFyDZNnrWDEuy4jL50WVHfTTSQ==}
-    engines: {node: '>=6.9.0'}
 
   '@clack/core@1.4.3':
     resolution: {integrity: sha512-/kr3UWNtdJfxZtPgDqUOmG2pvwlmcLGheex5yiZKdwbzZJxhV+HMNR9QNmyY5cGwTNV6LrR7Jtp+KjhUAP1qBQ==}
@@ -1118,6 +1095,9 @@ packages:
   es-module-lexer@2.3.1:
     resolution: {integrity: sha512-shc1dbU90Yl/xq1QrC7QRtfcwURZuVRfPhZbDoldJ1cn1gzDvBaBWlv0eFolj5+0znnPJz5TXLxsN77X/12KTA==}
 
+  es-module-lexer@3.0.5:
+    resolution: {integrity: sha512-RNq2lKJw53c7z9QRHeiKeA6Ez0oikOqiBGdmxQhKDxEiOX1g5QJR4IoFVwicn8uCZcRWNrXC3NZaJihgK7aEbg==}
+
   esbuild@0.27.4:
     resolution: {integrity: sha512-Rq4vbHnYkK5fws5NF7MYTU68FPRE1ajX7heQ/8QXXWqNgqqJ/GkmmyxIzUnf2Sr/bakf8l54716CcMGHYhMrrQ==}
     engines: {node: '>=18'}
@@ -1532,19 +1512,6 @@ packages:
     resolution: {integrity: sha512-t843J9IdYYpcDaW7o3aDPXpTM72FsvkIDYEHtigyGFCvC3EhiIaSGM5WVNZl3lxTv1Dfis6IW3S/yBsBIaCiWw==}
 
 snapshots:
-
-  '@babel/helper-string-parser@7.29.11': {}
-
-  '@babel/helper-validator-identifier@7.29.7': {}
-
-  '@babel/parser@7.29.12':
-    dependencies:
-      '@babel/types': 7.29.11
-
-  '@babel/types@7.29.11':
-    dependencies:
-      '@babel/helper-string-parser': 7.29.11
-      '@babel/helper-validator-identifier': 7.29.7
 
   '@clack/core@1.4.3':
     dependencies:
@@ -2134,6 +2101,8 @@ snapshots:
 
   es-module-lexer@2.3.1: {}
 
+  es-module-lexer@3.0.5: {}
+
   esbuild@0.27.4:
     optionalDependencies:
       '@esbuild/aix-ppc64': 0.27.4
@@ -2162,6 +2131,7 @@ snapshots:
       '@esbuild/win32-arm64': 0.27.4
       '@esbuild/win32-ia32': 0.27.4
       '@esbuild/win32-x64': 0.27.4
+    optional: true
 
   esbuild@0.28.2:
     optionalDependencies:
@@ -2191,6 +2161,7 @@ snapshots:
       '@esbuild/win32-arm64': 0.28.2
       '@esbuild/win32-ia32': 0.28.2
       '@esbuild/win32-x64': 0.28.2
+    optional: true
 
   estree-walker@3.0.3:
     dependencies:
@@ -2453,6 +2424,7 @@ snapshots:
       esbuild: 0.28.2
     optionalDependencies:
       fsevents: 2.3.3
+    optional: true
 
   typescript@7.0.2:
     optionalDependencies:

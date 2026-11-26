@@ -14,7 +14,7 @@ import { RuntimeLaunchError } from './runtime-error.ts';
 
 type BrowserGlobal = typeof globalThis & { __labs: typeof browserHarness };
 
-/** Bundle browser benchmarks once and execute every block in a fresh browser process. */
+/** Serve browser benchmarks and execute every block in a fresh browser process. */
 export async function runBrowser(options: {
   file: string;
   runtime: 'chrome' | 'firefox' | 'webkit';
@@ -98,9 +98,11 @@ export async function runBrowser(options: {
   };
   const load = async (page: Page) => {
     await page.goto(url);
-    await page.waitForFunction(() => !!(globalThis as BrowserGlobal).__labs, undefined, {
+    const ready = page.waitForFunction(() => !!(globalThis as BrowserGlobal).__labs, undefined, {
       timeout: 15_000,
     });
+    ready.catch(() => {});
+    await Promise.race([ready, server.failed]);
   };
 
   try {

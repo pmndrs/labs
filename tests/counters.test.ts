@@ -1,9 +1,8 @@
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 describe('configured hardware counters', () => {
@@ -44,13 +43,7 @@ describe('configured hardware counters', () => {
 
       const output = execFileSync(
         process.execPath,
-        [
-          '--import',
-          pathToFileURL(createRequire(import.meta.url).resolve('tsx')).href,
-          fileURLToPath(new URL('../src/cli/cli.ts', import.meta.url)),
-          '--no-save',
-          '--json',
-        ],
+        [fileURLToPath(new URL('../src/cli/cli.ts', import.meta.url)), '--no-save', '--json'],
         { cwd: project, stdio: 'pipe', encoding: 'utf8', timeout: 20_000 }
       );
 

@@ -42,21 +42,17 @@ describe('runtime startup feedback', () => {
     if (mode === 'json') args.push('--json');
     return spawnSync(
       process.execPath,
-      [
-        '--import',
-        pathToFileURL(createRequire(import.meta.url).resolve('tsx')).href,
-        ...(mode === 'tui'
-          ? [
-              '--input-type=module',
-              '--eval',
-              `process.stdin.isTTY = process.stdout.isTTY = true;
+      mode === 'tui'
+        ? [
+            '--input-type=module',
+            '--eval',
+            `process.stdin.isTTY = process.stdout.isTTY = true;
               process.stdout.columns = 100;
               process.stdout.rows = 40;
               const { runCLI } = await import(${JSON.stringify(new URL('../src/cli/runner.ts', import.meta.url).href)});
               await runCLI(${JSON.stringify(args)});`,
-            ]
-          : [fileURLToPath(new URL('../src/cli/cli.ts', import.meta.url)), ...args]),
-      ],
+          ]
+        : [fileURLToPath(new URL('../src/cli/cli.ts', import.meta.url)), ...args],
       {
         cwd: project,
         encoding: 'utf8',

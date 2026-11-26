@@ -3,6 +3,6 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "bench": "../../node_modules/.bin/tsx ../../src/cli/cli.ts --no-save"
+    "bench": "node ../../src/cli/cli.ts --no-save"
   }
 }
