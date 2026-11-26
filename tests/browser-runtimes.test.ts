@@ -1,9 +1,8 @@
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
 import { firefox, webkit } from 'playwright-core';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { defineConfig } from '../src/config.ts';
@@ -44,8 +43,6 @@ describe.each([
     return spawnSync(
       process.execPath,
       [
-        '--import',
-        pathToFileURL(createRequire(import.meta.url).resolve('tsx')).href,
         fileURLToPath(new URL('../src/cli/cli.ts', import.meta.url)),
         '--json',
         '-n',

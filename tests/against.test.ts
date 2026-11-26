@@ -9,7 +9,6 @@ import {
   rmSync,
   writeFileSync,
 } from 'node:fs';
-import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -18,7 +17,6 @@ import { runWorkers } from '../src/cli/workers.ts';
 import { checkoutRef, openSide, resolveRef } from '../src/cli/worktree.ts';
 import { getBaseline } from '../src/store.ts';
 
-const TSX = pathToFileURL(createRequire(import.meta.url).resolve('tsx')).href;
 const WORKER = fileURLToPath(new URL('../src/worker.ts', import.meta.url));
 const STUB = fileURLToPath(new URL('./fixtures/turns.worker.ts', import.meta.url));
 const FIXTURE = fileURLToPath(new URL('./fixtures/blocks.bench.ts', import.meta.url));
@@ -29,7 +27,7 @@ describe('worker turn protocol', () => {
     { timeout: 60_000 },
     async () => {
       const resultFile = join(tmpdir(), `labs-turns-${process.pid}.json`);
-      const child = spawn(process.execPath, ['--import', TSX, WORKER], {
+      const child = spawn(process.execPath, [WORKER], {
         stdio: ['ignore', 'ignore', 'pipe', 'ipc'],
         env: {
           ...process.env,
@@ -69,7 +67,7 @@ describe('runWorkers', () => {
   afterEach(() => rmSync(log, { force: true }));
 
   const stub = (env: Record<string, string>) => ({
-    args: ['--import', TSX, STUB],
+    args: [STUB],
     env: { ...process.env, LOG: log, TURNS: '3', ...env },
   });
 
@@ -195,7 +193,7 @@ describe('comparing checkouts through the CLI', () => {
   const cli = (...args: string[]) =>
     spawnSync(
       process.execPath,
-      ['--import', TSX, fileURLToPath(new URL('../src/cli/cli.ts', import.meta.url)), ...args],
+      [fileURLToPath(new URL('../src/cli/cli.ts', import.meta.url)), ...args],
       { cwd: project, encoding: 'utf8', timeout: 30_000 }
     );
 
@@ -237,13 +235,10 @@ describe('comparing checkouts through the CLI', () => {
 
   afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
-  it.each(['module', 'commonjs'])(
-    'measures both %s checkouts with separate Labs installs and their own working directories',
+  it(
+    'measures both checkouts with separate Labs installs and their own working directories',
     { timeout: 40_000 },
-    (type) => {
-      writeFileSync(join(repo, 'package.json'), JSON.stringify({ type }));
-      git('add', '.');
-      git('commit', '-q', '--allow-empty', '-m', 'module type');
+    () => {
       const reference = join(dir, 'reference');
       git('worktree', 'add', '--quiet', '--detach', reference, 'HEAD');
       installLabs(repo);
@@ -260,6 +255,38 @@ describe('comparing checkouts through the CLI', () => {
       ]);
     }
   );
+
+  it('runs a CommonJS benchmark that requires Labs', { timeout: 40_000 }, () => {
+    installLabs(repo);
+    // The published package gives require its own CommonJS entry.
+    const pkg = join(repo, 'node_modules', '@pmndrs', 'labs');
+    writeFileSync(join(pkg, 'index.cjs'), 'throw new Error("second Labs instance");');
+    writeFileSync(
+      join(pkg, 'package.json'),
+      JSON.stringify({
+        name: '@pmndrs/labs',
+        type: 'module',
+        exports: { import: './src/index.ts', require: './index.cjs' },
+      })
+    );
+    writeFileSync(join(project, 'package.json'), JSON.stringify({ type: 'commonjs' }));
+    writeFileSync(
+      join(project, 'labs.config.ts'),
+      `const { defineConfig } = require(${JSON.stringify(fileURLToPath(new URL('../src/config.ts', import.meta.url)))});
+       module.exports = defineConfig({ benchDir: 'benches', blocks: 2, blockTime: 0.001, minSamples: 2, heap: false });`
+    );
+    writeFileSync(
+      join(project, 'benches', 'value.bench.ts'),
+      `const { bench } = require('@pmndrs/labs');
+       const value: number = 42;
+       bench('required', () => value);`
+    );
+    const child = cli('--no-save', '--json');
+    expect(child.status, child.stderr).toBe(0);
+    const result = JSON.parse(child.stdout);
+    expect(result.crashes).toEqual([]);
+    expect(result.benches.map((bench: { name: string }) => bench.name)).toEqual(['required']);
+  });
 
   it.each([false, true])('fails when a worker crashes with JSON output %s', (json) => {
     writeFileSync(

@@ -1,9 +1,8 @@
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
 import { webkit } from 'playwright-core';
 import { afterEach, describe, expect, it } from 'vitest';
 import { samplingWarning } from '../src/bench/diagnostics.ts';
@@ -66,14 +65,7 @@ describe('observed optimization tiers', () => {
     writeFileSync(join(project, 'work.bench.ts'), source);
     const output = spawnSync(
       process.execPath,
-      [
-        '--import',
-        pathToFileURL(createRequire(import.meta.url).resolve('tsx')).href,
-        fileURLToPath(new URL('../src/cli/cli.ts', import.meta.url)),
-        '--json',
-        '-n',
-        'tiers',
-      ],
+      [fileURLToPath(new URL('../src/cli/cli.ts', import.meta.url)), '--json', '-n', 'tiers'],
       { cwd: project, encoding: 'utf8', timeout: 60_000 }
     );
     expect(output.status, output.stderr || output.error?.message).toBe(0);
@@ -118,8 +110,6 @@ describe('observed optimization tiers', () => {
       process.execPath,
       [
         '--allow-natives-syntax',
-        '--import',
-        pathToFileURL(createRequire(import.meta.url).resolve('tsx')).href,
         '--input-type=module',
         '--eval',
         `import { measure } from ${JSON.stringify(new URL('../src/bench/lib/measure.ts', import.meta.url).href)};
@@ -151,8 +141,6 @@ describe('observed optimization tiers', () => {
       process.execPath,
       [
         '--allow-natives-syntax',
-        '--import',
-        pathToFileURL(createRequire(import.meta.url).resolve('tsx')).href,
         '--input-type=module',
         '--eval',
         `import { measure } from ${JSON.stringify(new URL('../src/bench/lib/measure.ts', import.meta.url).href)};
@@ -193,8 +181,6 @@ describe('observed optimization tiers', () => {
       process.execPath,
       [
         '--allow-natives-syntax',
-        '--import',
-        pathToFileURL(createRequire(import.meta.url).resolve('tsx')).href,
         '--input-type=module',
         '--eval',
         `import { measure } from ${JSON.stringify(new URL('../src/bench/lib/measure.ts', import.meta.url).href)};
@@ -253,8 +239,6 @@ describe('observed optimization tiers', () => {
         '--logfile=' + join(project, 'code.log'),
         '--redirect-code-traces',
         '--redirect-code-traces-to=' + join(project, 'trace.txt'),
-        '--import',
-        pathToFileURL(createRequire(import.meta.url).resolve('tsx')).href,
         '--input-type=module',
         '--eval',
         `import { measure } from ${JSON.stringify(new URL('../src/bench/lib/measure.ts', import.meta.url).href)};
@@ -298,8 +282,6 @@ describe('observed optimization tiers', () => {
           '--allow-natives-syntax',
           '--no-concurrent-recompilation',
           '--minimum-invocations-before-optimization=1000000',
-          '--import',
-          pathToFileURL(createRequire(import.meta.url).resolve('tsx')).href,
           '--input-type=module',
           '--eval',
           `import { measure } from ${JSON.stringify(new URL('../src/bench/lib/measure.ts', import.meta.url).href)};
@@ -342,8 +324,6 @@ describe('observed optimization tiers', () => {
           '--no-use-osr',
           '--invocation-count-for-maglev=1000000',
           '--invocation-count-for-turbofan=1000000',
-          '--import',
-          pathToFileURL(createRequire(import.meta.url).resolve('tsx')).href,
           '--input-type=module',
           '--eval',
           `import { measure } from ${JSON.stringify(new URL('../src/bench/lib/measure.ts', import.meta.url).href)};

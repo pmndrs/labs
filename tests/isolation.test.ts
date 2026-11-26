@@ -1,6 +1,5 @@
 import { execFileSync } from 'node:child_process';
 import { readFileSync, rmSync } from 'node:fs';
-import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -34,13 +33,12 @@ describe('runTrialAt', () => {
 describe('worker bench isolation', () => {
   const WORKER = fileURLToPath(new URL('../src/worker.ts', import.meta.url));
   const FIXTURE = fileURLToPath(new URL('./fixtures/isolation.bench.ts', import.meta.url));
-  const TSX = pathToFileURL(createRequire(import.meta.url).resolve('tsx')).href;
   let spawnCount = 0;
 
   function runWorker(env: Record<string, string>) {
     const resultFile = join(tmpdir(), `labs-isolation-test-${process.pid}-${spawnCount++}.json`);
     try {
-      execFileSync(process.execPath, ['--throw-deprecation', '--import', TSX, WORKER], {
+      execFileSync(process.execPath, ['--throw-deprecation', WORKER], {
         stdio: ['ignore', 'ignore', 'pipe'],
         env: {
           ...process.env,

@@ -1,9 +1,8 @@
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import { toSnapshot } from '../src/bench/lib/snapshot.ts';
 import { loadResult } from '../src/store.ts';
@@ -45,8 +44,6 @@ describe('Chrome benchmarks', () => {
     return spawnSync(
       process.execPath,
       [
-        '--import',
-        pathToFileURL(createRequire(import.meta.url).resolve('tsx')).href,
         fileURLToPath(new URL('../src/cli/cli.ts', import.meta.url)),
         '--json',
         '-n',
@@ -237,17 +234,15 @@ describe('Chrome benchmarks', () => {
   );
 
   it.skipIf(!executablePath)(
-    'loads module-relative fixtures, imported images, CSS, WASM, and TypeScript workers',
+    'loads module-relative fixtures, images, WASM, and TypeScript workers',
     { timeout: 60_000 },
     () => {
       setup(
         `import { assert, bench } from '@pmndrs/labs';
         import { readFixture } from './assets/helper.ts';
-        import image from './assets/image.svg';
-        import './assets/style.css';
         bench('assets', async function* () {
           const fixture = await readFixture();
-          const imageResponse = await fetch(image);
+          const imageResponse = await fetch(new URL('./assets/image.svg', import.meta.url));
           assert(imageResponse.ok);
           const { instance } = await WebAssembly.instantiateStreaming(fetch(new URL('./assets/empty.wasm', import.meta.url)));
           assert(instance.exports !== undefined);
@@ -259,7 +254,6 @@ describe('Chrome benchmarks', () => {
               worker.postMessage(fixture);
             });
             assert.equal(value, 42);
-            assert.equal(getComputedStyle(document.body).getPropertyValue('--fixture').trim(), 'loaded');
             yield () => value;
           } finally { worker.terminate(); }
         }).gc(false);`,
@@ -281,7 +275,6 @@ describe('Chrome benchmarks', () => {
         join(project, 'assets', 'image.svg'),
         '<svg xmlns="http://www.w3.org/2000/svg"/>'
       );
-      writeFileSync(join(project, 'assets', 'style.css'), 'body { --fixture: loaded; }');
       writeFileSync(
         join(project, 'assets', 'empty.wasm'),
         new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0])
@@ -374,6 +367,24 @@ describe('Chrome benchmarks', () => {
       const report = JSON.parse(output.stdout);
       expect(report.benches).toHaveLength(0);
       expect(report.crashes).toHaveLength(1);
+    }
+  );
+
+  it.skipIf(!executablePath)(
+    'names the module a browser could not load instead of timing out',
+    { timeout: 60_000 },
+    () => {
+      setup(
+        `import { bench } from '@pmndrs/labs';
+      import { value } from './value.js';
+      bench('test', () => value);`,
+        { runtime: 'chrome' }
+      );
+      writeFileSync(join(project, 'value.ts'), 'export const value: number = 1;');
+      const output = run();
+      expect(output.status, output.stderr).toBe(1);
+      expect(output.stderr).toContain('Cannot find module');
+      expect(output.stderr).toContain('value.js');
     }
   );
 

@@ -1,9 +1,10 @@
-import { createHash } from 'node:crypto';
 import { readFile, realpath, stat } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { dirname, extname, isAbsolute, relative, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import type { Loader } from 'esbuild';
+import { init, parse } from 'es-module-lexer';
+import { moduleResolve } from 'import-meta-resolve';
+import { stripTypes } from './utils/strip-types.ts';
 
 function contentType(file: string): string {
   return (
@@ -30,12 +31,17 @@ function contentType(file: string): string {
   );
 }
 
-/** Serve bundled benchmarks and source-relative assets without a development client. */
+/**
+ * Serve benchmarks to browsers as the ES modules they are. TypeScript is type
+ * stripped as Node does and bare specifiers become URLs. Nothing is bundled.
+ */
 export async function startBrowserServer(file: string) {
-  const [{ build }, { parse }] = await Promise.all([import('esbuild'), import('@babel/parser')]);
+  await init();
   const benchFile = await realpath(fileURLToPath(file));
+  const harness = fileURLToPath(
+    new URL(`./browser.${import.meta.url.endsWith('.ts') ? 'ts' : 'mjs'}`, import.meta.url)
+  );
   const roots = new Set([await realpath(process.cwd()), dirname(benchFile)]);
-  const assets = new Map<string, Uint8Array>();
   const modules = new Map<string, Promise<string>>();
   const packageRoots = new Map<string, Promise<string | undefined>>();
   const packageRoot = (directory: string): Promise<string | undefined> => {
@@ -54,141 +60,91 @@ export async function startBrowserServer(file: string) {
     }
     return root;
   };
-  const outputDir = resolve(process.cwd(), 'node_modules/.cache/labs-browser');
-  const ext = import.meta.url.endsWith('.ts') ? 'ts' : 'mjs';
-  let url: string;
-
-  const bundle = async (entry?: string): Promise<string> => {
-    const name = entry
-      ? `worker-${createHash('sha256').update(entry).digest('hex').slice(0, 16)}`
-      : 'bench';
-    const result = await build({
-      ...(entry
-        ? { entryPoints: [entry] }
-        : {
-            stdin: {
-              contents: `
-            import { browserHarness } from ${JSON.stringify(fileURLToPath(new URL(`./browser.${ext}`, import.meta.url)))};
-            import ${JSON.stringify(benchFile)};
-            globalThis.__labs = browserHarness;
-          `,
-              resolveDir: dirname(benchFile),
-              sourcefile: 'labs-browser-entry.ts',
-              loader: 'ts',
-            },
-          }),
-      alias: { '@pmndrs/labs': fileURLToPath(new URL(`./browser.${ext}`, import.meta.url)) },
-      bundle: true,
-      platform: 'browser',
-      format: 'esm',
-      target: 'esnext',
-      external: ['node:*', 'bun:jsc'],
-      keepNames: true,
-      write: false,
-      logLevel: 'silent',
-      outfile: resolve(outputDir, `${name}.js`),
-      publicPath: '/_labs/build/',
-      assetNames: 'assets/[name]-[hash]',
-      loader: {
-        '.wasm': 'file',
-        '.bin': 'file',
-        '.png': 'file',
-        '.jpg': 'file',
-        '.jpeg': 'file',
-        '.webp': 'file',
-        '.gif': 'file',
-        '.svg': 'file',
-      },
-      plugins: [
-        {
-          name: 'labs-module-urls',
-          setup(build) {
-            build.onLoad({ filter: /\.[cm]?[jt]sx?$/ }, async ({ path }) => {
-              const directory = dirname(await realpath(path));
-              roots.add((await packageRoot(directory)) ?? directory);
-              let contents = await readFile(path, 'utf8');
-              if (contents.includes('import') && contents.includes('meta')) {
-                const ast = parse(contents, {
-                  sourceType: 'unambiguous',
-                  allowReturnOutsideFunction: true,
-                  plugins: [
-                    'decorators-legacy',
-                    'decoratorAutoAccessors',
-                    ...(/\.[cm]?tsx?$/.test(path) ? ['typescript' as const] : []),
-                    ...(/\.[jt]sx$/.test(path) ? ['jsx' as const] : []),
-                  ],
-                });
-                const pending: any[] = [ast.program];
-                const replacements: Array<{ start: number; end: number }> = [];
-                while (pending.length) {
-                  const node = pending.pop();
-                  if (
-                    (node.type === 'MemberExpression' || node.type === 'OptionalMemberExpression') &&
-                    node.object?.type === 'MetaProperty' &&
-                    node.object.meta.name === 'import' &&
-                    node.object.property.name === 'meta' &&
-                    (node.computed
-                      ? node.property.type === 'StringLiteral' && node.property.value === 'url'
-                      : node.property.type === 'Identifier' && node.property.name === 'url')
-                  ) {
-                    replacements.push({ start: node.start, end: node.end });
-                  }
-                  for (const child of Object.values(node) as any[]) {
-                    if (Array.isArray(child)) pending.push(...child.filter((value) => value?.type));
-                    else if (child?.type) pending.push(child);
-                  }
-                }
-                const sourceUrl = `${url}/_labs/fs${pathToFileURL(path).pathname}`;
-                for (const replacement of replacements.sort((a, b) => b.start - a.start)) {
-                  contents =
-                    contents.slice(0, replacement.start) +
-                    JSON.stringify(sourceUrl) +
-                    contents.slice(replacement.end);
-                }
-              }
-              const extension = extname(path);
-              const loader: Loader = extension.endsWith('x')
-                ? (extension.slice(1) as 'jsx' | 'tsx')
-                : /\.[cm]?ts$/.test(extension)
-                  ? 'ts'
-                  : 'js';
-              return { contents, loader };
-            });
-          },
-        },
-      ],
-    });
-    for (const output of result.outputFiles) {
-      assets.set(
-        '/_labs/build/' + relative(outputDir, output.path).split(sep).join('/'),
-        output.contents
-      );
-    }
-    return result.outputFiles.find((output) => output.path === resolve(outputDir, `${name}.js`))!
-      .text;
+  // Assets beside any module in the graph stay reachable through import.meta.url.
+  const allow = async (path: string): Promise<string> => {
+    const real = await realpath(path);
+    roots.add((await packageRoot(dirname(real))) ?? dirname(real));
+    return '/_labs/fs' + pathToFileURL(real).pathname.replaceAll("'", '%27');
   };
 
-  let main: string;
+  const load = async (path: string): Promise<string> => {
+    if (/\.[cm]?[jt]sx$/.test(path))
+      throw new Error(`${path} contains JSX. Build it to JavaScript before running Labs.`);
+    let code = await readFile(path, 'utf8');
+    if (/\.[cm]?ts$/.test(path)) {
+      try {
+        code = stripTypes(code);
+      } catch (error) {
+        throw new Error(`${path}: ${(error as Error).message}`, { cause: error });
+      }
+    }
+    const [imports, , , hasModuleSyntax] = parse(code, path);
+    if (!hasModuleSyntax && /\b(?:require\s*\(|module\.exports\b|exports\.\w)/.test(code))
+      throw new Error(
+        `${path} is CommonJS. Browsers load ES modules only, so build it as an ES module before running Labs.`
+      );
+    let output = '';
+    let end = 0;
+    for (const entry of imports) {
+      if (entry.type === 'import-meta' || !entry.specifier) continue;
+      if (entry.type === 'dynamic' && entry.glob) continue;
+      const { specifier } = entry;
+      // Relative imports and URLs resolve in the browser against the module URL.
+      if (/^\.{0,2}\//.test(specifier)) {
+        if (specifier.startsWith('.'))
+          await allow(resolve(dirname(path), specifier.replace(/[?#].*$/, ''))).catch(() => {});
+        continue;
+      }
+      if (/^(?:https?|data|blob):/.test(specifier)) continue;
+      const resolved =
+        specifier === '@pmndrs/labs'
+          ? pathToFileURL(harness)
+          : /^[a-z]+:/.test(specifier)
+            ? new URL(specifier)
+            : moduleResolve(
+                specifier,
+                pathToFileURL(path),
+                new Set(['browser', 'import', 'default'])
+              );
+      if (resolved.protocol !== 'file:') {
+        // A guarded dynamic import may never run in the browser.
+        if (entry.type === 'dynamic') continue;
+        throw new Error(`${path} imports ${specifier}, which browsers cannot load.`);
+      }
+      const target = await allow(fileURLToPath(resolved));
+      output +=
+        code.slice(end, entry.start) + (entry.type === 'dynamic' ? JSON.stringify(target) : target);
+      end = entry.end;
+    }
+    return output + code.slice(end);
+  };
+
+  const main = `import { browserHarness } from ${JSON.stringify(await allow(harness))};
+import ${JSON.stringify(await allow(benchFile))};
+globalThis.__labs = browserHarness;
+`;
+  let url: string;
+  let fail: (error: Error) => void;
+  // Rejects when the browser is refused a module, which it would report as a timeout.
+  const failed = new Promise<never>((_, reject) => (fail = reject));
+  failed.catch(() => {});
+
   const server = createServer((request, response) => {
     response.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
     response.setHeader('Cross-Origin-Embedder-Policy', 'require-corp');
+    const pathname = new URL(request.url!, url).pathname;
+    const module = /^(?:script|worker|sharedworker)$/.test(String(request.headers['sec-fetch-dest']));
+    const local = (address: string) =>
+      decodeURIComponent(new URL(address, url).pathname.replace(/^\/_labs\/fs/, ''));
     void (async () => {
-      const pathname = new URL(request.url!, url).pathname;
-      const emitted = assets.get(decodeURIComponent(pathname));
       if (pathname === '/') {
         response.setHeader('Content-Type', 'text/html');
-        response.end(
-          '<!doctype html>' +
-            (assets.has('/_labs/build/bench.css')
-              ? '<link rel="stylesheet" href="/_labs/build/bench.css">'
-              : '') +
-            '<script type="module" src="/bench.js"></script>'
-        );
+        response.end('<!doctype html><script type="module" src="/bench.js"></script>');
         return;
       }
-      if (pathname === '/bench.js' || emitted) {
-        response.setHeader('Content-Type', contentType(pathname));
-        response.end(pathname === '/bench.js' ? main : emitted);
+      if (pathname === '/bench.js') {
+        response.setHeader('Content-Type', 'text/javascript');
+        response.end(main);
         return;
       }
       if (pathname === '/favicon.ico') {
@@ -206,6 +162,7 @@ export async function startBrowserServer(file: string) {
           return suffix !== '..' && !suffix.startsWith('..' + sep) && !isAbsolute(suffix);
         })
       ) {
+        if (module) fail(new Error(`${path} is outside the directories Labs serves.`));
         response.writeHead(403).end();
         return;
       }
@@ -215,17 +172,24 @@ export async function startBrowserServer(file: string) {
       }
       if (/\.[cm]?[jt]sx?$/.test(path)) {
         let code = modules.get(path);
-        if (!code) modules.set(path, (code = bundle(path)));
+        if (!code) modules.set(path, (code = load(path)));
+        const body = await code;
         response.setHeader('Content-Type', 'text/javascript');
-        response.end(await code);
+        response.end(body);
       } else {
         response.setHeader('Content-Type', contentType(path));
         response.end(await readFile(path));
       }
     })().catch((error: NodeJS.ErrnoException) => {
-      response
-        .writeHead(error.code === 'ENOENT' || error.code === 'ENOTDIR' ? 404 : 500)
-        .end(String(error.message));
+      const missing = error.code === 'ENOENT' || error.code === 'ENOTDIR';
+      if (!missing) fail(error);
+      else if (module)
+        fail(
+          new Error(
+            `Cannot find module ${local(request.url!)} imported from ${local(request.headers.referer ?? '/')}. Browsers need the exact file name with its extension.`
+          )
+        );
+      response.writeHead(missing ? 404 : 500).end(String(error.message));
     });
   });
   await new Promise<void>((resolve, reject) => {
@@ -237,11 +201,5 @@ export async function startBrowserServer(file: string) {
     new Promise<void>((resolve, reject) => {
       server.close((error) => (error ? reject(error) : resolve()));
     });
-  try {
-    main = await bundle();
-    return { url, close };
-  } catch (error) {
-    await close();
-    throw error;
-  }
+  return { url, close, failed };
 }

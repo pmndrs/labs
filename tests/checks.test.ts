@@ -1,6 +1,5 @@
 import { execFileSync } from 'node:child_process';
 import { readFileSync, rmSync } from 'node:fs';
-import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -370,13 +369,12 @@ describe('comparing outputs', () => {
 describe('worker checks', () => {
   const WORKER = fileURLToPath(new URL('../src/worker.ts', import.meta.url));
   const FIXTURE = fileURLToPath(new URL('./fixtures/checks.bench.ts', import.meta.url));
-  const TSX = pathToFileURL(createRequire(import.meta.url).resolve('tsx')).href;
 
   it('keeps failed checks and snapshots through the process boundary', { timeout: 60_000 }, () => {
     const resultFile = join(tmpdir(), `labs-checks-test-${process.pid}.json`);
     let result: any;
     try {
-      execFileSync(process.execPath, ['--import', TSX, WORKER], {
+      execFileSync(process.execPath, [WORKER], {
         stdio: ['ignore', 'ignore', 'pipe'],
         env: {
           ...process.env,

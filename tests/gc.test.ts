@@ -1,6 +1,5 @@
 import { execFileSync } from 'node:child_process';
 import { readFileSync, rmSync } from 'node:fs';
-import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { performance, PerformanceObserver, type PerformanceEntry } from 'node:perf_hooks';
@@ -197,8 +196,6 @@ describe('observed GC', () => {
         [
           '--expose-gc',
           '--allow-natives-syntax',
-          '--import',
-          createRequire(import.meta.url).resolve('tsx'),
           fileURLToPath(new URL('../src/worker.ts', import.meta.url)),
         ],
         {

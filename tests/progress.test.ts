@@ -1,6 +1,5 @@
 import { spawnSync } from 'node:child_process';
 import { rmSync } from 'node:fs';
-import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -143,11 +142,7 @@ describe('live progress', () => {
       try {
         const worker = spawnSync(
           process.execPath,
-          [
-            '--import',
-            pathToFileURL(createRequire(import.meta.url).resolve('tsx')).href,
-            fileURLToPath(new URL('../src/worker.ts', import.meta.url)),
-          ],
+          [fileURLToPath(new URL('../src/worker.ts', import.meta.url))],
           {
             stdio: ['ignore', 'pipe', 'pipe', 'pipe'],
             encoding: 'utf8',

@@ -31,7 +31,7 @@ interface Pair {
   off: Measurement;
 }
 
-// Run with pnpm exec tsx tests/observe-gc.experiment.ts [pairs] [output.json] [plan-source.json] [runtimes].
+// Run with node tests/observe-gc.experiment.ts [pairs] [output.json] [plan-source.json] [runtimes].
 if (process.argv[2] === 'bun-host') {
   const input = JSON.parse(process.argv[3]) as Input;
   const args = ['--no-install', fileURLToPath(import.meta.url), 'worker', process.argv[3]];
@@ -110,9 +110,7 @@ if (process.argv[2] === 'bun-host') {
       const child = spawn(
         runtime === 'bun' ? (process.env.LABS_BUN_EXECUTABLE ?? 'bun') : process.execPath,
         [
-          ...(runtime === 'bun'
-            ? ['--no-install']
-            : ['--expose-gc', '--allow-natives-syntax', '--import', import.meta.resolve('tsx')]),
+          ...(runtime === 'bun' ? ['--no-install'] : ['--expose-gc', '--allow-natives-syntax']),
           fileURLToPath(import.meta.url),
           runtime === 'bun' ? 'bun-host' : 'worker',
           JSON.stringify(input),

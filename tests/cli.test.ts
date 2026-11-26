@@ -1,9 +1,8 @@
 import { spawnSync } from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 
 describe('CLI options', () => {
@@ -14,12 +13,7 @@ describe('CLI options', () => {
   });
 
   function cli(...args: string[]) {
-    return [
-      '--import',
-      pathToFileURL(createRequire(import.meta.url).resolve('tsx')).href,
-      fileURLToPath(new URL('../src/cli/cli.ts', import.meta.url)),
-      ...args,
-    ];
+    return [fileURLToPath(new URL('../src/cli/cli.ts', import.meta.url)), ...args];
   }
 
   function run(...args: string[]) {
