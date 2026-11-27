@@ -227,6 +227,17 @@ describe('observed optimization tiers', () => {
     expect(stats.samples.length).toBeGreaterThan(0);
   });
 
+  it('does not blame the sampling loop for closing its own deopt window', { timeout: 70_000 }, () => {
+    run(
+      'node',
+      {},
+      `import { bench } from '@pmndrs/labs';
+      bench('sweep $n', function* (state) { const n = state.get('n'); yield () => n * 2; }).args('n', [1, 2]);`
+    );
+    for (const { stats } of loadResult(join(project, '.labs'), 'tiers').files[0].benchmarks[0].runs)
+      expect(stats!.optimization!.deoptimized).toEqual([false, false]);
+  });
+
   it.each(['during', 'after', 'unrelated'])('attributes a recovered deopt %s sampling', (phase) => {
     project = mkdtempSync(join(tmpdir(), 'labs-deopt-test-'));
     const output = spawnSync(

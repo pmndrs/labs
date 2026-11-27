@@ -1,5 +1,6 @@
 import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
+import { never_optimize } from './lib/runtime.ts';
 import type { DeoptWindow, MeasureOptions, SamplingDeopt } from './types.ts';
 
 /**
@@ -21,16 +22,16 @@ export function markNodeDeopts(): NonNullable<MeasureOptions['$deopts']> {
   return (functions) => {
     const targets = functions.map(location);
     let id = -1;
-    return {
-      start() {
-        mark(`labsDeoptStart${(id = windows++)}`);
-      },
-      finish() {
-        // The warmup loop also finishes, before any window has started.
-        if (id !== -1) mark(`labsDeoptFinish${id}`);
-      },
-      observed: () => ({ id, targets }),
+    const start = () => mark(`labsDeoptStart${(id = windows++)}`);
+    // The warmup loop also finishes, before any window has started.
+    const finish = () => {
+      if (id !== -1) mark(`labsDeoptFinish${id}`);
     };
+    // The sampling loop calls finish from its compiled body. Inlined there, the
+    // first real mark would bail the loop out inside the window it closes.
+    never_optimize(start);
+    never_optimize(finish);
+    return { start, finish, observed: () => ({ id, targets }) };
   };
 }
 
