@@ -114,6 +114,33 @@ bench --against ../wt-a --candidate ../wt-b
 
 </details>
 
+### Inspect
+
+See what V8 did with your benchmarks.
+
+```sh
+bench inspect
+# Or filter by file name and tag, and list the bytecode of each bench
+bench inspect vec3 @mytag --bytecode
+```
+
+Browse the findings in a full-screen view. Select a benchmark to see the tiers it climbed, the calls V8 inlined or refused, the property accesses that saw several object shapes, and every deopt with its reason and position. Inspection runs on Node. See the [inspect example](examples/inspect) for benches that produce each kind of finding.
+
+<img src="docs/images/inspect.png" width="760" alt="Labs inspect view with a benchmark list and, for the selected bench, its path through V8's tiers, inlined calls, polymorphic property accesses, and deopts with their reasons and positions" />
+
+<details>
+<summary>How to read the results</summary>
+
+- **tiers**: The path the workload took up to the end of sampling: each tier it rose to, and `deopt` wherever V8 threw its optimized code away and it had to climb again. The last entry is what it was running when sampling ended.
+- **optimized**: Whether TurboFan compiled the workload `alone` or inlined it `in the sampling loop` that Labs times it in.
+- **inlined**: Calls TurboFan replaced with the body of the function they call, nested under their caller. Each shows where the function is defined, where it is called, and the size of its bytecode.
+- **not inlined**: Functions of yours the optimizer looked at and left as calls, with V8's reason when it gives one.
+- **polymorphic**: Property accesses that saw more than one object shape, in the workload and what was inlined into it. An access is `polymorphic` while V8 still tracks each shape and `megamorphic` once it has given up, which it does after four. The count of a megamorphic access is a lower bound, because V8 only reports where an access is while its function runs unoptimized. A method call shows up through the load of its method. Calls to different functions through one variable are not reported.
+- **deopts**: Every time V8 threw away optimized code of the workload during warmup or sampling, with the tier, V8's reason, and the position. A position inside an inlined call is followed by the call sites it was reached through.
+- **bytecode**: The Ignition bytecode of the workload by source position. Addresses are left out so two reports can be diffed.
+
+</details>
+
 ### GPU
 
 Use `bench.gpu` to time WebGPU compute or render passes. The generator receives a device for setup and yields the pass to measure.
@@ -340,7 +367,7 @@ Failed checks and changed output exit with 1. With `--fail-on-slower`, a slower 
 
 ## Inspecting what V8 did
 
-`bench inspect` runs each selected bench once in a fresh process with V8's logs on. It reports what the engine did with the workload instead of how long it took. It takes the same file and `@tag` filters as a run and saves nothing. In an interactive terminal the report opens on the same kind of screen as a run report, with the benches as a list and the findings of the selected one below. Elsewhere it prints.
+`bench inspect` runs each selected bench once in a fresh process with V8's logs on. It reports what the engine did with the workload instead of how long it took. It takes the same file and `@tag` filters as a run and saves nothing.
 
 ```sh
 pnpm bench inspect vector              # every bench in the matching file
@@ -348,9 +375,7 @@ pnpm bench inspect vector --bytecode   # also list the bytecode of each workload
 pnpm bench inspect --json              # the same report as JSON on stdout
 ```
 
-<img src="docs/images/inspect.png" width="760" alt="Labs inspect view with a benchmark list and, for the selected bench, its path through V8's tiers, inlined calls, polymorphic property accesses, and deopts with their reasons and positions" />
-
-Printed, the same findings read:
+Outside a terminal the findings print as text:
 
 ```
 ✓ path length
@@ -374,15 +399,7 @@ deopts ✦ 1  tier      kind         reason     position
 sampling    TurboFan  deopt-eager  wrong map  lib/vector.ts:3:87 ← work.bench.ts:6:50
 ```
 
-- **tiers**: The path the workload took up to the end of sampling: each tier it rose to, and `deopt` wherever V8 threw its optimized code away and it had to climb again. The last entry is what it was running when sampling ended.
-- **optimized**: Whether TurboFan compiled the workload `alone` or inlined it `in the sampling loop` that Labs times it in.
-- **inlined**: Calls TurboFan replaced with the body of the function they call, nested under their caller. Each shows where the function is defined, where it is called, and the size of its bytecode.
-- **not inlined**: Functions of yours the optimizer looked at and left as calls, with V8's reason when it gives one.
-- **polymorphic**: Property accesses that saw more than one object shape, in the workload and what was inlined into it. An access is `polymorphic` while V8 still tracks each shape and `megamorphic` once it has given up, which it does after four. The count of a megamorphic access is a lower bound, because V8 only reports where an access is while its function runs unoptimized. A method call shows up through the load of its method. Calls to different functions through one variable are not reported.
-- **deopts**: Every time V8 threw away optimized code of the workload during warmup or sampling, with the tier, V8's reason, and the position. A position inside an inlined call is followed by the call sites it was reached through.
-- **bytecode**: The Ignition bytecode of the workload by source position. Addresses are left out so two reports can be diffed.
-
-Inspection supports the Node runtime only and has been run on Node 24 to 26. It needs a plain JavaScript function as the workload and `--allow-natives-syntax` in `nodeFlags` with no V8 log or trace flags of your own. Anything a bench prints to stdout is not shown, because V8 writes its traces there. It follows the workload and what was inlined into it, not the functions it calls without inlining. Tracing slows the code down and compilation runs on the main thread, so take timings from a normal run. See the [inspect example](examples/inspect) for benches that produce each kind of finding.
+Inspection supports the Node runtime only and has been run on Node 24 to 26. It needs a plain JavaScript function as the workload and `--allow-natives-syntax` in `nodeFlags` with no V8 log or trace flags of your own. Anything a bench prints to stdout is not shown, because V8 writes its traces there. It follows the workload and what was inlined into it, not the functions it calls without inlining. Tracing slows the code down and compilation runs on the main thread, so take timings from a normal run.
 
 ## Writing a bench
 
