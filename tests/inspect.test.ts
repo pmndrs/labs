@@ -54,7 +54,8 @@ bench('path length', () => {
   for (let i = 1; i < points.length; i++) sum += dist(points[i - 1], points[i]) + big(points[i]);
   return sum;
 });`,
-      '--json'
+      '--json',
+      '--bytecode'
     );
     expect(output.status, output.stderr).toBe(0);
     const [bench] = JSON.parse(output.stdout).benches;
@@ -80,11 +81,29 @@ bench('path length', () => {
       },
     ]);
     expect(inspection.rejected).toEqual([
-      { name: 'big', source: `${vector}:5:20`, reason: 'exceeds bytecode limit' },
+      {
+        name: 'big',
+        source: `${vector}:5:20`,
+        bytecodeBytes: expect.any(Number),
+        reason: 'exceeds bytecode limit',
+      },
     ]);
+    // The refused call is larger than the size the engine says it will inline.
+    expect(inspection.rejected[0].bytecodeBytes).toBeGreaterThan(inspection.limits.inlineBytes);
     expect(inspection.deopts).toEqual([]);
     expect(['alone', 'in-sampling-loop']).toContain(inspection.optimized);
-    expect(inspection.bytecode).toBeNull();
+    // The bench comes first, then what it calls, each by source position and without addresses.
+    expect(inspection.bytecode.map((fn: { name: string }) => fn.name)).toEqual([
+      '',
+      'dist',
+      'lengthSq',
+      'big',
+    ]);
+    expect(inspection.bytecode[2].source).toBe(`${vector}:2:25`);
+    expect(inspection.bytecode[2].listing[0]).toMatch(/^Bytecode length: \d+$/);
+    expect(inspection.bytecode[2].listing.join('\n')).toMatch(/2:\d+ S>\s+0 : /);
+    expect(inspection.bytecode[2].listing.join('\n')).toMatch(/: Return/);
+    expect(JSON.stringify(inspection.bytecode)).not.toMatch(/0x[0-9a-f]{6,}/);
   });
 
   it(
@@ -135,10 +154,12 @@ bench('mixed shapes', () => {
       '--json'
     );
     expect(output.status, output.stderr).toBe(0);
-    expect(JSON.parse(output.stdout).benches[0].inspection.polymorphic).toEqual([
+    const { inspection } = JSON.parse(output.stdout).benches[0];
+    expect(inspection.polymorphic).toEqual([
       { state: 'polymorphic', access: 'load', key: 'x', shapes: 3, at: 'work.bench.ts:6:44' },
       { state: 'megamorphic', access: 'load', key: 'w', shapes: 6, at: 'work.bench.ts:7:39' },
     ]);
+    expect(inspection.bytecode).toBeNull();
   });
 
   it('follows functions, code, and shapes that a collection moves', { timeout: 70_000 }, () => {
@@ -184,6 +205,7 @@ bench('across a collection', work);`,
             workload: { name: '', source: 'work.bench.ts:4:22' },
             tiers: ['Ignition', 'TurboFan', 'deopt', 'TurboFan'],
             optimized: 'alone',
+            limits: { inlineBytes: 460, inlineTotalBytes: 920 },
             inlined: [
               {
                 name: 'dist',
@@ -194,7 +216,12 @@ bench('across a collection', work);`,
               },
             ],
             rejected: [
-              { name: 'big', source: 'lib/vector.ts:5:20', reason: 'exceeds bytecode limit' },
+              {
+                name: 'big',
+                source: 'lib/vector.ts:5:20',
+                bytecodeBytes: 612,
+                reason: 'exceeds bytecode limit',
+              },
             ],
             polymorphic: [
               {
@@ -236,7 +263,8 @@ bench('across a collection', work);`,
     expect(screen).toMatch(/› ✓ path length\s+1\s+1/);
     expect(screen).toMatch(/✗ broken\s+—\s+—/);
     expect(screen).toMatch(/dist\s+lib\/vector\.ts:3:21\s+work\.bench\.ts:6:50\s+61 B/);
-    expect(screen).toMatch(/big\s+lib\/vector\.ts:5:20\s+exceeds bytecode limit/);
+    expect(screen).toMatch(/big\s+lib\/vector\.ts:5:20\s+612 B\s+exceeds bytecode limit/);
+    expect(screen).toContain('460 B of bytecode per call, 920 B in total');
     expect(screen).toContain('Ignition → TurboFan → deopt → TurboFan');
     expect(screen).toMatch(/megamorphic\s+load area\s+5\+\s+shapes\.ts:2:37/);
     expect(screen).toMatch(/wrong map\s+lib\/vector\.ts:3:87 ← work\.bench\.ts:6:50/);

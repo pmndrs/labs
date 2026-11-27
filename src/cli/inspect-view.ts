@@ -65,7 +65,6 @@ function details(bench: Bench, width: number, colors: boolean): string[] {
       x += textWidth(text) + 1;
     }
   };
-  flow('engine', [{ text: inspection.engine, style: GRAY }]);
   flow('function', [
     { text: inspection.workload.name || '(anonymous)' },
     { text: inspection.workload.source, style: GRAY },
@@ -82,6 +81,15 @@ function details(bench: Bench, width: number, colors: boolean): string[] {
       ? { text: inspection.optimized === 'alone' ? 'alone' : 'in the sampling loop' }
       : { text: 'never by TurboFan while sampling', style: YELLOW },
   ]);
+
+  const { inlineBytes, inlineTotalBytes } = inspection.limits;
+  if (inlineBytes && inlineTotalBytes)
+    flow('inlining', [
+      { text: `${inlineBytes} B`, style: '' },
+      { text: 'of bytecode per call,', style: GRAY },
+      { text: `${inlineTotalBytes} B`, style: '' },
+      { text: 'in total', style: GRAY },
+    ]);
 
   // A table sizes each column to its widest cell. Where the pane is too
   // narrow for that, the last column moves to a line of its own under each row.
@@ -119,10 +127,11 @@ function details(bench: Bench, width: number, colors: boolean): string[] {
   );
   table(
     'not inlined',
-    ['defined', 'reason'],
+    ['defined', 'bytecode', 'reason'],
     inspection.rejected.map((call) => [
       { text: call.name || '(anonymous)' },
       { text: call.source, style: GRAY },
+      { text: call.bytecodeBytes === null ? '—' : `${call.bytecodeBytes} B`, style: GRAY },
       { text: call.reason, style: YELLOW },
     ])
   );
@@ -147,9 +156,10 @@ function details(bench: Bench, width: number, colors: boolean): string[] {
       { text: at.join(' ← '), style: GRAY },
     ])
   );
-  if (inspection.bytecode !== null) {
-    canvas.put((y += 2), 0, 'bytecode', GRAY);
-    for (const row of inspection.bytecode.split('\n')) canvas.put(++y, 0, row, GRAY);
+  for (const { name, source, listing } of inspection.bytecode ?? []) {
+    canvas.put((y += 2), 0, `bytecode ✦ ${name || '(anonymous)'}`, GRAY);
+    canvas.put(y, textWidth(`bytecode ✦ ${name || '(anonymous)'}`) + 2, source, GRAY);
+    for (const row of listing) canvas.put(++y, 0, row, GRAY);
   }
   return canvas.lines(colors);
 }
@@ -261,7 +271,10 @@ export async function showInspectReport(benches: Bench[]): Promise<void> {
     return openReportScreen((state) => renderInspectView(benches, state), benches.length);
   let file = '';
   for (const bench of benches) {
-    if (bench.file !== file) console.log(`\n${BLUE}▶ ${(file = bench.file)}${RESET}`);
+    if (bench.file !== file)
+      console.log(
+        `\n${BLUE}▶ ${(file = bench.file)}${RESET}  ${bench.inspection?.engine ?? ''}`.trimEnd()
+      );
     console.log();
     // A printed report is read and diffed, so no row is cut to fit a pane.
     for (const line of details(bench, 1000, false)) console.log(line.trimEnd());

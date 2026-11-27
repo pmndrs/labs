@@ -129,7 +129,7 @@ bench inspect vec3 @mytag
 
 Browse the findings in a full-screen view. Select a benchmark to see what was inlined, where objects change shape, and where optimized code was thrown away. Each finding points to a file and line.
 
-Agents are very good at this. Give one `bench inspect --json` and let it work through the findings.
+Agents are very good at this. Give one `bench inspect --json --bytecode` and let it work through the findings.
 
 <img src="docs/images/inspect.png" width="760" alt="Labs inspect view with a benchmark list and, for the selected bench, the tiers it reached, the calls that were inlined or refused, a megamorphic property access, and two deopts with their reasons and positions" />
 
@@ -138,11 +138,12 @@ Agents are very good at this. Give one `bench inspect --json` and let it work th
 
 - **tiers**: The compilers the code went through, in order. `deopt` means optimized code was thrown away and it had to climb again.
 - **optimized**: `alone` if the code was optimized by itself, or `in the sampling loop` if it was inlined into the loop Labs times it in.
+- **inlining**: The bytecode size the optimizer will inline for one call, and for one function in total.
 - **inlined**: Calls replaced with the body of the function. Each shows where the function is defined, where it is called, and its bytecode size.
-- **not inlined**: Calls the optimizer looked at and left as calls, with the reason.
+- **not inlined**: Calls the optimizer looked at and left as calls, with their bytecode size and the reason.
 - **polymorphic**: Property accesses that saw more than one object shape. `megamorphic` means too many to track, which is slow. Its count is a lower bound.
 - **deopts**: Each time optimized code was thrown away, with the reason and where it happened.
-- **bytecode**: With `--bytecode`, the bytecode of each bench. Addresses are left out so two reports can be diffed.
+- **bytecode**: With `--bytecode`, the bytecode of the bench and of every function listed under inlined and not inlined, by source position. Addresses are left out so two reports can be diffed.
 
 </details>
 
@@ -368,7 +369,7 @@ pnpm bench inspect --json               # what the engine did with each bench
 
 With `--json`, stdout holds only the JSON document and everything else goes to stderr. Each bench has a `status` (`passed`, `warning`, or `failed`), a `problem` and `advice` when it has one, and its `minDetectableChange`. Comparison verdicts are `faster`, `slower`, `neutral`, `inconclusive` (neutral, but a `minDelta` change could have been missed), `changed`, `failed`, `skipped`, or `missing`.
 
-An inspection gives each bench the same `status`, `problem` and `advice` a run gives it, with what the engine did under `inspection`, or `null` when the bench failed or the engine reported nothing. Its `bytecode` is `null` unless `--bytecode` is passed.
+An inspection gives each bench the same `status`, `problem` and `advice` a run gives it, with what the engine did under `inspection`, or `null` when the bench failed or the engine reported nothing. Under `inspection`, `tiers` is the path through the compilers, `inlined` and `rejected` list calls with their `bytecodeBytes`, `limits` holds the sizes the optimizer will inline, and `polymorphic` and `deopts` name positions as `file:line:column`. `bytecode` is `null` unless `--bytecode` is passed. With it, each function has a `listing` of one row per instruction.
 
 Failed checks and changed output exit with 1. With `--fail-on-slower`, a slower bench also exits with 1, and a comparison that could have missed a change exits with 2: an inconclusive or skipped bench, or a candidate that ran on an unstable machine.
 
@@ -378,7 +379,7 @@ Failed checks and changed output exit with 1. With `--fail-on-slower`, a slower 
 
 ```sh
 pnpm bench inspect vector              # every bench in the matching file
-pnpm bench inspect vector --bytecode   # also list the bytecode of each workload
+pnpm bench inspect vector --bytecode   # also list the bytecode of each bench and what it calls
 pnpm bench inspect --json              # the same report as JSON on stdout
 ```
 
@@ -388,17 +389,17 @@ Outside a terminal the findings print as text:
 ⚠ path length
 TurboFan deoptimized during sampling
 
-engine     V8 13.6.233.17
 function   (anonymous) vector.bench.ts:15:9
 tiers      Ignition → Sparkplug → Maglev → TurboFan → deopt → Maglev → TurboFan
 optimized  in the sampling loop
+inlining   460 B of bytecode per call, 920 B in total
 
 inlined ✦ 2  defined              called at              bytecode
 distance     lib/vector.ts:10:25  vector.bench.ts:19:52  61 B
   lengthSq   lib/vector.ts:6:25   lib/vector.ts:11:20    29 B
 
-not inlined ✦ 1  defined              reason
-transform        lib/vector.ts:24:26  exceeds bytecode limit
+not inlined ✦ 1  defined              bytecode  reason
+transform        lib/vector.ts:24:26  687 B     exceeds bytecode limit
 
 polymorphic ✦ 1  access   shapes  position
 megamorphic      load id  6+      vector.bench.ts:18:50

@@ -64,7 +64,10 @@ export interface InlinedCall extends InspectedFunction {
  * What V8 did with a workload up to the end of sampling. Positions read
  * `file:line:column`. A deopt lists its own position first, then the call
  * sites it was inlined through. `polymorphic` holds the property accesses
- * that saw more than one object shape. `tiers` is the path the workload took:
+ * that saw more than one object shape. `limits` holds the bytecode size the
+ * optimizer will inline for one call and for one function in total. A
+ * bytecode `listing` is one row per instruction, so a reader that cuts long
+ * lines still sees all of it. `tiers` is the path the workload took:
  * each tier it rose to and each point where a deopt sent it back down. V8 reports where an access is only
  * while its function runs unoptimized, so the shapes of a megamorphic access
  * are the ones seen by then and the count is a lower bound.
@@ -74,8 +77,9 @@ export interface Inspection {
   workload: InspectedFunction;
   tiers: Array<OptimizationTier | 'deopt'>;
   optimized: 'alone' | 'in-sampling-loop' | null;
+  limits: { inlineBytes: number | null; inlineTotalBytes: number | null };
   inlined: InlinedCall[];
-  rejected: Array<InspectedFunction & { reason: string }>;
+  rejected: Array<InspectedFunction & { bytecodeBytes: number | null; reason: string }>;
   polymorphic: Array<{
     state: 'polymorphic' | 'megamorphic';
     access: string;
@@ -90,7 +94,7 @@ export interface Inspection {
     reason: string;
     at: string[];
   }>;
-  bytecode: string;
+  bytecode: Array<InspectedFunction & { listing: string[] }>;
 }
 
 /** A stretch of V8's code log that a worker marked for its parent to read. */

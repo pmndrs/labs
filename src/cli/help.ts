@@ -29,7 +29,7 @@ Options
       --no-save                 Run without saving
       --json                    Print judged results as JSON
       --fail-on-slower          Exit 1 when a compared bench is slower
-      --bytecode                Include the bytecode of each bench, inspect only
+      --bytecode                List the bytecode of each bench and what it calls, inspect only
   -h, --help                    Show this help`;
 }
 
