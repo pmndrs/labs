@@ -11,7 +11,7 @@ import { _print } from './lib/runtime.ts';
 import { runTrialAt } from './main.ts';
 import type { ProgressEvent } from '../cli/progress.ts';
 import type { BlockPlan, GcStats, Stats, Trial } from './types.ts';
-import { observeNodeDeopts } from './node-deopts.ts';
+import { markNodeDeopts, readNodeDeopts } from './node-deopts.ts';
 import { mergeGc } from './lib/gc.ts';
 import { colors } from './env.ts';
 import { renderReport } from './render.ts';
@@ -109,10 +109,9 @@ async function childMain(index: number): Promise<void> {
       ? (JSON.parse(process.env.LABS_BLOCK_PLANS) as BlockPlan[])
       : undefined;
     const tune = parseTuneEnv();
-    const trace = process.env.LABS_DEOPT_DIR;
     const trial = await runTrialAt(
       index,
-      trace ? { ...tune, $deopts: observeNodeDeopts(trace) } : tune,
+      process.env.LABS_DEOPT_TRACE ? { ...tune, $deopts: markNodeDeopts() } : tune,
       plans
     );
     writeFileSync(
@@ -153,7 +152,7 @@ async function runTrialChild(
     const env = {
       ...process.env,
       ...extraEnv,
-      ...(trace ? { LABS_DEOPT_DIR: trace } : {}),
+      ...(trace ? { LABS_DEOPT_TRACE: '1' } : {}),
       LABS_ONLY_INDEX: String(index),
       LABS_RESULT_FILE: resultFile,
     };
@@ -185,7 +184,22 @@ async function runTrialChild(
         env,
       });
     }
-    return JSON.parse(readFileSync(resultFile, 'utf-8'));
+    const result = JSON.parse(readFileSync(resultFile, 'utf-8')) as {
+      trial: Trial;
+      calibrationRate: number;
+    };
+    if (trace) {
+      // The worker has exited, so V8 has released the logs it marked.
+      const read = readNodeDeopts(trace);
+      for (const run of result.trial.runs) {
+        const optimization = run.stats?.optimization;
+        if (optimization?.deoptimized)
+          optimization.deoptimized = optimization.deoptimized.map((deopt) =>
+            deopt && typeof deopt === 'object' ? read(deopt) : deopt
+          );
+      }
+    }
+    return result;
   } catch (err) {
     throw new Error(`isolated bench "${trial?._name ?? index}" failed: ${String(err)}`, {
       cause: err,

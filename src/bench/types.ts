@@ -47,6 +47,12 @@ export type OptimizationTier =
 
 export type SamplingDeopt = 'workload' | 'harness' | false;
 
+/** A stretch of V8's code log that a worker marked for its parent to read. */
+export interface DeoptWindow {
+  id: number;
+  targets: string[];
+}
+
 export interface OptimizationSample {
   tier: OptimizationTier;
   time: number;
@@ -60,7 +66,7 @@ export interface OptimizationStats {
   benchmark?: Array<OptimizationSample | null>;
   benchmarkEnd?: Array<OptimizationTier | null>;
   /** Per-block TurboFan bailouts observed inside sampling. */
-  deoptimized?: Array<SamplingDeopt | null>;
+  deoptimized?: Array<SamplingDeopt | DeoptWindow | null>;
   workload: Array<OptimizationSample | null>;
   harness?: Array<OptimizationSample | null>;
 }
@@ -181,7 +187,7 @@ export interface MeasureOptions {
   args?: Record<string, any>;
   /** Receives the first untimed result before warmup. */
   $first?: (value: unknown) => void | Promise<void>;
-  $deopts?: (functions: Function[]) => { start(): void; finish(): void; observed(): SamplingDeopt };
+  $deopts?: (functions: Function[]) => { start(): void; finish(): void; observed(): DeoptWindow };
 }
 
 export type FnKind = 'fn' | 'yield';
