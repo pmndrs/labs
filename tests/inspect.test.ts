@@ -90,6 +90,11 @@ bench('path length', () => {
     ]);
     // The refused call is larger than the size the engine says it will inline.
     expect(inspection.rejected[0].bytecodeBytes).toBeGreaterThan(inspection.limits.inlineBytes);
+    // It runs as code of its own, so it has findings and a share of the time of its own.
+    expect(inspection.called).toMatchObject([{ name: 'big', source: `${vector}:5:20`, deopts: [] }]);
+    expect(inspection.called[0].tiers.at(-1)).toBe('TurboFan');
+    expect(inspection.called[0].time).toBeGreaterThan(0);
+    expect(inspection.time + inspection.called[0].time).toBeLessThanOrEqual(1);
     expect(inspection.deopts).toEqual([]);
     expect(['alone', 'in-sampling-loop']).toContain(inspection.optimized);
     // The bench comes first, then what it calls, each by source position and without addresses.
@@ -156,8 +161,22 @@ bench('mixed shapes', () => {
     expect(output.status, output.stderr).toBe(0);
     const { inspection } = JSON.parse(output.stdout).benches[0];
     expect(inspection.polymorphic).toEqual([
-      { state: 'polymorphic', access: 'load', key: 'x', shapes: 3, at: 'work.bench.ts:6:44' },
-      { state: 'megamorphic', access: 'load', key: 'w', shapes: 6, at: 'work.bench.ts:7:39' },
+      {
+        state: 'polymorphic',
+        access: 'load',
+        key: 'x',
+        shapes: 3,
+        layouts: ['{ x }', '{ x, y }', '{ x, z }'],
+        at: 'work.bench.ts:6:44',
+      },
+      {
+        state: 'megamorphic',
+        access: 'load',
+        key: 'w',
+        shapes: 6,
+        layouts: ['{ w }', '{ w, a }', '{ w, b }', '{ w, c }', '{ w, d }', '{ w, e }'],
+        at: 'work.bench.ts:7:39',
+      },
     ]);
     expect(inspection.bytecode).toBeNull();
   });
@@ -187,7 +206,14 @@ bench('across a collection', work);`,
     expect(inspection.workload).toEqual({ name: 'work', source: 'work.bench.ts:8:14' });
     expect(inspection.tiers[0]).toBe('Ignition');
     expect(inspection.polymorphic).toEqual([
-      { state: 'megamorphic', access: 'load', key: 'w', shapes: 6, at: 'work.bench.ts:11:39' },
+      {
+        state: 'megamorphic',
+        access: 'load',
+        key: 'w',
+        shapes: 6,
+        layouts: ['{ w }', '{ w, a }', '{ w, b }', '{ w, c }', '{ w, d }', '{ w, e }'],
+        at: 'work.bench.ts:11:39',
+      },
     ]);
   });
 
@@ -206,6 +232,7 @@ bench('across a collection', work);`,
             tiers: ['Ignition', 'TurboFan', 'deopt', 'TurboFan'],
             optimized: 'alone',
             limits: { inlineBytes: 460, inlineTotalBytes: 920 },
+            time: 0.25,
             inlined: [
               {
                 name: 'dist',
@@ -229,6 +256,7 @@ bench('across a collection', work);`,
                 access: 'load',
                 key: 'area',
                 shapes: 5,
+                layouts: ['Square { side }', 'Circle { radius }'],
                 at: 'shapes.ts:2:37',
               },
             ],
@@ -239,6 +267,19 @@ bench('across a collection', work);`,
                 kind: 'deopt-eager',
                 reason: 'wrong map',
                 at: ['lib/vector.ts:3:87', 'work.bench.ts:6:50'],
+              },
+            ],
+            called: [
+              {
+                name: 'big',
+                source: 'lib/vector.ts:5:20',
+                bytecodeBytes: 612,
+                time: 0.75,
+                tiers: ['Ignition', 'TurboFan'],
+                inlined: [],
+                rejected: [],
+                polymorphic: [],
+                deopts: [],
               },
             ],
             bytecode: null,
@@ -255,10 +296,10 @@ bench('across a collection', work);`,
           inspection: null,
         },
       ],
-      { columns: 100, rows: 30, selected: 0, colors: false }
+      { columns: 100, rows: 44, selected: 0, colors: false }
     );
     const screen = lines.join('\n');
-    expect(lines).toHaveLength(30);
+    expect(lines).toHaveLength(44);
     expect(screen).toContain('INSPECT');
     expect(screen).toMatch(/› ✓ path length\s+1\s+1/);
     expect(screen).toMatch(/✗ broken\s+—\s+—/);
@@ -266,7 +307,12 @@ bench('across a collection', work);`,
     expect(screen).toMatch(/big\s+lib\/vector\.ts:5:20\s+612 B\s+exceeds bytecode limit/);
     expect(screen).toContain('460 B of bytecode per call, 920 B in total');
     expect(screen).toContain('Ignition → TurboFan → deopt → TurboFan');
-    expect(screen).toMatch(/megamorphic\s+load area\s+5\+\s+shapes\.ts:2:37/);
+    expect(screen).toMatch(
+      /megamorphic\s+load area\s+5\+\s+shapes\.ts:2:37\s+Square \{ side \} · Circle \{ radius \}/
+    );
+    expect(screen).toMatch(/time\s+25% of the sampled time/);
+    expect(screen).toMatch(/called ✦ 1\s+defined\s+time\s+bytecode\s+tier\s+deopts/);
+    expect(screen).toMatch(/big\s+lib\/vector\.ts:5:20\s+75%\s+612 B\s+TurboFan\s+0/);
     expect(screen).toMatch(/wrong map\s+lib\/vector\.ts:3:87 ← work\.bench\.ts:6:50/);
     expect(screen).toContain('1 inspected  1 failed');
   });

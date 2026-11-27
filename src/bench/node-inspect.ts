@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync, readdirSync } from 'node:fs';
 import { isAbsolute, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { DeoptWindow, InlinedCall, Inspection, OptimizationTier } from './types.ts';
+import type { DeoptWindow, Findings, InlinedCall, Inspection, OptimizationTier } from './types.ts';
 
 interface Code {
   fn: number;
@@ -71,8 +71,9 @@ export function readNodeInspection(
   };
   const functions = new Map<
     number,
-    { name: string; file: string; source: string; script?: string }
+    { name: string; file: string; position: string; source: string; script?: string }
   >();
+  const layouts = new Map<number, string>();
   const sfis = identities();
   const shapes = identities();
   const sources = new Map<string, string>();
@@ -90,6 +91,7 @@ export function readNodeInspection(
     access: string;
     key: string;
   }> = [];
+  const ticks: Array<{ record: number; frames: number[] }> = [];
   let engine = '';
   let phase: 'warmup' | 'sampling' | undefined = 'warmup';
 
@@ -116,7 +118,7 @@ export function readNodeInspection(
       const source = `${place(file)}:${position}`;
       let fn = sfis.of(Number(sfi));
       if ((functions.get(fn)?.source ?? source) !== source) fn = sfis.renew(Number(sfi));
-      if (!functions.has(fn)) functions.set(fn, { name, file, source });
+      if (!functions.has(fn)) functions.set(fn, { name, file, position, source });
       // V8 leaves the marker off interpreted code that is barred from optimization.
       const tier = ({ '~': 'Ignition', '^': 'Sparkplug', '+': 'Maglev', '*': 'TurboFan' } as const)[
         marker[0] ?? '~'
@@ -163,6 +165,7 @@ export function readNodeInspection(
           ),
         });
     } else if (fields[0] === 'map-move') shapes.move(Number(fields[2]), Number(fields[3]));
+    else if (fields[0] === 'map-details') layouts.set(shapes.of(Number(fields[2])), fields[3] ?? '');
     else if (fields[0] === 'sfi-move') sfis.move(Number(fields[1]), Number(fields[2]));
     else if (fields[0].endsWith('IC') && phase) {
       // An inline cache record names the access by its address in the code
@@ -185,7 +188,10 @@ export function readNodeInspection(
       live.set(fields[2], code);
       code.spans.push([Number(fields[2]), record, Infinity]);
     } else if (fields[0] === 'code-delete') retire(fields[1], record);
-    else if (fields[0] === 'script-source') sources.set(fields[1], text(fields[3]));
+    else if (fields[0] === 'tick') {
+      if (phase === 'sampling')
+        ticks.push({ record, frames: [fields[1], ...fields.slice(6)].map(Number) });
+    } else if (fields[0] === 'script-source') sources.set(fields[1], text(fields[3]));
     else if (fields[0] === 'v8-version') engine = 'V8 ' + fields.slice(1, 5).join('.');
   }
 
@@ -202,16 +208,12 @@ export function readNodeInspection(
       ? ''
       : `${place(file)}:${before.split('\n').length}:${offset - before.lastIndexOf('\n')}`;
   };
-  // A batched workload runs as part of the sampling loop once the optimizer
-  // has inlined it there. Otherwise its own optimized code is what was timed.
-  const loop = compiled.find((code) => targets[1] && code.entry === targets[1])?.fn;
-  const host = [loop, workload]
-    .map((fn) =>
-      compiled.findLast((code) => code.fn === fn && code.tier === 'TurboFan' && code.sampled)
-    )
-    .find(
-      (code) => code && (code.fn === workload || code.inlined.some((call) => call.fn === workload))
-    );
+  // Labs and Node internals are part of the harness, not the bench.
+  const own = new URL(import.meta.url.endsWith('.ts') ? '../' : './', import.meta.url).href;
+  const user = (fn: number | undefined) => {
+    const file = functions.get(fn!)?.file ?? '';
+    return /^file:|^\/|^[A-Za-z]:/.test(file) && !file.startsWith(own);
+  };
 
   // The trace prints tagged pointers, one above the addresses in the log.
   const traced = (pointer: string) => sfis.ever.get(Number(pointer) - 1);
@@ -226,60 +228,213 @@ export function readNodeInspection(
     const length = /^Bytecode length: (\d+)/.exec(listings.get(fn) ?? '')?.[1];
     return length === undefined ? null : Number(length);
   };
-  const calls = (code: Code, parent: number): InlinedCall[] =>
-    code.inlined.flatMap((call, index) =>
-      call.parent === parent
-        ? [
-            {
-              ...named(call.fn),
-              at: position(parent < 0 ? code.fn : code.inlined[parent].fn, call.offset),
-              bytecodeBytes: bytes(call.fn),
-              calls: calls(code, index),
-            },
-          ]
-        : []
-    );
-
   // The trace of each optimizing compile lists every call it looked at, in
   // the order the log records the code those compiles produced.
-  const rejected: Inspection['rejected'] = [];
-  const refused: number[] = [];
-  const compile =
-    host &&
-    [
-      ...traces.matchAll(
-        /^\[compiling method \S+ <JSFunction [^>]*\(sfi = (0x[0-9a-f]+)\)> \(target TURBOFAN_JS\)[^\n]*\n([^]*?)^\[completed compiling/gm
-      ),
-    ].filter((match) => traced(match[1]) === host.fn)[
-      compiled.filter((code) => code.fn === host.fn && code.tier === 'TurboFan').indexOf(host)
-    ]?.[2];
-  if (host && compile) {
-    const reasons = new Map<number | undefined, string>();
-    for (const [, pointer] of compile.matchAll(
-      /- target: \S+ \{(0x[0-9a-f]+) <SharedFunctionInfo[^>]*>\}/g
-    ))
-      reasons.set(traced(pointer), 'considered but not inlined');
-    // V8 13 prints the code of its reason and later versions print the words.
-    for (const [, pointer, reason] of compile.matchAll(
-      /^Cannot consider \S+ \{(0x[0-9a-f]+) <SharedFunctionInfo[^>]*>\} for inlining \(reason: ([^)]*)\)/gm
-    ))
-      reasons.set(
-        traced(pointer),
-        (engine.startsWith('V8 13.') &&
-          { 5: 'exceeds bytecode limit', 7: 'has optimization disabled' }[reason]) ||
-          (/^\d+$/.test(reason) ? `V8 reason ${reason}` : reason)
-      );
-    // Labs and Node internals are part of the harness, not the workload.
-    const own = new URL(import.meta.url.endsWith('.ts') ? '../' : './', import.meta.url).href;
-    for (const [fn, reason] of reasons) {
-      const file = functions.get(fn!)?.file ?? '';
-      if (fn === undefined || fn === host.fn || fn === workload) continue;
-      if (host.inlined.some((call) => call.fn === fn)) continue;
-      if (!/^file:|^\/|^[A-Za-z]:/.test(file) || file.startsWith(own)) continue;
-      rejected.push({ ...named(fn), bytecodeBytes: bytes(fn), reason });
-      refused.push(fn);
-    }
+  const compiles = [
+    ...traces.matchAll(
+      /^\[compiling method \S+ <JSFunction [^>]*\(sfi = (0x[0-9a-f]+)\)> \(target TURBOFAN_JS\)[^\n]*\n([^]*?)^\[completed compiling/gm
+    ),
+  ];
+
+  // A profiler tick holds the address that was running and the frames that
+  // called it. It counts for the nearest function of yours on that stack, so
+  // time in the engine's own routines goes to the function that called them
+  // and calls inlined into a function count toward that function.
+  const sampled = new Map<number, number>();
+  const candidates = compiled.filter((code) => user(code.fn) || code.entry === targets[1]);
+  for (const { record, frames } of ticks) {
+    const fn = frames
+      .map(
+        (pc) =>
+          candidates.find((code) =>
+            code.spans.some(
+              ([start, since, until]) =>
+                since <= record && record < until && start <= pc && pc < start + code.size
+            )
+          )?.fn
+      )
+      .find((owner) => owner !== undefined);
+    if (fn !== undefined) sampled.set(fn, (sampled.get(fn) ?? 0) + 1);
   }
+
+  // An object shape reads as its constructor and the properties it holds, in order.
+  const layout = (shape: number) => {
+    const details = text(layouts.get(shape));
+    const constructor = / - constructor: \S+ <JSFunction (\S+) /.exec(details)?.[1];
+    const properties = [...details.matchAll(/^\s+\[\d+\]: [^#\n]*#(\S+) \(/gm)].map(
+      (match) => match[1]
+    );
+    return details
+      ? `${constructor && constructor !== 'Object' ? constructor + ' ' : ''}{ ${properties.join(', ')} }`
+      : '';
+  };
+
+  // What the engine did with one function. Its host is the optimized code it
+  // ran in, and a bailout counts when it happened in code the function covers.
+  const findings = (
+    fn: number,
+    host: Code | undefined,
+    covers: (code: Code, inlining: number) => boolean
+  ): Omit<Findings, 'time'> & { followed: Set<number>; refused: number[] } => {
+    const root = host && host.fn !== fn ? host.inlined.findIndex((call) => call.fn === fn) : -1;
+    const under = (index: number): boolean =>
+      root < 0 ||
+      (index >= 0 && (host!.inlined[index].parent === root || under(host!.inlined[index].parent)));
+    const calls = (parent: number): InlinedCall[] =>
+      (host?.inlined ?? []).flatMap((call, index) =>
+        call.parent === parent
+          ? [
+              {
+                ...named(call.fn),
+                at: position(parent < 0 ? host!.fn : host!.inlined[parent].fn, call.offset),
+                bytecodeBytes: bytes(call.fn),
+                calls: calls(index),
+              },
+            ]
+          : []
+      );
+    // Inline caches belong to a function whichever code it was inlined into,
+    // so the function and every function inlined under it are looked at.
+    const followed = new Set([
+      fn,
+      ...(host?.inlined.flatMap((call, index) => (under(index) ? [call.fn] : [])) ?? []),
+    ]);
+
+    const refused = new Map<number, string>();
+    const compile =
+      host?.tier === 'TurboFan' &&
+      compiles.filter((match) => traced(match[1]) === host.fn)[
+        compiled.filter((code) => code.fn === host.fn && code.tier === 'TurboFan').indexOf(host)
+      ]?.[2];
+    if (compile) {
+      const reasons = new Map<number | undefined, string>();
+      for (const [, pointer] of compile.matchAll(
+        /- target: \S+ \{(0x[0-9a-f]+) <SharedFunctionInfo[^>]*>\}/g
+      ))
+        reasons.set(traced(pointer), 'considered but not inlined');
+      // V8 13 prints the code of its reason and later versions print the words.
+      for (const [, pointer, reason] of compile.matchAll(
+        /^Cannot consider \S+ \{(0x[0-9a-f]+) <SharedFunctionInfo[^>]*>\} for inlining \(reason: ([^)]*)\)/gm
+      ))
+        reasons.set(
+          traced(pointer),
+          (engine.startsWith('V8 13.') &&
+            { 5: 'exceeds bytecode limit', 7: 'has optimization disabled' }[reason]) ||
+            (/^\d+$/.test(reason) ? `V8 reason ${reason}` : reason)
+        );
+      for (const [callee, reason] of reasons)
+        if (callee !== undefined && callee !== host!.fn && user(callee))
+          if (!host!.inlined.some((call) => call.fn === callee)) refused.set(callee, reason);
+    }
+
+    const sites = new Map<
+      string,
+      { state: string; access: string; key: string; at: string; shapes: Set<number> }
+    >();
+    for (const { record, pc, position: place_, state, shape, access, key } of accesses) {
+      // Only unoptimized code reports the position of the access. Optimized
+      // code reports the start of its function, so its records cannot be placed.
+      const owner = compiled.find(
+        (code) =>
+          followed.has(code.fn) &&
+          (code.tier === 'Ignition' || code.tier === 'Sparkplug') &&
+          code.spans.some(
+            ([start, since, until]) =>
+              since <= record && record < until && start <= pc && pc < start + code.size
+          )
+      )?.fn;
+      if (owner === undefined) continue;
+      const at = `${place(functions.get(owner)!.file)}:${place_}`;
+      const site = sites.get(`${at} ${access} ${key}`) ?? {
+        state: '',
+        access,
+        key,
+        at,
+        shapes: new Set(),
+      };
+      sites.set(`${at} ${access} ${key}`, site);
+      // V8 marks a polymorphic access P and a megamorphic one N.
+      if (state === 'N' || (state === 'P' && !site.state))
+        site.state = state === 'N' ? 'megamorphic' : 'polymorphic';
+      site.shapes.add(shape);
+    }
+
+    // The path through the tiers lists a compile only when it raises the tier
+    // the function runs at. Baseline code is compiled in batches on another
+    // thread and often arrives after optimized code, where it changes nothing.
+    const deopts = bailouts.filter(({ code, inlining }) => covers(code, inlining));
+    const tiers: Findings['tiers'] = [];
+    let reached = -1;
+    compiled.forEach((code, index) => {
+      if (deopts.some((deopt) => deopt.before === index) && tiers.at(-1) !== 'deopt') {
+        tiers.push('deopt');
+        reached = 0;
+      }
+      const rank = ['Ignition', 'Sparkplug', 'Maglev', 'TurboFan'].indexOf(code.tier ?? '');
+      if (code.fn !== fn || !code.sampled || rank <= reached) return;
+      tiers.push(code.tier!);
+      reached = rank;
+    });
+    if (deopts.some((deopt) => deopt.before === compiled.length)) tiers.push('deopt');
+
+    return {
+      followed,
+      refused: [...refused.keys()],
+      tiers,
+      inlined: host ? calls(root) : [],
+      rejected: [...refused].map(([callee, reason]) => ({
+        ...named(callee),
+        bytecodeBytes: bytes(callee),
+        reason,
+      })),
+      polymorphic: [...sites.values()].flatMap(({ state, shapes: seen, ...site }) =>
+        state === 'polymorphic' || state === 'megamorphic'
+          ? [
+              {
+                state,
+                ...site,
+                shapes: seen.size,
+                layouts: [...new Set([...seen].map(layout).filter(Boolean))],
+              },
+            ]
+          : []
+      ),
+      deopts: deopts.map(({ code: _, inlining: __, before: ___, ...deopt }) => deopt),
+    };
+  };
+
+  // A batched workload runs as part of the sampling loop once the optimizer
+  // has inlined it there. Otherwise its own optimized code is what was timed.
+  const last = (fn: number | undefined, tier: OptimizationTier) =>
+    compiled.findLast((code) => code.fn === fn && code.tier === tier && code.sampled);
+  const loop = compiled.find((code) => targets[1] && code.entry === targets[1])?.fn;
+  const host = [last(loop, 'TurboFan'), last(workload, 'TurboFan')].find(
+    (code) => code && (code.fn === workload || code.inlined.some((call) => call.fn === workload))
+  );
+  const within = (code: Code, index: number): boolean =>
+    code.fn === workload ||
+    (index >= 0 && (code.inlined[index].fn === workload || within(code, code.inlined[index].parent)));
+  const bench = findings(workload, host, within);
+
+  // Every other function of yours that the profiler saw running while the
+  // workload was sampled gets the same findings.
+  const reached = [...sampled.keys()].filter(
+    (fn) => user(fn) && fn !== loop && !bench.followed.has(fn)
+  );
+  const others = reached.map((fn) => ({
+    fn,
+    ...findings(fn, last(fn, 'TurboFan') ?? last(fn, 'Maglev'), (code) => code.fn === fn),
+  }));
+  // Time in the sampling loop is the workload's when the workload runs inside it.
+  const share = (fn: number) =>
+    ticks.length
+      ? Math.round(
+          (((sampled.get(fn) ?? 0) +
+            (fn === workload && host?.fn === loop ? (sampled.get(loop!) ?? 0) : 0)) /
+            ticks.length) *
+            1000
+        ) / 1000
+      : null;
 
   // The printed bytecode carries addresses and raw bytes that change every run.
   const listed = (fn: number) =>
@@ -315,84 +470,33 @@ export function readNodeInspection(
     execFileSync(process.execPath, ['--v8-options'], { encoding: 'utf8' });
   const limit = (flag: string) => Number(new RegExp(`--${flag}=(\\d+)`).exec(options)?.[1]) || null;
 
-  const within = (code: Code, index: number): boolean =>
-    code.fn === workload ||
-    (index >= 0 && (code.inlined[index].fn === workload || within(code, code.inlined[index].parent)));
-  // Inline caches belong to a function whichever code it was inlined into, so
-  // the workload and every function inlined under it are looked at.
-  const followed = new Set([
-    workload,
-    ...(host?.inlined.flatMap((call, index) => (within(host, index) ? [call.fn] : [])) ?? []),
-  ]);
-  const sites = new Map<
-    string,
-    { state: string; access: string; key: string; at: string; shapes: Set<number> }
-  >();
-  for (const { record, pc, position, state, shape, access, key } of accesses) {
-    // Only unoptimized code reports the position of the access. Optimized
-    // code reports the start of its function, so its records cannot be placed.
-    const fn = compiled.find(
-      (code) =>
-        followed.has(code.fn) &&
-        (code.tier === 'Ignition' || code.tier === 'Sparkplug') &&
-        code.spans.some(
-          ([start, since, until]) =>
-            since <= record && record < until && start <= pc && pc < start + code.size
-        )
-    )?.fn;
-    if (fn === undefined) continue;
-    const at = `${place(functions.get(fn)!.file)}:${position}`;
-    const id = `${at} ${access} ${key}`;
-    const site = sites.get(id) ?? { state: '', access, key, at, shapes: new Set() };
-    sites.set(id, site);
-    // V8 marks a polymorphic access P and a megamorphic one N.
-    if (state === 'N' || (state === 'P' && !site.state))
-      site.state = state === 'N' ? 'megamorphic' : 'polymorphic';
-    site.shapes.add(shape);
-  }
-
-  // The path through the tiers lists a compile only when it raises the tier
-  // the workload runs at. Baseline code is compiled in batches on another
-  // thread and often arrives after optimized code, where it changes nothing.
-  const deopts = bailouts.filter(({ code, inlining }) => within(code, inlining));
-  const tiers: Inspection['tiers'] = [];
-  let reached = -1;
-  compiled.forEach((code, index) => {
-    if (deopts.some((deopt) => deopt.before === index) && tiers.at(-1) !== 'deopt') {
-      tiers.push('deopt');
-      reached = 0;
-    }
-    const rank = ['Ignition', 'Sparkplug', 'Maglev', 'TurboFan'].indexOf(code.tier ?? '');
-    if (code.fn !== workload || !code.sampled || rank <= reached) return;
-    tiers.push(code.tier!);
-    reached = rank;
-  });
-  if (deopts.some((deopt) => deopt.before === compiled.length)) tiers.push('deopt');
-
+  const { followed, refused: _, ...workloadFindings } = bench;
   return {
     engine,
     workload: named(workload),
-    tiers,
     optimized: !host ? null : host.fn === workload ? 'alone' : 'in-sampling-loop',
     limits: {
       inlineBytes: limit('max-inlined-bytecode-size'),
       inlineTotalBytes: limit('max-inlined-bytecode-size-cumulative'),
     },
-    inlined: !host
-      ? []
-      : calls(
-          host,
-          host.fn === workload ? -1 : host.inlined.findIndex((call) => call.fn === workload)
-        ),
-    rejected,
-    polymorphic: [...sites.values()].flatMap(({ state, shapes, ...site }) =>
-      state === 'polymorphic' || state === 'megamorphic'
-        ? [{ state, ...site, shapes: shapes.size }]
-        : []
-    ),
-    deopts: deopts.map(({ code: _, inlining: __, before: ___, ...deopt }) => deopt),
-    // The workload comes first, then what was inlined into it, then what was refused.
-    bytecode: [...new Set([...followed, ...refused])].flatMap((fn) =>
+    time: share(workload),
+    ...workloadFindings,
+    called: others
+      .map(({ fn, followed: __, refused: ___, ...found }) => ({
+        ...named(fn),
+        bytecodeBytes: bytes(fn),
+        time: share(fn),
+        ...found,
+      }))
+      .sort((a, b) => (b.time ?? 0) - (a.time ?? 0)),
+    // The workload comes first, then everything named in the findings.
+    bytecode: [
+      ...new Set([
+        ...followed,
+        ...bench.refused,
+        ...others.flatMap((other) => [...other.followed, ...other.refused]),
+      ]),
+    ].flatMap((fn) =>
       listings.has(fn) && !functions.get(fn)?.file.startsWith('node:')
         ? [{ ...named(fn), listing: listed(fn) }]
         : []

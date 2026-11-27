@@ -61,23 +61,20 @@ export interface InlinedCall extends InspectedFunction {
 }
 
 /**
- * What V8 did with a workload up to the end of sampling. Positions read
- * `file:line:column`. A deopt lists its own position first, then the call
- * sites it was inlined through. `polymorphic` holds the property accesses
- * that saw more than one object shape. `limits` holds the bytecode size the
- * optimizer will inline for one call and for one function in total. A
- * bytecode `listing` is one row per instruction, so a reader that cuts long
- * lines still sees all of it. `tiers` is the path the workload took:
- * each tier it rose to and each point where a deopt sent it back down. V8 reports where an access is only
- * while its function runs unoptimized, so the shapes of a megamorphic access
- * are the ones seen by then and the count is a lower bound.
+ * What V8 did with one function up to the end of sampling. Positions read
+ * `file:line:column`. `time` is the share of the bench's sampled time spent
+ * in the function's own compiled code, which includes what was inlined into
+ * it. `tiers` is the path the function took: each tier it rose to and each
+ * point where a deopt sent it back down. A deopt lists its own position
+ * first, then the call sites it was inlined through. `polymorphic` holds the
+ * property accesses that saw more than one object shape, with the layout of
+ * each shape. V8 reports where an access is only while its function runs
+ * unoptimized, so the shapes of a megamorphic access are the ones seen by
+ * then and the count is a lower bound.
  */
-export interface Inspection {
-  engine: string;
-  workload: InspectedFunction;
+export interface Findings {
+  time: number | null;
   tiers: Array<OptimizationTier | 'deopt'>;
-  optimized: 'alone' | 'in-sampling-loop' | null;
-  limits: { inlineBytes: number | null; inlineTotalBytes: number | null };
   inlined: InlinedCall[];
   rejected: Array<InspectedFunction & { bytecodeBytes: number | null; reason: string }>;
   polymorphic: Array<{
@@ -85,6 +82,7 @@ export interface Inspection {
     access: string;
     key: string;
     shapes: number;
+    layouts: string[];
     at: string;
   }>;
   deopts: Array<{
@@ -94,6 +92,21 @@ export interface Inspection {
     reason: string;
     at: string[];
   }>;
+}
+
+/**
+ * What V8 did with a bench: the findings for its workload, and for every
+ * other function of the project the workload reached that V8 compiled on its
+ * own. `limits` holds the bytecode size the optimizer will inline for one
+ * call and for one function in total. A bytecode `listing` is one row per
+ * instruction, so a reader that cuts long lines still sees all of it.
+ */
+export interface Inspection extends Findings {
+  engine: string;
+  workload: InspectedFunction;
+  optimized: 'alone' | 'in-sampling-loop' | null;
+  limits: { inlineBytes: number | null; inlineTotalBytes: number | null };
+  called: Array<InspectedFunction & Findings & { bytecodeBytes: number | null }>;
   bytecode: Array<InspectedFunction & { listing: string[] }>;
 }
 

@@ -201,7 +201,8 @@ async function runTrialChild(
               : [
                   '--log-ic',
                   '--log-maps',
-                  '--no-log-maps-details',
+                  '--prof',
+                  '--prof-sampling-interval=100',
                   '--trace-opt',
                   '--trace-turbo-inlining',
                   '--print-bytecode',

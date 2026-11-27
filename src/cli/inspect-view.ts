@@ -1,4 +1,4 @@
-import type { InlinedCall } from '../bench/types.ts';
+import type { Findings, InlinedCall } from '../bench/types.ts';
 import {
   BLACK,
   BLUE,
@@ -52,6 +52,7 @@ function details(bench: Bench, width: number, colors: boolean): string[] {
   const { inspection } = bench;
   if (!inspection) return canvas.lines(colors);
 
+  const percent = (time: number | null) => (time === null ? '—' : `${Math.round(time * 100)}%`);
   // The cells of a labelled row follow each other and continue under the first at the edge.
   const flow = (label: string, cells: Cell[]) => {
     canvas.put(++y, 0, label, GRAY);
@@ -76,6 +77,10 @@ function details(bench: Bench, width: number, colors: boolean): string[] {
       { text: tier, style: tier === 'deopt' ? YELLOW : '' },
     ])
   );
+  flow('time', [
+    { text: percent(inspection.time) },
+    { text: 'of the sampled time, with what was inlined into it', style: GRAY },
+  ]);
   flow('optimized', [
     inspection.optimized
       ? { text: inspection.optimized === 'alone' ? 'alone' : 'in the sampling loop' }
@@ -115,47 +120,74 @@ function details(bench: Bench, width: number, colors: boolean): string[] {
           canvas.put(++y, 4, line, row[last].style);
     }
   };
+  // The four findings of one function. A called function only shows the ones it has.
+  const tables = (found: Findings, all: boolean) => {
+    const shown = (title: string, headings: string[], rows: Cell[][]) =>
+      (all || rows.length) && table(title, headings, rows);
+    shown(
+      'inlined',
+      ['defined', 'called at', 'bytecode'],
+      flatten(found.inlined).map((call) => [
+        { text: '  '.repeat(call.depth) + (call.name || '(anonymous)') },
+        { text: call.source, style: GRAY },
+        { text: call.at, style: GRAY },
+        { text: call.bytecodeBytes === null ? '—' : `${call.bytecodeBytes} B`, style: GRAY },
+      ])
+    );
+    shown(
+      'not inlined',
+      ['defined', 'bytecode', 'reason'],
+      found.rejected.map((call) => [
+        { text: call.name || '(anonymous)' },
+        { text: call.source, style: GRAY },
+        { text: call.bytecodeBytes === null ? '—' : `${call.bytecodeBytes} B`, style: GRAY },
+        { text: call.reason, style: YELLOW },
+      ])
+    );
+    shown(
+      'polymorphic',
+      ['access', 'shapes', 'position', 'layouts'],
+      found.polymorphic.map(({ state, access, key, shapes, layouts, at }) => [
+        { text: state, style: state === 'megamorphic' ? YELLOW : '' },
+        { text: `${access} ${key}`.trim() },
+        { text: state === 'megamorphic' ? `${shapes}+` : String(shapes), style: GRAY },
+        { text: at, style: GRAY },
+        { text: layouts.join(' · '), style: GRAY },
+      ])
+    );
+    shown(
+      'deopts',
+      ['tier', 'kind', 'reason', 'position'],
+      found.deopts.map(({ phase, tier, kind, reason, at }) => [
+        { text: phase, style: phase === 'sampling' ? YELLOW : GRAY },
+        { text: tier, style: GRAY },
+        { text: kind, style: DARK_GRAY },
+        { text: reason },
+        { text: at.join(' ← '), style: GRAY },
+      ])
+    );
+  };
+  tables(inspection, true);
   table(
-    'inlined',
-    ['defined', 'called at', 'bytecode'],
-    flatten(inspection.inlined).map((call) => [
-      { text: '  '.repeat(call.depth) + (call.name || '(anonymous)') },
-      { text: call.source, style: GRAY },
-      { text: call.at, style: GRAY },
-      { text: call.bytecodeBytes === null ? '—' : `${call.bytecodeBytes} B`, style: GRAY },
+    'called',
+    ['defined', 'time', 'bytecode', 'tier', 'deopts'],
+    inspection.called.map((fn) => [
+      { text: fn.name || '(anonymous)' },
+      { text: fn.source, style: GRAY },
+      { text: percent(fn.time) },
+      { text: fn.bytecodeBytes === null ? '—' : `${fn.bytecodeBytes} B`, style: GRAY },
+      { text: fn.tiers.findLast((tier) => tier !== 'deopt') ?? '—', style: GRAY },
+      { text: String(fn.deopts.length), style: fn.deopts.length ? YELLOW : GRAY },
     ])
   );
-  table(
-    'not inlined',
-    ['defined', 'bytecode', 'reason'],
-    inspection.rejected.map((call) => [
-      { text: call.name || '(anonymous)' },
-      { text: call.source, style: GRAY },
-      { text: call.bytecodeBytes === null ? '—' : `${call.bytecodeBytes} B`, style: GRAY },
-      { text: call.reason, style: YELLOW },
-    ])
-  );
-  table(
-    'polymorphic',
-    ['access', 'shapes', 'position'],
-    inspection.polymorphic.map(({ state, access, key, shapes, at }) => [
-      { text: state, style: state === 'megamorphic' ? YELLOW : '' },
-      { text: `${access} ${key}`.trim() },
-      { text: state === 'megamorphic' ? `${shapes}+` : String(shapes), style: GRAY },
-      { text: at, style: GRAY },
-    ])
-  );
-  table(
-    'deopts',
-    ['tier', 'kind', 'reason', 'position'],
-    inspection.deopts.map(({ phase, tier, kind, reason, at }) => [
-      { text: phase, style: phase === 'sampling' ? YELLOW : GRAY },
-      { text: tier, style: GRAY },
-      { text: kind, style: DARK_GRAY },
-      { text: reason },
-      { text: at.join(' ← '), style: GRAY },
-    ])
-  );
+  for (const fn of inspection.called) {
+    if (!fn.inlined.length && !fn.rejected.length && !fn.polymorphic.length && !fn.deopts.length)
+      continue;
+    canvas.put((y += 2), 0, fn.name || '(anonymous)', BOLD);
+    canvas.put(y, textWidth(fn.name || '(anonymous)') + 2, fn.source, GRAY);
+    y--;
+    tables(fn, false);
+  }
   for (const { name, source, listing } of inspection.bytecode ?? []) {
     canvas.put((y += 2), 0, `bytecode ✦ ${name || '(anonymous)'}`, GRAY);
     canvas.put(y, textWidth(`bytecode ✦ ${name || '(anonymous)'}`) + 2, source, GRAY);
