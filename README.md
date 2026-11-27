@@ -46,6 +46,8 @@ bench
 bench --runtime chrome # bun | webkit | firefox
 # Or filter by file name and tag
 bench vec3 matrix @mytag
+# Or by group or bench name
+bench --filter "normalize"
 # Save with a name for easier reading
 bench "@mytag" -n 'v1.0.0'
 ```
@@ -125,6 +127,8 @@ See how your code was compiled at runtime and use it to optimize.
 bench inspect
 # Or filter by file name and tag
 bench inspect vec3 @mytag
+# Or by group or bench name
+bench inspect --filter "normalize"
 ```
 
 Browse the findings in a full-screen view. Select a benchmark to see where the time goes, what was inlined, where objects change shape, and where optimized code was thrown away. Each finding points to a file and line.
@@ -260,6 +264,8 @@ pnpm bench "relation"                   # partial match on file name, save
 pnpm bench "relation churn"             # separator-agnostic match, save
 pnpm bench "@relation"                  # filter by tag, save
 pnpm bench churn @relation              # name + tag combined, save
+pnpm bench --filter "wildcard"          # filter by group or bench name, save
+pnpm bench churn -F "wildcard"          # file + bench name combined, save
 pnpm bench --help                       # show usage
 pnpm bench -n "v1.2.0"                 # save with explicit name (prompts if it exists)
 pnpm bench -n "v1.2.0" -f              # overwrite existing without prompting
@@ -380,9 +386,10 @@ Failed checks and changed output exit with 1. With `--fail-on-slower`, a slower 
 `bench inspect` runs each selected bench once with the engine's logging on and reports what the engine did with it. It takes the same filters as a run and saves nothing.
 
 ```sh
-pnpm bench inspect vector              # every bench in the matching file
-pnpm bench inspect vector --bytecode   # also list the bytecode of each bench and what it calls
-pnpm bench inspect --json              # the same report as JSON on stdout
+pnpm bench inspect vector                  # every bench in the matching file
+pnpm bench inspect -F "path length"        # only the benches with a matching name
+pnpm bench inspect vector --bytecode       # also list the bytecode of each bench and what it calls
+pnpm bench inspect --json                  # the same report as JSON on stdout
 ```
 
 Outside a terminal the findings print as text:
@@ -504,6 +511,8 @@ pnpm bench "@slow"        # runs only wildcard
 ```
 
 Tags match as whole tokens at both the file and bench level, so `@rel` selects nothing. A run that ends up with no benches warns and is not saved.
+
+Without editing a file, `--filter` (or `-F`) selects benches whose group and name contain the text, ignoring case, spaces, dashes and underscores. `-F relation` selects a whole group and `-F "relation wildcard"` one bench in it.
 
 ## Statistical comparison strategy
 

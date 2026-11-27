@@ -491,6 +491,7 @@ async function main(): Promise<void> {
       runtime,
       tune: parseTuneEnv(),
       grepTags: process.env.LABS_GREP_TAGS,
+      grepName: process.env.LABS_GREP_NAME,
       launch: process.env.LABS_BROWSER ? JSON.parse(process.env.LABS_BROWSER) : undefined,
       snapshotTolerance:
         process.env.LABS_SNAPSHOT_TOLERANCE === undefined

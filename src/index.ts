@@ -11,6 +11,11 @@ const grepTags: string[] =
   ((globalThis as any).process?.env?.LABS_GREP_TAGS ?? (globalThis as any).__LABS_GREP_TAGS)
     ?.split(',')
     .filter(Boolean) ?? [];
+// A name filter compares the way file filters do, ignoring case and separators.
+const plain = (text: string) => text.toLowerCase().replace(/[-\s_]+/g, '');
+const grepName = plain(
+  (globalThis as any).process?.env?.LABS_GREP_NAME ?? (globalThis as any).__LABS_GREP_NAME ?? ''
+);
 
 // Ordered registry of (groupName, benchAlias) built as bench() calls execute.
 // worker.ts zips this with the engine's benchmarks[] array (same registration order)
@@ -36,7 +41,8 @@ function effectiveTags(ownTags: string[]): string[] {
   return [...tagStack.flat(), ...ownTags];
 }
 
-function matchesGrep(tags: string[]): boolean {
+function matchesGrep(tags: string[], name: string): boolean {
+  if (!plain(`${groupNameStack.at(-1) ?? ''} ${name}`).includes(grepName)) return false;
   if (grepTags.length === 0) return true;
   if (tags.length === 0) return false;
   return grepTags.some((t) => tags.includes(t));
@@ -53,13 +59,13 @@ export function bench(fn: () => any): B;
 export function bench(name: string, fn: () => any): B;
 export function bench(nameOrFn: string | ((...args: any[]) => any), fn?: any): B {
   if (typeof nameOrFn === 'function') {
-    if (!matchesGrep(effectiveTags([]))) return NOOP_B;
+    if (!matchesGrep(effectiveTags([]), 'anonymous')) return NOOP_B;
     benchRegistry.push({ groupName: groupNameStack.at(-1) ?? '', alias: 'anonymous' });
     return _bench(nameOrFn);
   }
 
   const { cleanName, tags } = parseTags(nameOrFn);
-  if (!matchesGrep(effectiveTags(tags))) return NOOP_B;
+  if (!matchesGrep(effectiveTags(tags), cleanName || 'anonymous')) return NOOP_B;
   benchRegistry.push({ groupName: groupNameStack.at(-1) ?? '', alias: cleanName || 'anonymous' });
   return _bench(cleanName, fn);
 }

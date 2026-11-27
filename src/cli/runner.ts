@@ -346,6 +346,7 @@ export async function runCLI(args: string[]) {
   const benchArgs = subcmd === 'run' || inspecting ? args.slice(1) : args;
   const shouldSave = !benchArgs.includes('--no-save');
   const json = benchArgs.includes('--json');
+  const benchFilter = flagValue(benchArgs, '--filter') ?? flagValue(benchArgs, '-F');
   const failOnSlower = benchArgs.includes('--fail-on-slower');
   // In JSON mode stdout carries only the JSON document, so messages go to stderr
   if (json) console.log = console.error;
@@ -374,6 +375,8 @@ export async function runCLI(args: string[]) {
       '--runtime',
       '--against',
       '--candidate',
+      '-F',
+      '--filter',
     ]);
     // Every positional is a filter token, so quoting the whole filter is optional.
     const tokens: string[] = [];
@@ -610,6 +613,7 @@ export async function runCLI(args: string[]) {
         env: {
           ...workerEnv(file, benchTune, tagEnv, resultFile),
           ...(inspecting ? { LABS_INSPECT: '1' } : {}),
+          ...(benchFilter ? { LABS_GREP_NAME: benchFilter } : {}),
           ...(reference ? { LABS_LABEL: `${DIM}${gitHint(s.git!)}${RESET}` } : {}),
         },
         ...(reference ? { name: gitHint(s.git!) } : {}),
@@ -662,7 +666,8 @@ export async function runCLI(args: string[]) {
   // A run that selected no benches has nothing worth keeping and would only
   // clutter later compares, so it is reported but never saved.
   if (candidate.collected.benchCount === 0) {
-    const filterNote = tagEnv ? ` for ${tagEnv.split(',').join(' ')}` : '';
+    const filters = [...(tagEnv?.split(',') ?? []), ...(benchFilter ? [`"${benchFilter}"`] : [])];
+    const filterNote = filters.length > 0 ? ` for ${filters.join(' ')}` : '';
     console.log(
       `\n${YELLOW}⚠${RESET} No benches ran${filterNote}${inspecting ? '' : ', nothing to save'}`
     );

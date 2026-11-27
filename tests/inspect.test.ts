@@ -317,6 +317,23 @@ bench('across a collection', work);`,
     expect(screen).toContain('1 inspected  1 failed');
   });
 
+  it('inspects only the benches a name filter selects', { timeout: 70_000 }, () => {
+    const output = inspect(
+      `import { bench, group } from '@pmndrs/labs';
+group('vectors', () => {
+  bench('dot product', () => 1 + 1);
+  bench('cross product', () => 2 + 2);
+});
+bench('path length', () => 3 + 3);`,
+      '--json',
+      '--filter',
+      'vectors'
+    );
+    expect(output.status, output.stderr).toBe(0);
+    const names = JSON.parse(output.stdout).benches.map((bench: { name: string }) => bench.name);
+    expect(names).toEqual(['dot product', 'cross product']);
+  });
+
   it('explains that only the node runtime can be inspected', () => {
     const output = inspect(
       `import { bench } from '@pmndrs/labs'; bench('work', () => 1);`,

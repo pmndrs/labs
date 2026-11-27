@@ -4,9 +4,10 @@ Five benchmarks that each give `bench inspect` something different to report. Th
 are small geometry routines written locally in `geometry.ts` with no dependencies.
 
 ```sh
-pnpm inspect              # open the report
-pnpm inspect --bytecode   # also list the bytecode of each workload
-pnpm inspect --json       # the same report as JSON on stdout
+pnpm inspect                     # open the report
+pnpm inspect --filter "shapes"   # only the benches of one group, or one bench by name
+pnpm inspect --bytecode          # also list the bytecode of each workload
+pnpm inspect --json              # the same report as JSON on stdout
 ```
 
 ## inlining
