@@ -176,10 +176,24 @@ export function renderInspectView(benches: Bench[], state: TerminalViewState): T
     };
   }
   const innerWidth = width - 2;
+  const list: Array<{ text: string; index?: number; style?: string }> = [];
+  let previousFile = '';
+  let previousGroup = '';
+  benches.forEach((entry, index) => {
+    if (entry.file !== previousFile) {
+      list.push({ text: `› ${entry.file}` });
+      previousFile = entry.file;
+      previousGroup = '';
+    }
+    if (entry.group && entry.group !== previousGroup)
+      list.push({ text: `  ${entry.group}`, style: BOLD + DARK_GRAY });
+    previousGroup = entry.group;
+    list.push({ text: entry.name, index });
+  });
   const detailLines = details(benches[selected], innerWidth, colors);
-  // The findings are the point of this screen, so they take the room the
-  // list can spare.
-  const detailHeight = Math.min(detailLines.length + 1, height - 10);
+  // The findings are the point of this screen, so they take every row a short
+  // list leaves free and all but six rows of a long one.
+  const detailHeight = Math.min(detailLines.length + 1, height - 4 - Math.min(list.length, 6));
   const detailTop = height - detailHeight - 1;
   const pageSize = detailTop - 3;
   const maxDetailOffset = Math.max(0, detailLines.length - detailHeight + 1);
@@ -195,20 +209,6 @@ export function renderInspectView(benches: Bench[], state: TerminalViewState): T
     canvas.put(y, nameWidth + 16, deopts, GRAY, 11, true);
   };
   listRow(1, 'benchmark', 'inlined', 'deopts', true);
-  const list: Array<{ text: string; index?: number; style?: string }> = [];
-  let previousFile = '';
-  let previousGroup = '';
-  benches.forEach((entry, index) => {
-    if (entry.file !== previousFile) {
-      list.push({ text: `› ${entry.file}` });
-      previousFile = entry.file;
-      previousGroup = '';
-    }
-    if (entry.group && entry.group !== previousGroup)
-      list.push({ text: `  ${entry.group}`, style: BOLD + DARK_GRAY });
-    previousGroup = entry.group;
-    list.push({ text: entry.name, index });
-  });
   const activeRow = Math.max(
     0,
     list.findIndex((row) => row.index === selected)
