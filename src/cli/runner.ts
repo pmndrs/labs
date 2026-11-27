@@ -3,6 +3,7 @@ import { basename, dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { resolve as resolveModule } from 'import-meta-resolve';
 import { compare } from '../compare.ts';
+import type { Inspection } from '../bench/types.ts';
 import type { LabsConfig } from '../config.ts';
 import { RuntimeLaunchError } from '../runtime-error.ts';
 import { collectDiagnostics, emptyDiagnostics, printReportBox, printRunSummary } from '../report.ts';
@@ -42,7 +43,8 @@ import {
   renderProgress,
   startFile,
 } from './progress.ts';
-import { compareJson, comparisonExitCode, runJson } from './json.ts';
+import { showInspectReport } from './inspect-view.ts';
+import { compareJson, comparisonExitCode, inspectJson, runJson } from './json.ts';
 import { showRunReport } from './run-screen.ts';
 import { runStatus } from './run-view.ts';
 import { isInteractiveTerminal } from './screen.ts';
@@ -172,6 +174,7 @@ class Collection {
     freq: 0,
   };
   files: SavedFile[] = [];
+  inspections: Array<Inspection | undefined> = [];
   envData: FreqSample[] = [];
   diagnostics = emptyDiagnostics();
   noop: SavedResult['context'];
@@ -203,6 +206,8 @@ class Collection {
       }
     }
 
+    for (const trial of workerResult.benchmarks)
+      for (const run of trial.runs) this.inspections.push(run.inspection);
     this.envData.push(freqSample(workerResult, basename(file)));
     collectDiagnostics(workerResult.benchmarks, this.minDelta, this.diagnostics);
 
@@ -269,7 +274,16 @@ export async function runCLI(args: string[]) {
     console.log(usage());
     return;
   }
-  const command = ['list', 'clear', 'delete', 'prune', 'baseline', 'compare', 'run'].includes(args[0])
+  const command = [
+    'list',
+    'clear',
+    'delete',
+    'prune',
+    'baseline',
+    'compare',
+    'run',
+    'inspect',
+  ].includes(args[0])
     ? args[0]
     : 'run';
   checkOptions(command, command === args[0] ? args.slice(1) : args);
@@ -326,9 +340,13 @@ export async function runCLI(args: string[]) {
 
   // `bench` and `bench run` are the same command. Every run saves unless
   // asked not to.
-  const benchArgs = subcmd === 'run' ? args.slice(1) : args;
+  // `bench inspect` is a run of one block per bench that reports what the
+  // engine did with each workload instead of how long it took.
+  const inspecting = subcmd === 'inspect';
+  const benchArgs = subcmd === 'run' || inspecting ? args.slice(1) : args;
   const shouldSave = !benchArgs.includes('--no-save');
   const json = benchArgs.includes('--json');
+  const benchFilter = flagValue(benchArgs, '--filter') ?? flagValue(benchArgs, '-F');
   const failOnSlower = benchArgs.includes('--fail-on-slower');
   // In JSON mode stdout carries only the JSON document, so messages go to stderr
   if (json) console.log = console.error;
@@ -357,6 +375,8 @@ export async function runCLI(args: string[]) {
       '--runtime',
       '--against',
       '--candidate',
+      '-F',
+      '--filter',
     ]);
     // Every positional is a filter token, so quoting the whole filter is optional.
     const tokens: string[] = [];
@@ -426,6 +446,8 @@ export async function runCLI(args: string[]) {
   ) {
     error(`Invalid runtime "${runtime}". Expected node, chrome, bun, firefox, or webkit`);
   }
+  if (inspecting && runtime !== 'node')
+    error('bench inspect reads V8 logs and only supports the node runtime');
   if (runtime !== 'node' && config.counters) {
     error('Hardware counters are only supported with the node runtime');
   }
@@ -542,8 +564,10 @@ export async function runCLI(args: string[]) {
         renderProgress(progress, { columns, rows, now: Date.now() })
       )
     : undefined;
+  // An inspection prints its own report, so its workers stay as quiet as they
+  // are under the live view.
   const live =
-    view || json
+    view || json || inspecting
       ? (entry: number) => ({
           onEvent: (event: ProgressEvent) => view && applyEvent(progress, entry, event),
           onOutput: (line: string) => (view ? view.log(line) : process.stderr.write(line + '\n')),
@@ -588,6 +612,8 @@ export async function runCLI(args: string[]) {
         cwd: s.cwd,
         env: {
           ...workerEnv(file, benchTune, tagEnv, resultFile),
+          ...(inspecting ? { LABS_INSPECT: '1' } : {}),
+          ...(benchFilter ? { LABS_GREP_NAME: benchFilter } : {}),
           ...(reference ? { LABS_LABEL: `${DIM}${gitHint(s.git!)}${RESET}` } : {}),
         },
         ...(reference ? { name: gitHint(s.git!) } : {}),
@@ -640,9 +666,15 @@ export async function runCLI(args: string[]) {
   // A run that selected no benches has nothing worth keeping and would only
   // clutter later compares, so it is reported but never saved.
   if (candidate.collected.benchCount === 0) {
-    const filterNote = tagEnv ? ` for ${tagEnv.split(',').join(' ')}` : '';
-    console.log(`\n${YELLOW}⚠${RESET} No benches ran${filterNote}, nothing to save`);
-    if (json) emit({ name: saveName, saved: false, benches: [], crashes });
+    const filters = [...(tagEnv?.split(',') ?? []), ...(benchFilter ? [`"${benchFilter}"`] : [])];
+    const filterNote = filters.length > 0 ? ` for ${filters.join(' ')}` : '';
+    console.log(
+      `\n${YELLOW}⚠${RESET} No benches ran${filterNote}${inspecting ? '' : ', nothing to save'}`
+    );
+    if (json)
+      emit(
+        inspecting ? { benches: [], crashes } : { name: saveName, saved: false, benches: [], crashes }
+      );
     return;
   }
 
@@ -663,6 +695,19 @@ export async function runCLI(args: string[]) {
     },
   });
   const result = buildResult(candidate, saveName, description);
+
+  if (inspecting) {
+    if (candidate.collected.failed) process.exitCode = 1;
+    const { benches } = inspectJson(
+      result,
+      config,
+      candidate.collected.inspections,
+      benchArgs.includes('--bytecode')
+    );
+    if (json) emit({ benches, crashes });
+    else await showInspectReport(benches);
+    return;
+  }
 
   // Interactive runs keep details in the report view and close with a short summary
   const report = (s: Side, saveMsg?: string) => {

@@ -4,11 +4,12 @@ export function usage(): string {
   return `labs runs the benchmarks under benchDir and saves the result.
 
 Usage
-  bench [filter...] [options]   Run benches, filtered by file name or @tag
-  bench run [filter...]         Same as bench
+  bench [files...] [options]    Run benches, selected by file name or @tag
+  bench run [files...]          Same as bench
   bench list                    List saved results
   bench compare [name] [-l]     Compare a saved result against the baseline
   bench compare <base> <name>   Compare two saved results
+  bench inspect [files...]      Show what V8 did with each bench, Node only
   bench baseline [name]         Set the baseline result
   bench delete <name>           Delete a saved result
   bench prune                   Remove results recorded on an unstable clock
@@ -17,6 +18,7 @@ Usage
 Options
   -n, --name <name>             Save under this name
   -m, --message <text>          Describe the saved result
+  -F, --filter <name>           Only the benches matching this group or bench name
   -f, --force                   Overwrite an existing result with the same name
   -b, --baseline                Set the saved result as the baseline
   -c, --compare                 Compare the saved result against the baseline
@@ -28,6 +30,7 @@ Options
       --no-save                 Run without saving
       --json                    Print judged results as JSON
       --fail-on-slower          Exit 1 when a compared bench is slower
+      --bytecode                List the bytecode of each bench and what it calls, inspect only
   -h, --help                    Show this help`;
 }
 
@@ -55,9 +58,12 @@ export function checkOptions(command: string, args: string[]): void {
         '--runtime',
         '--against',
         '--candidate',
+        '-F',
+        '--filter',
       ],
     },
     compare: { flags: ['-l', '--last', '--json', '--fail-on-slower'], values: [] },
+    inspect: { flags: ['--json', '--bytecode'], values: ['--runtime', '-F', '--filter'] },
   };
   const { flags, values } = accepted[command] ?? { flags: [], values: [] };
   for (let i = 0; i < args.length; i++) {

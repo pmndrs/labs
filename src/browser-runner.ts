@@ -20,6 +20,7 @@ export async function runBrowser(options: {
   runtime: 'chrome' | 'firefox' | 'webkit';
   tune: MeasureOptions;
   grepTags?: string;
+  grepName?: string;
   launch?: LabsConfig['chrome'] & LabsConfig['webkit'];
   snapshotTolerance?: number;
   beforeDiagnostics?: () => Promise<void>;
@@ -84,9 +85,12 @@ export async function runBrowser(options: {
       const page = await browser.newPage();
       page.on('pageerror', (error) => (pageError ??= error));
       page.on('console', (message) => console.log(message.text()));
-      await page.addInitScript((tags) => {
-        Object.assign(globalThis, { __LABS_GREP_TAGS: tags });
-      }, options.grepTags);
+      await page.addInitScript(
+        ([tags, name]) => {
+          Object.assign(globalThis, { __LABS_GREP_TAGS: tags, __LABS_GREP_NAME: name });
+        },
+        [options.grepTags, options.grepName]
+      );
       const result = await use(page, browser);
       if (pageError) throw pageError;
       return result;

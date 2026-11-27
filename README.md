@@ -46,6 +46,8 @@ bench
 bench --runtime chrome # bun | webkit | firefox
 # Or filter by file name and tag
 bench vec3 matrix @mytag
+# Or by group or bench name
+bench --filter "normalize"
 # Save with a name for easier reading
 bench "@mytag" -n 'v1.0.0'
 ```
@@ -113,6 +115,45 @@ bench --against ../wt-a --candidate ../wt-b
 - **spread**: The dot shows the estimated change and the line shows its confidence interval. Left of zero means faster, right means slower. A wider interval means more uncertainty. The shaded band marks changes below the configured minimum.
 
 </details>
+
+### Inspect
+
+> [!NOTE]
+> Inspect currently only works with V8, through the Node runtime.
+
+See how your code was compiled at runtime and use it to optimize.
+
+```sh
+bench inspect
+# Or filter by file name and tag
+bench inspect vec3 @mytag
+# Or by group or bench name
+bench inspect --filter "normalize"
+```
+
+Browse the findings in a full-screen view. Select a benchmark to see where the time goes, what was inlined, where objects change shape, and where optimized code was thrown away. Each finding points to a file and line.
+
+Agents are very good at this. Give one `bench inspect --json --bytecode` and let it work through the findings.
+
+<img src="docs/images/inspect.png" width="760" alt="Labs inspect view with a benchmark list and, for the selected bench, the tiers it reached, the calls that were inlined or refused, a megamorphic property access, and two deopts with their reasons and positions" />
+
+<details>
+<summary>How to read the results</summary>
+
+- **tiers**: The compilers the code went through, in order. `deopt` means optimized code was thrown away and it had to climb again.
+- **time**: The share of the sampled time spent in the function's own code, including what was inlined into it.
+- **optimized**: `alone` if the code was optimized by itself, or `in the sampling loop` if it was inlined into the loop Labs times it in.
+- **inlining**: The bytecode size the optimizer will inline for one call, and for one function in total.
+- **inlined**: Calls replaced with the body of the function. Each shows where the function is defined, where it is called, and its bytecode size.
+- **not inlined**: Calls the optimizer looked at and left as calls, with their bytecode size and the reason.
+- **polymorphic**: Property accesses that saw more than one object shape, with the layout of each shape. `megamorphic` means too many to track, which is slow. Its count is a lower bound.
+- **deopts**: Each time optimized code was thrown away, with the reason and where it happened.
+- **called**: Every other function of yours that ran while the bench was sampled, with its share of the time. Each has the same findings as the bench.
+- **bytecode**: With `--bytecode`, the bytecode of the bench and of every function named in the findings, by source position. Addresses are left out so two reports can be diffed.
+
+</details>
+
+See the [inspect example](examples/inspect) for a complete suite.
 
 ### GPU
 
@@ -223,6 +264,8 @@ pnpm bench "relation"                   # partial match on file name, save
 pnpm bench "relation churn"             # separator-agnostic match, save
 pnpm bench "@relation"                  # filter by tag, save
 pnpm bench churn @relation              # name + tag combined, save
+pnpm bench --filter "wildcard"          # filter by group or bench name, save
+pnpm bench churn -F "wildcard"          # file + bench name combined, save
 pnpm bench --help                       # show usage
 pnpm bench -n "v1.2.0"                 # save with explicit name (prompts if it exists)
 pnpm bench -n "v1.2.0" -f              # overwrite existing without prompting
@@ -329,11 +372,63 @@ Without an interactive terminal, labs never prompts. Commands that would open a 
 pnpm bench --json                       # judged results as JSON on stdout
 pnpm bench -c --json --fail-on-slower   # also compare against the baseline
 pnpm bench compare "v1.3.0" --json      # judged comparison of a saved result
+pnpm bench inspect --json               # what the engine did with each bench
 ```
 
 With `--json`, stdout holds only the JSON document and everything else goes to stderr. Each bench has a `status` (`passed`, `warning`, or `failed`), a `problem` and `advice` when it has one, and its `minDetectableChange`. Comparison verdicts are `faster`, `slower`, `neutral`, `inconclusive` (neutral, but a `minDelta` change could have been missed), `changed`, `failed`, `skipped`, or `missing`.
 
+An inspection gives each bench the same `status`, `problem` and `advice` a run gives it, with what the engine did under `inspection`, or `null` when the bench failed or the engine reported nothing. Under `inspection`, `time` is the share of the sampled time, `tiers` is the path through the compilers, `inlined` and `rejected` list calls with their `bytecodeBytes`, `limits` holds the sizes the optimizer will inline, `polymorphic` lists accesses with the `layouts` they saw, and `deopts` name positions as `file:line:column`. `called` holds the same findings for every other function that ran. `bytecode` is `null` unless `--bytecode` is passed. With it, each function has a `listing` of one row per instruction.
+
 Failed checks and changed output exit with 1. With `--fail-on-slower`, a slower bench also exits with 1, and a comparison that could have missed a change exits with 2: an inconclusive or skipped bench, or a candidate that ran on an unstable machine.
+
+## Inspecting
+
+`bench inspect` runs each selected bench once with the engine's logging on and reports what the engine did with it. It takes the same filters as a run and saves nothing.
+
+```sh
+pnpm bench inspect vector                  # every bench in the matching file
+pnpm bench inspect -F "path length"        # only the benches with a matching name
+pnpm bench inspect vector --bytecode       # also list the bytecode of each bench and what it calls
+pnpm bench inspect --json                  # the same report as JSON on stdout
+```
+
+Outside a terminal the findings print as text:
+
+```
+⚠ path length
+TurboFan deoptimized during sampling
+
+function   (anonymous) vector.bench.ts:15:9
+tiers      Ignition → Sparkplug → Maglev → TurboFan → deopt → Maglev → TurboFan
+time       89% of the sampled time, with what was inlined into it
+optimized  in the sampling loop
+inlining   460 B of bytecode per call, 920 B in total
+
+inlined ✦ 2  defined              called at              bytecode
+distance     lib/vector.ts:10:25  vector.bench.ts:19:52  61 B
+  lengthSq   lib/vector.ts:6:25   lib/vector.ts:11:20    29 B
+
+not inlined ✦ 1  defined              bytecode  reason
+transform        lib/vector.ts:24:26  687 B     exceeds bytecode limit
+
+polymorphic ✦ 1  access   shapes  position               layouts
+megamorphic      load id  6+      vector.bench.ts:18:50  { id } · { id, a } · { id, b } · { id, c } · { id, d } · { id, e }
+
+deopts ✦ 2  tier      kind         reason     position
+sampling    TurboFan  deopt-eager  not a Smi  vector.bench.ts:16:15
+sampling    TurboFan  deopt-eager  not a Smi  vector.bench.ts:16:15
+
+called ✦ 1  defined              time  bytecode  tier      deopts
+transform   lib/vector.ts:24:26  5%    687 B     TurboFan  0
+```
+
+Inspect currently supports V8 through the Node runtime and has been run on Node 24 to 26.
+
+- The bench must be a plain JavaScript function.
+- `nodeFlags` must keep `--allow-natives-syntax` and have no V8 log or trace flags of your own.
+- Anything a bench prints to stdout is not shown.
+- A function shows up under `called` only if the profiler caught it running. Calls to different functions through one variable are not reported as such.
+- Tracing slows the code down, so take timings from a normal run.
 
 ## Writing a bench
 
@@ -416,6 +511,8 @@ pnpm bench "@slow"        # runs only wildcard
 ```
 
 Tags match as whole tokens at both the file and bench level, so `@rel` selects nothing. A run that ends up with no benches warns and is not saved.
+
+Without editing a file, `--filter` (or `-F`) selects benches whose group and name contain the text, ignoring case, spaces, dashes and underscores. `-F relation` selects a whole group and `-F "relation wildcard"` one bench in it.
 
 ## Statistical comparison strategy
 

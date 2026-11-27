@@ -56,6 +56,13 @@ describe('CLI options', () => {
     expect(files).toEqual(['alpha.bench.ts', 'beta.bench.ts']);
   });
 
+  it('runs only the benches a name filter selects', () => {
+    const output = run('--no-save', '--json', '-F', 'GAM');
+    expect(output.status, output.stderr).toBe(0);
+    const names = JSON.parse(output.stdout).benches.map((bench: { name: string }) => bench.name);
+    expect(names).toEqual(['gamma']);
+  });
+
   it('compares two saved results by name', () => {
     expect(run('-n', 'one', 'alpha').status).toBe(0);
     expect(

@@ -1,5 +1,13 @@
 import { execFileSync, spawn } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync, writeSync } from 'node:fs';
+import {
+  closeSync,
+  mkdtempSync,
+  openSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+  writeSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { runBrowser } from '../browser-runner.ts';
@@ -12,6 +20,7 @@ import { runTrialAt } from './main.ts';
 import type { ProgressEvent } from '../cli/progress.ts';
 import type { BlockPlan, GcStats, Stats, Trial } from './types.ts';
 import { markNodeDeopts, readNodeDeopts } from './node-deopts.ts';
+import { readNodeInspection } from './node-inspect.ts';
 import { mergeGc } from './lib/gc.ts';
 import { colors } from './env.ts';
 import { renderReport } from './render.ts';
@@ -45,6 +54,8 @@ if (!file) {
 
 /** Fresh processes per bench. Verdicts need replication, so never fewer than two. */
 function blockCount(): number {
+  // An inspection reads one fresh process and has no spread to estimate.
+  if (process.env.LABS_INSPECT) return 1;
   const n = Number(process.env.LABS_BLOCKS);
   return Number.isFinite(n) && n >= 2 ? Math.floor(n) : 2;
 }
@@ -149,6 +160,7 @@ async function runTrialChild(
     )
       ? mkdtempSync(join(tmpdir(), 'labs-deopt-'))
       : undefined;
+  let traces: number | undefined;
   try {
     const env = {
       ...process.env,
@@ -169,19 +181,36 @@ async function runTrialChild(
       );
       await observeBunGc(child);
     } else {
-      const flags = trace
-        ? [
+      // An inspection also needs the compiler's own account. Its traces go to
+      // one file in the order they happened, which needs compilation to stay
+      // on the main thread.
+      if (trace && process.env.LABS_INSPECT) traces = openSync(join(trace, 'traces.txt'), 'w');
+      const flags = !trace
+        ? []
+        : [
             '--log-code',
-            '--no-log-source-code',
             '--log-deopt',
             '--logfile-per-isolate',
             '--logfile=' + join(trace, 'code.log'),
-            '--redirect-code-traces',
-            '--redirect-code-traces-to=' + join(trace, 'bailouts.txt'),
-          ]
-        : [];
+            ...(traces === undefined
+              ? [
+                  '--no-log-source-code',
+                  '--redirect-code-traces',
+                  '--redirect-code-traces-to=' + join(trace, 'bailouts.txt'),
+                ]
+              : [
+                  '--log-ic',
+                  '--log-maps',
+                  '--prof',
+                  '--prof-sampling-interval=100',
+                  '--trace-opt',
+                  '--trace-turbo-inlining',
+                  '--print-bytecode',
+                  '--no-concurrent-recompilation',
+                ]),
+          ];
       execFileSync(process.execPath, [...process.execArgv, ...flags, process.argv[1]], {
-        stdio: ['ignore', 'inherit', 'inherit'],
+        stdio: ['ignore', traces ?? 'inherit', 'inherit'],
         env,
       });
     }
@@ -194,10 +223,12 @@ async function runTrialChild(
       const read = readNodeDeopts(trace);
       for (const run of result.trial.runs) {
         const optimization = run.stats?.optimization;
-        if (optimization?.deoptimized)
-          optimization.deoptimized = optimization.deoptimized.map((deopt) =>
-            deopt && typeof deopt === 'object' ? read(deopt) : deopt
-          );
+        if (!optimization?.window) continue;
+        if (process.env.LABS_INSPECT) run.inspection = readNodeInspection(trace, optimization.window);
+        // A bailout only counts against a workload Labs asked TurboFan to compile.
+        if (optimization.target === 'TurboFan')
+          optimization.deoptimized = [read(optimization.window)];
+        delete optimization.window;
       }
     }
     return result;
@@ -206,6 +237,7 @@ async function runTrialChild(
       cause: err,
     });
   } finally {
+    if (traces !== undefined) closeSync(traces);
     if (trace) rmSync(trace, { recursive: true, force: true });
     rmSync(resultFile, { force: true });
   }
@@ -459,6 +491,7 @@ async function main(): Promise<void> {
       runtime,
       tune: parseTuneEnv(),
       grepTags: process.env.LABS_GREP_TAGS,
+      grepName: process.env.LABS_GREP_NAME,
       launch: process.env.LABS_BROWSER ? JSON.parse(process.env.LABS_BROWSER) : undefined,
       snapshotTolerance:
         process.env.LABS_SNAPSHOT_TOLERANCE === undefined

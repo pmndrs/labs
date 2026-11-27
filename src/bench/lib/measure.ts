@@ -579,7 +579,9 @@ export async function benchFn(fn: (...args: any[]) => any, opts: any = {}): Prom
     if (!batch) never_optimize(loop);
 
     const watchDeopts: MeasureOptions['$deopts'] = opts.$deopts;
-    const deopts = requestedTurboFan ? watchDeopts?.(batch ? [fn, loop] : [fn]) : undefined;
+    // Natives cannot describe a bound, proxied or built-in function, and the
+    // engine reports no tier for one.
+    const deopts = optimization?.tier(fn) ? watchDeopts?.(batch ? [fn, loop] : [fn]) : undefined;
     let samplingWarmup = warmup;
 
     const run = (
@@ -774,7 +776,7 @@ export async function benchFn(fn: (...args: any[]) => any, opts: any = {}): Prom
               optimization: {
                 mode: 'prepared' as const,
                 ...(requestedTurboFan ? { target: 'TurboFan' as const } : {}),
-                ...(deopts ? { deoptimized: [deopts.observed()] } : {}),
+                ...(deopts ? { window: deopts.observed() } : {}),
                 benchmark: [benchmark],
                 benchmarkEnd: [benchmarkEnd],
                 workload: [workload],

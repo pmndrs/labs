@@ -1,4 +1,4 @@
-import type { GcStats } from '../bench/types.ts';
+import type { GcStats, Inspection } from '../bench/types.ts';
 import { type CompareResult, compareFailed } from '../compare.ts';
 import type { LabsConfig } from '../config.ts';
 import { type SavedResult, isEnvironmentStable, pairedFreqDrift } from '../store.ts';
@@ -79,6 +79,45 @@ export function runJson(result: SavedResult, config: LabsConfig, saved: boolean)
           };
         })
       )
+    ),
+  };
+}
+
+/**
+ * The judged view of an inspection. Each bench carries the verdict a run gives
+ * it, so it reads the same here as in the run's own JSON and report, and adds
+ * what the engine did. `inspections` holds one entry per bench in run order.
+ * A bench the engine reported nothing for says so unless the run already has a
+ * problem with it. The bytecode is long, so it is null unless asked for.
+ */
+export function inspectJson(
+  result: SavedResult,
+  config: LabsConfig,
+  inspections: Array<Inspection | undefined>,
+  bytecode: boolean
+) {
+  return {
+    benches: runJson(result, config, false).benches.map(
+      ({ file, group, name, status, problem, message, advice }, index) => {
+        const inspection = inspections[index];
+        return {
+          file,
+          group,
+          name,
+          ...(inspection || status !== 'passed'
+            ? { status, problem, message, advice }
+            : {
+                status: 'warning' as const,
+                problem: 'uninspected' as const,
+                message: 'V8 reported nothing for this bench',
+                advice:
+                  'inspection needs a plain JavaScript function, --allow-natives-syntax in nodeFlags, and no V8 log or trace flags of your own',
+              }),
+          inspection: inspection
+            ? { ...inspection, bytecode: bytecode ? inspection.bytecode : null }
+            : null,
+        };
+      }
     ),
   };
 }
