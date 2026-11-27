@@ -6,6 +6,7 @@ import type { DeoptWindow, Findings, InlinedCall, Inspection, OptimizationTier }
 
 interface Code {
   fn: number;
+  order: number;
   tier?: OptimizationTier;
   sampled: boolean;
   size: number;
@@ -38,6 +39,23 @@ function identities() {
       if (identity !== undefined) hold(to, identity);
     },
   };
+}
+
+function gather<Key, Value>(lists: Map<Key, Value[]>, key: Key, value: Value) {
+  const list = lists.get(key);
+  if (list) list.push(value);
+  else lists.set(key, [value]);
+}
+
+/** Count the entries of an ascending list that are not above the value. */
+function upTo(ascending: number[], value: number): number {
+  let low = 0;
+  for (let high = ascending.length; low < high;) {
+    const middle = (low + high) >> 1;
+    if (ascending[middle] <= value) low = middle + 1;
+    else high = middle;
+  }
+  return low;
 }
 
 /**
@@ -79,6 +97,7 @@ export function readNodeInspection(
   const sources = new Map<string, string>();
   const live = new Map<string, Code>();
   const compiled: Code[] = [];
+  const codes = new Map<number, Code[]>();
   const bailouts: Array<
     Inspection['deopts'][number] & { code: Code; inlining: number; before: number }
   > = [];
@@ -125,6 +144,7 @@ export function readNodeInspection(
       ];
       const code = {
         fn,
+        order: compiled.length,
         tier,
         sampled: phase !== undefined,
         size: Number(size),
@@ -133,6 +153,7 @@ export function readNodeInspection(
       };
       live.set(address, code);
       compiled.push(code);
+      gather(codes, fn, code);
     } else if (fields[0] === 'code-source-info') {
       const code = live.get(fields[1]);
       if (!code) continue;
@@ -201,12 +222,17 @@ export function readNodeInspection(
     const { name = '', source = '' } = functions.get(fn) ?? {};
     return { name, source };
   };
+  // The offset where each line of a script starts, found once for each script.
+  const lines = new Map<string, number[]>();
   const position = (fn: number, offset: number) => {
     const { script = '', file = '' } = functions.get(fn) ?? {};
-    const before = sources.get(script)?.slice(0, offset);
-    return before === undefined
-      ? ''
-      : `${place(file)}:${before.split('\n').length}:${offset - before.lastIndexOf('\n')}`;
+    const source = sources.get(script);
+    if (source === undefined) return '';
+    if (!lines.has(script))
+      lines.set(script, [0, ...[...source.matchAll(/\n/g)].map((match) => match.index + 1)]);
+    const starts = lines.get(script)!;
+    const line = upTo(starts, offset);
+    return `${place(file)}:${line}:${offset - starts[line - 1] + 1}`;
   };
   // Labs and Node internals are part of the harness, not the bench.
   const own = new URL(import.meta.url.endsWith('.ts') ? '../' : './', import.meta.url).href;
@@ -230,31 +256,48 @@ export function readNodeInspection(
   };
   // The trace of each optimizing compile lists every call it looked at, in
   // the order the log records the code those compiles produced.
-  const compiles = [
-    ...traces.matchAll(
-      /^\[compiling method \S+ <JSFunction [^>]*\(sfi = (0x[0-9a-f]+)\)> \(target TURBOFAN_JS\)[^\n]*\n([^]*?)^\[completed compiling/gm
-    ),
-  ];
+  const compiles = new Map<number | undefined, string[]>();
+  for (const [, pointer, trace] of traces.matchAll(
+    /^\[compiling method \S+ <JSFunction [^>]*\(sfi = (0x[0-9a-f]+)\)> \(target TURBOFAN_JS\)[^\n]*\n([^]*?)^\[completed compiling/gm
+  ))
+    gather(compiles, traced(pointer), trace);
+
+  // A log of a large project asks which code held an address many thousands
+  // of times, so the spans are sorted by address once. An address is reused
+  // over time, and the search walks back only while an earlier span reaches it.
+  const spans = compiled
+    .flatMap((code) => code.spans.map(([start, since, until]) => ({ start, since, until, code })))
+    .sort((a, b) => a.start - b.start);
+  const starts = spans.map((span) => span.start);
+  const reach: number[] = [];
+  for (const { start, code } of spans) reach.push(Math.max(reach.at(-1) ?? 0, start + code.size));
+  const running = (pc: number, record: number) => {
+    let index = upTo(starts, pc);
+    while (--index >= 0 && reach[index] > pc) {
+      const { start, since, until, code } = spans[index];
+      if (since <= record && record < until && pc < start + code.size) return code;
+    }
+  };
 
   // A profiler tick holds the address that was running and the frames that
   // called it. It counts for the nearest function of yours on that stack, so
   // time in the engine's own routines goes to the function that called them
   // and calls inlined into a function count toward that function.
   const sampled = new Map<number, number>();
-  const candidates = compiled.filter((code) => user(code.fn) || code.entry === targets[1]);
-  for (const { record, frames } of ticks) {
-    const fn = frames
-      .map(
-        (pc) =>
-          candidates.find((code) =>
-            code.spans.some(
-              ([start, since, until]) =>
-                since <= record && record < until && start <= pc && pc < start + code.size
-            )
-          )?.fn
-      )
-      .find((owner) => owner !== undefined);
-    if (fn !== undefined) sampled.set(fn, (sampled.get(fn) ?? 0) + 1);
+  for (const { record, frames } of ticks)
+    for (const pc of frames) {
+      const code = running(pc, record);
+      if (!code || !(user(code.fn) || code.entry === targets[1])) continue;
+      sampled.set(code.fn, (sampled.get(code.fn) ?? 0) + 1);
+      break;
+    }
+
+  // Only unoptimized code reports the position of an access. Optimized code
+  // reports the start of its function, so its records cannot be placed.
+  const read = new Map<number, typeof accesses>();
+  for (const access of accesses) {
+    const code = running(access.pc, access.record);
+    if (code?.tier === 'Ignition' || code?.tier === 'Sparkplug') gather(read, code.fn, access);
   }
 
   // An object shape reads as its constructor and the properties it holds, in order.
@@ -303,9 +346,12 @@ export function readNodeInspection(
     const refused = new Map<number, string>();
     const compile =
       host?.tier === 'TurboFan' &&
-      compiles.filter((match) => traced(match[1]) === host.fn)[
-        compiled.filter((code) => code.fn === host.fn && code.tier === 'TurboFan').indexOf(host)
-      ]?.[2];
+      compiles.get(host.fn)?.[
+        codes
+          .get(host.fn)!
+          .filter((code) => code.tier === 'TurboFan')
+          .indexOf(host)
+      ];
     if (compile) {
       const reasons = new Map<number | undefined, string>();
       for (const [, pointer] of compile.matchAll(
@@ -331,19 +377,9 @@ export function readNodeInspection(
       string,
       { state: string; access: string; key: string; at: string; shapes: Set<number> }
     >();
-    for (const { record, pc, position: place_, state, shape, access, key } of accesses) {
-      // Only unoptimized code reports the position of the access. Optimized
-      // code reports the start of its function, so its records cannot be placed.
-      const owner = compiled.find(
-        (code) =>
-          followed.has(code.fn) &&
-          (code.tier === 'Ignition' || code.tier === 'Sparkplug') &&
-          code.spans.some(
-            ([start, since, until]) =>
-              since <= record && record < until && start <= pc && pc < start + code.size
-          )
-      )?.fn;
-      if (owner === undefined) continue;
+    for (const { owner, position: place_, state, shape, access, key } of [...followed]
+      .flatMap((owner) => (read.get(owner) ?? []).map((seen) => ({ owner, ...seen })))
+      .sort((a, b) => a.record - b.record)) {
       const at = `${place(functions.get(owner)!.file)}:${place_}`;
       const site = sites.get(`${at} ${access} ${key}`) ?? {
         state: '',
@@ -365,17 +401,23 @@ export function readNodeInspection(
     const deopts = bailouts.filter(({ code, inlining }) => covers(code, inlining));
     const tiers: Findings['tiers'] = [];
     let reached = -1;
-    compiled.forEach((code, index) => {
-      if (deopts.some((deopt) => deopt.before === index) && tiers.at(-1) !== 'deopt') {
-        tiers.push('deopt');
-        reached = 0;
-      }
+    let next = 0;
+    // Bailouts that happened before the given compile show as one step back.
+    const bail = (order: number) => {
+      const from = next;
+      while (next < deopts.length && deopts[next].before <= order) next++;
+      if (next === from || tiers.at(-1) === 'deopt') return;
+      tiers.push('deopt');
+      reached = 0;
+    };
+    for (const code of codes.get(fn) ?? []) {
+      bail(code.order);
       const rank = ['Ignition', 'Sparkplug', 'Maglev', 'TurboFan'].indexOf(code.tier ?? '');
-      if (code.fn !== fn || !code.sampled || rank <= reached) return;
+      if (!code.sampled || rank <= reached) continue;
       tiers.push(code.tier!);
       reached = rank;
-    });
-    if (deopts.some((deopt) => deopt.before === compiled.length)) tiers.push('deopt');
+    }
+    bail(Infinity);
 
     return {
       followed,
@@ -406,7 +448,7 @@ export function readNodeInspection(
   // A batched workload runs as part of the sampling loop once the optimizer
   // has inlined it there. Otherwise its own optimized code is what was timed.
   const last = (fn: number | undefined, tier: OptimizationTier) =>
-    compiled.findLast((code) => code.fn === fn && code.tier === tier && code.sampled);
+    codes.get(fn!)?.findLast((code) => code.tier === tier && code.sampled);
   const loop = compiled.find((code) => targets[1] && code.entry === targets[1])?.fn;
   const host = [last(loop, 'TurboFan'), last(workload, 'TurboFan')].find(
     (code) => code && (code.fn === workload || code.inlined.some((call) => call.fn === workload))
