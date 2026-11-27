@@ -227,6 +227,13 @@ describe('observed optimization tiers', () => {
     expect(stats.samples.length).toBeGreaterThan(0);
   });
 
+  it('keeps the sampling loop optimized when the clock outgrows 32 bits', { timeout: 70_000 }, () => {
+    // Whole nanoseconds since the process started stop fitting in 32 bits
+    // after 2.147 seconds, which each of these blocks samples across.
+    const stats = run('node', { blockTime: 2.3 });
+    expect(stats.optimization!.deoptimized).toEqual([false, false]);
+  });
+
   it('does not blame the sampling loop for closing its own deopt window', { timeout: 70_000 }, () => {
     run(
       'node',

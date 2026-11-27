@@ -118,8 +118,11 @@ export const now: () => number = (() => {
   try {
     const _now = performance.now.bind(performance);
     _now();
-    // Fractional rounding noise can deoptimize a loop warmed with integer nanoseconds.
-    return () => Math.round(1e6 * _now());
+    // Fractional rounding noise can deoptimize a loop warmed with integer
+    // nanoseconds. So can the moment the count outgrows 32 bits, two seconds
+    // into the process, so the clock starts above that range. Only
+    // differences between two readings are ever used.
+    return () => Math.round(1e6 * _now()) + 2 ** 32;
   } catch {
     return () => 1e6 * Date.now();
   }
