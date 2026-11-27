@@ -90,7 +90,8 @@ export const browserHarness = {
     tune: MeasureOptions,
     plans?: BlockPlan[],
     calibration?: BrowserCalibration,
-    observe: false | 'chrome' | 'firefox' | 'webkit' = false
+    observe: false | 'chrome' | 'firefox' | 'webkit' = false,
+    only?: number
   ): Promise<BlockResult> {
     const prepared = calibration ?? (await browserHarness.calibrate());
     let sequence = 0;
@@ -109,7 +110,7 @@ export const browserHarness = {
       const calibrationRate = trialAt(index)._gpu
         ? await probeGpuRate(await gpuDevice())
         : prepared.calibrationRate;
-      const trial = await runTrialAt(index, { ...prepared.clock, ...tune, heap: false }, plans);
+      const trial = await runTrialAt(index, { ...prepared.clock, ...tune, heap: false }, plans, only);
       return jsonSafe({ trial, calibrationRate });
     } finally {
       delete (globalThis as any).__LABS_GC_OBSERVER;

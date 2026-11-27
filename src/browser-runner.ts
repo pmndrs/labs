@@ -25,7 +25,7 @@ export async function runBrowser(options: {
   beforeDiagnostics?: () => Promise<void>;
   execute: (
     jobs: BlockJob[],
-    runTrial: (index: number, plans?: BlockPlan[]) => Promise<BlockResult>
+    runTrial: (index: number, only: number, plans?: BlockPlan[]) => Promise<BlockResult>
   ) => Promise<Map<number, Trial>>;
 }) {
   const { chromium, firefox, webkit } = await import('playwright-core');
@@ -111,7 +111,7 @@ export async function runBrowser(options: {
     const result = await withPage(async (page, browser) => {
       await page.exposeFunction('__labsExecute', async (jobs: BlockJob[]) => {
         indices = jobs.map((job) => job.index);
-        const results = await options.execute(jobs, (index, plans) => {
+        const results = await options.execute(jobs, (index, only, plans) => {
           const observe =
             options.tune.sample_gc !== false && jobs.find((job) => job.index === index)!.gc;
           const execute = (env?: NodeJS.ProcessEnv) =>
@@ -124,13 +124,14 @@ export async function runBrowser(options: {
                 if (options.runtime !== 'chrome') await child.requestGC();
                 const measure = () =>
                   child.evaluate(
-                    ({ index, tune, plans, calibration, observe }) =>
+                    ({ index, tune, plans, calibration, observe, only }) =>
                       (globalThis as BrowserGlobal).__labs.trial(
                         index,
                         tune,
                         plans,
                         calibration,
-                        observe
+                        observe,
+                        only
                       ),
                     {
                       index,
@@ -138,6 +139,7 @@ export async function runBrowser(options: {
                       plans,
                       calibration,
                       observe: observe ? options.runtime : (false as const),
+                      only,
                     }
                   );
                 let measured: BlockResult;
@@ -167,7 +169,9 @@ export async function runBrowser(options: {
                 } else measured = await measure();
                 let recorded = blocks.get(index);
                 if (!recorded) blocks.set(index, (recorded = []));
-                recorded.push(measured);
+                // The cases of a block arrive one at a time and are joined for the replay.
+                if (only) recorded.at(-1)!.trial.runs[only] = measured.trial.runs[only];
+                else recorded.push(measured);
                 return measured;
               },
               false,
