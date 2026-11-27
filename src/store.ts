@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import type { BlockPlan, GcMode, Snapshot, Stats } from './bench/types.ts';
+import type { BlockPlan, GcMode, Inspection, Snapshot, Stats } from './bench/types.ts';
 
 export interface GitInfo {
   /** Full sha of HEAD when the run was saved. */
@@ -49,6 +49,7 @@ export interface SavedStats {
 
 export interface WorkerBenchmarkRun {
   stats?: Stats;
+  inspection?: Inspection;
   name: string;
   args: Record<string, any>;
   error?: unknown;

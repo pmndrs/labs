@@ -282,9 +282,7 @@ describe('observed optimization tiers', () => {
     const measured = JSON.parse(output.stdout);
     expect(measured.benchmark[0].tier).toBe('TurboFan');
     expect(measured.benchmarkEnd).toEqual(['TurboFan']);
-    expect(measured.deoptimized.map(readNodeDeopts(project))).toEqual([
-      phase === 'during' ? 'workload' : false,
-    ]);
+    expect(readNodeDeopts(project)(measured.window)).toBe(phase === 'during' ? 'workload' : false);
   });
 
   it.each(['sampling', 'after', 'heap'])(

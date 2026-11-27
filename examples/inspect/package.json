@@ -1,0 +1,9 @@
+{
+  "name": "labs-inspect-example",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "bench": "node ../../src/cli/cli.ts --no-save",
+    "inspect": "node ../../src/cli/cli.ts inspect"
+  }
+}

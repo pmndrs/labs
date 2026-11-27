@@ -47,6 +47,52 @@ export type OptimizationTier =
 
 export type SamplingDeopt = 'workload' | 'harness' | false;
 
+/** A function the engine compiled and the position of its definition. */
+export interface InspectedFunction {
+  name: string;
+  source: string;
+}
+
+/** A call the optimizing compiler replaced with the body of the function it calls. */
+export interface InlinedCall extends InspectedFunction {
+  at: string;
+  bytecodeBytes: number | null;
+  calls: InlinedCall[];
+}
+
+/**
+ * What V8 did with a workload up to the end of sampling. Positions read
+ * `file:line:column`. A deopt lists its own position first, then the call
+ * sites it was inlined through. `polymorphic` holds the property accesses
+ * that saw more than one object shape. `tiers` is the path the workload took:
+ * each tier it rose to and each point where a deopt sent it back down. V8 reports where an access is only
+ * while its function runs unoptimized, so the shapes of a megamorphic access
+ * are the ones seen by then and the count is a lower bound.
+ */
+export interface Inspection {
+  engine: string;
+  workload: InspectedFunction;
+  tiers: Array<OptimizationTier | 'deopt'>;
+  optimized: 'alone' | 'in-sampling-loop' | null;
+  inlined: InlinedCall[];
+  rejected: Array<InspectedFunction & { reason: string }>;
+  polymorphic: Array<{
+    state: 'polymorphic' | 'megamorphic';
+    access: string;
+    key: string;
+    shapes: number;
+    at: string;
+  }>;
+  deopts: Array<{
+    phase: 'warmup' | 'sampling';
+    tier: OptimizationTier;
+    kind: string;
+    reason: string;
+    at: string[];
+  }>;
+  bytecode: string;
+}
+
 /** A stretch of V8's code log that a worker marked for its parent to read. */
 export interface DeoptWindow {
   id: number;
@@ -58,7 +104,11 @@ export interface OptimizationSample {
   time: number;
 }
 
-/** Per-block sampling tiers and the pilot's natural compilation probe. */
+/**
+ * Per-block sampling tiers and the pilot's natural compilation probe. A worker
+ * reports the `window` it marked in V8's log. Its parent reads the log once
+ * the worker has exited, fills in `deoptimized`, and drops the window.
+ */
 export interface OptimizationStats {
   mode?: 'natural' | 'prepared';
   target?: 'TurboFan';
@@ -66,7 +116,8 @@ export interface OptimizationStats {
   benchmark?: Array<OptimizationSample | null>;
   benchmarkEnd?: Array<OptimizationTier | null>;
   /** Per-block TurboFan bailouts observed inside sampling. */
-  deoptimized?: Array<SamplingDeopt | DeoptWindow | null>;
+  deoptimized?: Array<SamplingDeopt | null>;
+  window?: DeoptWindow;
   workload: Array<OptimizationSample | null>;
   harness?: Array<OptimizationSample | null>;
 }
@@ -198,6 +249,7 @@ export type Color =
 
 export interface Run {
   stats?: Stats;
+  inspection?: Inspection;
   error?: unknown;
   name: string;
   args: Record<string, any>;

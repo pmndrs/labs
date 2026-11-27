@@ -9,6 +9,7 @@ Usage
   bench list                    List saved results
   bench compare [name] [-l]     Compare a saved result against the baseline
   bench compare <base> <name>   Compare two saved results
+  bench inspect [filter...]     Show what V8 did with each bench, Node only
   bench baseline [name]         Set the baseline result
   bench delete <name>           Delete a saved result
   bench prune                   Remove results recorded on an unstable clock
@@ -28,6 +29,7 @@ Options
       --no-save                 Run without saving
       --json                    Print judged results as JSON
       --fail-on-slower          Exit 1 when a compared bench is slower
+      --bytecode                Include the bytecode of each bench, inspect only
   -h, --help                    Show this help`;
 }
 
@@ -58,6 +60,7 @@ export function checkOptions(command: string, args: string[]): void {
       ],
     },
     compare: { flags: ['-l', '--last', '--json', '--fail-on-slower'], values: [] },
+    inspect: { flags: ['--json', '--bytecode'], values: ['--runtime'] },
   };
   const { flags, values } = accepted[command] ?? { flags: [], values: [] };
   for (let i = 0; i < args.length; i++) {
