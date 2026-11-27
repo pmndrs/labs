@@ -75,6 +75,28 @@ describe('CLI options', () => {
     expect(extra.stderr).toContain('at most two result names');
   });
 
+  it('shows the advice for a package without a type once instead of in every worker', () => {
+    cwd = mkdtempSync(join(tmpdir(), 'labs-cli-'));
+    writeFileSync(join(cwd, 'package.json'), '{}');
+    writeFileSync(
+      join(cwd, 'labs.config.ts'),
+      `import { defineConfig } from ${JSON.stringify(new URL('../src/index.ts', import.meta.url).href)};
+      export default defineConfig({ benchDir: '.', blockTime: 1e-9, minSamples: 2, blocks: 2 });`
+    );
+    writeFileSync(
+      join(cwd, 'work.bench.ts'),
+      `import { bench } from '@pmndrs/labs'; const value: number = 1; bench('work', () => value);`
+    );
+    const output = spawnSync(process.execPath, cli('--no-save', '--json'), {
+      cwd,
+      encoding: 'utf8',
+      timeout: 30_000,
+    });
+    expect(output.status, output.stderr).toBe(0);
+    expect(JSON.parse(output.stdout).benches).toHaveLength(1);
+    expect(output.stderr.match(/MODULE_TYPELESS_PACKAGE_JSON/g)).toHaveLength(1);
+  });
+
   it('rejects run options on subcommands', () => {
     const output = run('compare', 'v1', '--blocks=4');
     expect(output.status).toBe(1);

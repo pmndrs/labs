@@ -582,7 +582,9 @@ export async function runCLI(args: string[]) {
                 ...(config.bun?.args ?? []),
                 WORKER,
               ]
-            : [...config.nodeFlags, WORKER],
+            : // Node advises setting a package type in every process that loads a
+              // file without one, which would print the same warning for each block.
+              ['--disable-warning=MODULE_TYPELESS_PACKAGE_JSON', ...config.nodeFlags, WORKER],
         cwd: s.cwd,
         env: {
           ...workerEnv(file, benchTune, tagEnv, resultFile),
