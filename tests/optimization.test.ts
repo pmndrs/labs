@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { webkit } from 'playwright-core';
 import { afterEach, describe, expect, it } from 'vitest';
 import { samplingWarning } from '../src/bench/diagnostics.ts';
+import { readNodeDeopts } from '../src/bench/node-deopts.ts';
 import { loadResult } from '../src/store.ts';
 
 describe('observed optimization tiers', () => {
@@ -242,12 +243,12 @@ describe('observed optimization tiers', () => {
         '--input-type=module',
         '--eval',
         `import { measure } from ${JSON.stringify(new URL('../src/bench/lib/measure.ts', import.meta.url).href)};
-      import { observeNodeDeopts } from ${JSON.stringify(new URL('../src/bench/node-deopts.ts', import.meta.url).href)};
+      import { markNodeDeopts } from ${JSON.stringify(new URL('../src/bench/node-deopts.ts', import.meta.url).href)};
       let input = { n: 1 }, other = { n: 1 }, count = 0, timed = false;
       function work() { return input.n + 1; }
       function helper() { return other.n + 1; }
       %PrepareFunctionForOptimization(helper); helper(); helper(); %OptimizeFunctionOnNextCall(helper); helper();
-      const stats = await measure(work, { $deopts: observeNodeDeopts(${JSON.stringify(project)}),
+      const stats = await measure(work, { $deopts: markNodeDeopts(),
         batch: false, min_samples: 8, max_samples: 8, min_cpu_time: 0,
         gc: () => { timed = true; }, heap: false,
         after: () => {
@@ -270,7 +271,9 @@ describe('observed optimization tiers', () => {
     const measured = JSON.parse(output.stdout);
     expect(measured.benchmark[0].tier).toBe('TurboFan');
     expect(measured.benchmarkEnd).toEqual(['TurboFan']);
-    expect(measured.deoptimized).toEqual([phase === 'during' ? 'workload' : false]);
+    expect(measured.deoptimized.map(readNodeDeopts(project))).toEqual([
+      phase === 'during' ? 'workload' : false,
+    ]);
   });
 
   it.each(['sampling', 'after', 'heap'])(
