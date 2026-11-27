@@ -21,9 +21,21 @@ export async function observeWebkitGc<T>(page: Page, run: () => Promise<T>): Pro
   session.on('Heap.garbageCollected', receive);
   await session.send('Heap.enable');
   let pending: Promise<unknown> = Promise.resolve();
-  try {
+  const full = () => events.filter((event) => event.type === 'full').length;
+  // WebKit sends a collection's event on a timer after the reply to the command
+  // that forced it. Replies to later commands are awaited until `count` full
+  // collections have arrived.
+  const arrive = async (count: number) => {
+    do await session.send('Console.enable');
+    while (full() < count);
+  };
+  const collect = async () => {
+    const seen = full();
     await session.send('Heap.gc');
-    await session.send('Console.enable');
+    await arrive(seen + 1);
+  };
+  try {
+    await collect();
     events.length = 0;
     const probes = [];
     for (let i = 0; i < 16; i++) {
@@ -32,15 +44,14 @@ export async function observeWebkitGc<T>(page: Page, run: () => Promise<T>): Pro
       const after = await page.evaluate(() => performance.now() * 1e6);
       probes.push({ before, after });
     }
-    await session.send('Console.enable');
+    await arrive(probes.length);
     const clock = jscGcClock(probes, events);
     events.length = 0;
     await page.exposeFunction(
       '__labsFinishGc',
       (window: JscGcWindow) =>
         (pending = (async () => {
-          await session.send('Heap.gc');
-          await session.send('Console.enable');
+          await collect();
           return jscGcStats(events.splice(0), window, clock);
         })())
     );

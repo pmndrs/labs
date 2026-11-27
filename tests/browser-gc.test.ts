@@ -82,3 +82,40 @@ describe.each([
     }
   );
 });
+
+describe('WebKit GC observation', () => {
+  it('keeps GC stats when a collection event arrives after the next reply', async () => {
+    const listeners = new Set<(value: any) => void>();
+    const roundTrip = () => new Promise((resolve) => setImmediate(resolve));
+    let clock = 0;
+    let queued: object[] = [];
+    const session = {
+      on: (_: string, listener: (value: any) => void) => listeners.add(listener),
+      off: (_: string, listener: (value: any) => void) => listeners.delete(listener),
+      async send(method: string) {
+        await roundTrip();
+        // Collections forced by earlier commands are reported once this one has replied
+        const late = queued;
+        queued = [];
+        if (method === 'Heap.gc') {
+          queued.push({ type: 'full', startTime: clock / 1e9, endTime: clock / 1e9 });
+        }
+        setImmediate(() => {
+          for (const collection of late) for (const listener of listeners) listener({ collection });
+        });
+      },
+    };
+    let finish!: (window: object) => Promise<GcStats>;
+    const page = {
+      _connection: { toImpl: () => ({ delegate: { _session: session } }) },
+      evaluate: async () => (await roundTrip(), clock++),
+      exposeFunction: async (_: string, expose: typeof finish) => void (finish = expose),
+    };
+
+    const gc = await observeWebkitGc(page as any, () =>
+      finish({ start: clock, end: clock + 10, timed: 5, iterations: 1, comparable: false })
+    );
+
+    expect(gc).toMatchObject({ iterations: 1, count: 0 });
+  });
+});
