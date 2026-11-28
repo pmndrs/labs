@@ -6,6 +6,7 @@ import type { DeoptWindow, Findings, InlinedCall, Inspection, OptimizationTier }
 
 interface Code {
   fn: number;
+  sfi: number;
   order: number;
   tier?: OptimizationTier;
   sampled: boolean;
@@ -58,6 +59,32 @@ function upTo(ascending: number[], value: number): number {
   return low;
 }
 
+const labsDirectory = new URL(import.meta.url.endsWith('.ts') ? '../' : './', import.meta.url).href;
+function isUserFile(file: string) {
+  return /^file:|^\/|^[A-Za-z]:/.test(file) && !file.startsWith(labsDirectory);
+}
+
+/** V8's code log omits both the URL and the creator of a Function constructor script. */
+export async function observeGeneratedScripts() {
+  const { Session } = await import('node:inspector/promises');
+  const session = new Session();
+  const scripts: Record<string, string> = {};
+  session.connect();
+  session.on(
+    'Debugger.scriptParsed',
+    ({ params: { scriptId, url, hasSourceURL, stackTrace, hash } }) => {
+      if (url && !hasSourceURL) return;
+      const caller = stackTrace?.callFrames[0];
+      if (caller && (scripts[caller.scriptId] || isUserFile(caller.url))) {
+        scripts[scriptId] =
+          url || `<generated ${caller.functionName || 'script'}#${hash.slice(0, 8)}>`;
+      }
+    }
+  );
+  await session.post('Debugger.enable');
+  return { scripts, disconnect: () => session.disconnect() };
+}
+
 /**
  * Read what V8 did with the workload a finished worker marked. The directory
  * holds the worker's code log and, in `traces.txt`, the output of its
@@ -69,7 +96,8 @@ function upTo(ascending: number[], value: number): number {
  */
 export function readNodeInspection(
   directory: string,
-  { id, targets }: DeoptWindow
+  { id, targets }: DeoptWindow,
+  generated: Record<string, string>
 ): Inspection | undefined {
   // Other isolates of the worker write logs of their own.
   const log = readdirSync(directory)
@@ -89,8 +117,12 @@ export function readNodeInspection(
   };
   const functions = new Map<
     number,
-    { name: string; file: string; position: string; source: string; script?: string }
+    { name: string; file: string; position: string; script?: string }
   >();
+  const scriptFile = (fn: number) => {
+    const info = functions.get(fn);
+    return info && (generated[info.script ?? ''] ?? place(info.file));
+  };
   const layouts = new Map<number, string>();
   const sfis = identities();
   const shapes = identities();
@@ -134,16 +166,24 @@ export function readNodeInspection(
       if (name === `labsDeoptFinish${id}`) phase = undefined;
       // V8 logs nothing when a function dies, so one that later takes its
       // address is told apart by where it is defined.
-      const source = `${place(file)}:${position}`;
       let fn = sfis.of(Number(sfi));
-      if ((functions.get(fn)?.source ?? source) !== source) fn = sfis.renew(Number(sfi));
-      if (!functions.has(fn)) functions.set(fn, { name, file, position, source });
+      const previous = functions.get(fn);
+      if (
+        !previous ||
+        previous.name !== name ||
+        previous.file !== file ||
+        previous.position !== position
+      ) {
+        if (previous) fn = sfis.renew(Number(sfi));
+        functions.set(fn, { name, file, position });
+      }
       // V8 leaves the marker off interpreted code that is barred from optimization.
       const tier = ({ '~': 'Ignition', '^': 'Sparkplug', '+': 'Maglev', '*': 'TurboFan' } as const)[
         marker[0] ?? '~'
       ];
       const code = {
         fn,
+        sfi: Number(sfi),
         order: compiled.length,
         tier,
         sampled: phase !== undefined,
@@ -153,12 +193,16 @@ export function readNodeInspection(
       };
       live.set(address, code);
       compiled.push(code);
-      gather(codes, fn, code);
     } else if (fields[0] === 'code-source-info') {
       const code = live.get(fields[1]);
       if (!code) continue;
       code.entry = fields[2] + ',' + fields[3];
-      functions.get(code.fn)!.script = fields[2];
+      const info = functions.get(code.fn)!;
+      // Different generated scripts can have identical file and position fields.
+      if (info.script !== undefined && info.script !== fields[2]) {
+        code.fn = sfis.renew(code.sfi);
+        functions.set(code.fn, { ...info, script: fields[2] });
+      } else info.script = fields[2];
       const inlinees = [...(fields[7] ?? '').matchAll(/S(0x[0-9a-f]+)/g)].map((match) =>
         sfis.of(Number(match[1]))
       );
@@ -170,21 +214,25 @@ export function readNodeInspection(
         });
     } else if (fields[0] === 'code-deopt') {
       const code = live.get(fields[3]);
-      if (code?.tier && phase)
+      if (code?.tier && phase) {
+        let frame = Number(fields[4]);
         bailouts.push({
           code,
-          inlining: Number(fields[4]),
+          inlining: frame,
           before: compiled.length,
           phase,
           tier: code.tier,
           kind: fields[6],
           reason: text(fields[8]),
-          // The innermost position comes first. Positions in the sampling
-          // loop itself have no file and say nothing about the workload.
-          at: [...text(fields[7]).matchAll(/<([^>]*):(\d+:\d+)>/g)].flatMap(([, file, position]) =>
-            file === 'unknown' ? [] : [`${place(file)}:${position}`]
-          ),
+          // The innermost position comes first, followed by the calls it was inlined through.
+          at: [...text(fields[7]).matchAll(/<([^>]*):(\d+:\d+)>/g)].flatMap(([, file, position]) => {
+            const call = code.inlined[frame];
+            frame = call?.parent ?? -1;
+            const source = file === 'unknown' ? scriptFile(call?.fn ?? code.fn) : place(file);
+            return source ? [`${source}:${position}`] : [];
+          }),
         });
+      }
     } else if (fields[0] === 'map-move') shapes.move(Number(fields[2]), Number(fields[3]));
     else if (fields[0] === 'map-details') layouts.set(shapes.of(Number(fields[2])), fields[3] ?? '');
     else if (fields[0] === 'sfi-move') sfis.move(Number(fields[1]), Number(fields[2]));
@@ -218,27 +266,27 @@ export function readNodeInspection(
 
   const workload = compiled.find((code) => code.entry === targets[0])?.fn;
   if (workload === undefined) return;
+  for (const code of compiled) gather(codes, code.fn, code);
   const named = (fn: number) => {
-    const { name = '', source = '' } = functions.get(fn) ?? {};
-    return { name, source };
+    const info = functions.get(fn);
+    return { name: info?.name ?? '', source: info ? `${scriptFile(fn)}:${info.position}` : '' };
   };
   // The offset where each line of a script starts, found once for each script.
   const lines = new Map<string, number[]>();
   const position = (fn: number, offset: number) => {
-    const { script = '', file = '' } = functions.get(fn) ?? {};
+    const { script = '' } = functions.get(fn) ?? {};
     const source = sources.get(script);
     if (source === undefined) return '';
     if (!lines.has(script))
       lines.set(script, [0, ...[...source.matchAll(/\n/g)].map((match) => match.index + 1)]);
     const starts = lines.get(script)!;
     const line = upTo(starts, offset);
-    return `${place(file)}:${line}:${offset - starts[line - 1] + 1}`;
+    return `${scriptFile(fn)}:${line}:${offset - starts[line - 1] + 1}`;
   };
   // Labs and Node internals are part of the harness, not the bench.
-  const own = new URL(import.meta.url.endsWith('.ts') ? '../' : './', import.meta.url).href;
-  const user = (fn: number | undefined) => {
-    const file = functions.get(fn!)?.file ?? '';
-    return /^file:|^\/|^[A-Za-z]:/.test(file) && !file.startsWith(own);
+  const user = (fn: number) => {
+    const info = functions.get(fn);
+    return info && (generated[info.script ?? ''] !== undefined || isUserFile(info.file));
   };
 
   // The trace prints tagged pointers, one above the addresses in the log.
@@ -380,15 +428,15 @@ export function readNodeInspection(
     for (const { owner, position: place_, state, shape, access, key } of [...followed]
       .flatMap((owner) => (read.get(owner) ?? []).map((seen) => ({ owner, ...seen })))
       .sort((a, b) => a.record - b.record)) {
-      const at = `${place(functions.get(owner)!.file)}:${place_}`;
-      const site = sites.get(`${at} ${access} ${key}`) ?? {
+      const id = `${owner}:${place_} ${access} ${key}`;
+      const site = sites.get(id) ?? {
         state: '',
         access,
         key,
-        at,
+        at: `${scriptFile(owner)}:${place_}`,
         shapes: new Set(),
       };
-      sites.set(`${at} ${access} ${key}`, site);
+      sites.set(id, site);
       // V8 marks a polymorphic access P and a megamorphic one N.
       if (state === 'N' || (state === 'P' && !site.state))
         site.state = state === 'N' ? 'megamorphic' : 'polymorphic';

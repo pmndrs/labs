@@ -112,18 +112,69 @@ bench('path length', () => {
   });
 
   it(
-    'names the reason and position of a deopt and lists bytecode on request',
+    'attributes samples and bytecode to generated walks and honors a workload sourceURL',
+    { timeout: 70_000 },
+    () => {
+      const output = inspect(
+        `import { bench } from '@pmndrs/labs';
+function compileWalk() {
+  return new Function(\`return function walk(page) {
+    let sum = 0;
+    for (let i = 0; i < page.count; i++) sum += page.rows[i].value;
+    return sum;
+  }\`)();
+}
+globalThis.walk = compileWalk();
+globalThis.page = {
+  count: 4096,
+  rows: Array.from({ length: 4096 }, (_, i) => i % 2 ? { value: i } : { extra: 0, value: i }),
+};
+new Function('fn', '%NeverOptimizeFunction(fn)')(globalThis.walk);
+bench('record cursor', new Function('return globalThis.walk(globalThis.page)\\n//# sourceURL=controls/record-cursor.js'));`,
+        '--json',
+        '--bytecode'
+      );
+      expect(output.status, output.stderr).toBe(0);
+      const { inspection } = JSON.parse(output.stdout).benches[0];
+      expect(inspection.workload.source).toMatch(/^controls\/record-cursor\.js:\d+:\d+$/);
+      expect(inspection.called).toMatchObject([
+        {
+          name: 'walk',
+          source: expect.stringMatching(/^<generated compileWalk#[\da-f]+>:3:\d+$/),
+          tiers: expect.arrayContaining(['Ignition']),
+          polymorphic: [expect.objectContaining({ key: 'value', shapes: 2 })],
+        },
+      ]);
+      const [walk] = inspection.called;
+      expect(walk.time).toBeGreaterThan(0);
+      expect(walk.polymorphic[0].at).toBe(walk.source.replace(/:3:\d+$/, ':5:62'));
+      expect(inspection.bytecode).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ ...inspection.workload, listing: expect.any(Array) }),
+          expect.objectContaining({
+            name: 'walk',
+            source: walk.source,
+            listing: expect.arrayContaining([expect.stringMatching(/5:\d+ [SE]>/)]),
+          }),
+        ])
+      );
+    }
+  );
+
+  it(
+    'locates a deopt inside an inlined generated function and lists its bytecode',
     { timeout: 70_000 },
     () => {
       const output = inspect(
         `import { bench } from '@pmndrs/labs';
 let input: { n: number } = { n: 1 };
+const read = new Function('input', 'return input.n + 1;\\n//# sourceURL=read.js');
 function work() {
-  return input.n + 1;
+  return read(input);
 }
 const native = (call: string) => new Function('fn', '%' + call + '(fn)')(work);
 native('PrepareFunctionForOptimization');
-work();
+for (let i = 0; i < 64; i++) work();
 native('OptimizeFunctionOnNextCall');
 work();
 // A new shape invalidates the optimized code before the bench starts.
@@ -134,12 +185,12 @@ bench('add one', work);`,
       );
       expect(output.status, output.stderr).toBe(0);
       expect(output.stdout).toContain('add one');
-      expect(output.stdout).toMatch(/function\s+work\s+\S*work\.bench\.ts:3:14/);
+      expect(output.stdout).toMatch(/function\s+work\s+\S*work\.bench\.ts:4:14/);
       expect(output.stdout).toMatch(
-        /warmup\s+TurboFan\s+deopt-eager\s+\S*wrong map\S*\s+\S*work\.bench\.ts:4:16/
+        /warmup\s+TurboFan\s+deopt-eager\s+\S*wrong map\S*\s+read\.js:3:14 ← work\.bench\.ts:5:10/
       );
       // Bytecode is listed by source position without addresses that change per run.
-      expect(output.stdout).toMatch(/4:3 S>\s+0 : /);
+      expect(output.stdout).toMatch(/5:3 S>\s+0 : /);
       expect(output.stdout).toMatch(/: Return/);
       expect(output.stdout).not.toMatch(/0x[0-9a-f]{6,}/);
     }

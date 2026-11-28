@@ -20,7 +20,7 @@ import { runTrialAt } from './main.ts';
 import type { ProgressEvent } from '../cli/progress.ts';
 import type { BlockPlan, GcStats, Stats, Trial } from './types.ts';
 import { markNodeDeopts, readNodeDeopts } from './node-deopts.ts';
-import { readNodeInspection } from './node-inspect.ts';
+import { observeGeneratedScripts, readNodeInspection } from './node-inspect.ts';
 import { mergeGc } from './lib/gc.ts';
 import { colors } from './env.ts';
 import { renderReport } from './render.ts';
@@ -113,6 +113,10 @@ async function childMain(index: number): Promise<void> {
     process.env.LABS_BUN_GC === '1'
       ? await (await import('./lib/bun-gc.ts')).prepareBunGc()
       : undefined;
+  const generated =
+    process.env.LABS_INSPECT && process.env.LABS_DEOPT_TRACE
+      ? await observeGeneratedScripts()
+      : undefined;
   try {
     await import(file!);
     const calibrationRate = await probeCalibrationRate();
@@ -128,9 +132,10 @@ async function childMain(index: number): Promise<void> {
     );
     writeFileSync(
       process.env.LABS_RESULT_FILE!,
-      JSON.stringify({ trial, calibrationRate }, errorReplacer)
+      JSON.stringify({ trial, calibrationRate, generated: generated?.scripts }, errorReplacer)
     );
   } finally {
+    generated?.disconnect();
     await dispose?.();
   }
 }
@@ -217,6 +222,7 @@ async function runTrialChild(
     const result = JSON.parse(readFileSync(resultFile, 'utf-8')) as {
       trial: Trial;
       calibrationRate: number;
+      generated?: Record<string, string>;
     };
     if (trace) {
       // The worker has exited, so V8 has released the logs it marked.
@@ -224,7 +230,8 @@ async function runTrialChild(
       for (const run of result.trial.runs) {
         const optimization = run.stats?.optimization;
         if (!optimization?.window) continue;
-        if (process.env.LABS_INSPECT) run.inspection = readNodeInspection(trace, optimization.window);
+        if (result.generated)
+          run.inspection = readNodeInspection(trace, optimization.window, result.generated);
         // A bailout only counts against a workload Labs asked TurboFan to compile.
         if (optimization.target === 'TurboFan')
           optimization.deoptimized = [read(optimization.window)];
