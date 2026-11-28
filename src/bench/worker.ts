@@ -10,6 +10,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type { runBrowser } from '../browser-runner.ts';
 import type { BlockJob, BlockResult } from '../browser.ts';
 import { getBenchRegistry } from '../index.ts';
@@ -20,7 +21,7 @@ import { runTrialAt } from './main.ts';
 import type { ProgressEvent } from '../cli/progress.ts';
 import type { BlockPlan, GcStats, Stats, Trial } from './types.ts';
 import { markNodeDeopts, readNodeDeopts } from './node-deopts.ts';
-import { observeGeneratedScripts, readNodeInspection } from './node-inspect.ts';
+import { readNodeInspection } from './node-inspect.ts';
 import { mergeGc } from './lib/gc.ts';
 import { colors } from './env.ts';
 import { renderReport } from './render.ts';
@@ -113,10 +114,6 @@ async function childMain(index: number): Promise<void> {
     process.env.LABS_BUN_GC === '1'
       ? await (await import('./lib/bun-gc.ts')).prepareBunGc()
       : undefined;
-  const generated =
-    process.env.LABS_INSPECT && process.env.LABS_DEOPT_TRACE
-      ? await observeGeneratedScripts()
-      : undefined;
   try {
     await import(file!);
     const calibrationRate = await probeCalibrationRate();
@@ -132,10 +129,9 @@ async function childMain(index: number): Promise<void> {
     );
     writeFileSync(
       process.env.LABS_RESULT_FILE!,
-      JSON.stringify({ trial, calibrationRate, generated: generated?.scripts }, errorReplacer)
+      JSON.stringify({ trial, calibrationRate }, errorReplacer)
     );
   } finally {
-    generated?.disconnect();
     await dispose?.();
   }
 }
@@ -167,7 +163,7 @@ async function runTrialChild(
       : undefined;
   let traces: number | undefined;
   try {
-    const env = {
+    const env: NodeJS.ProcessEnv = {
       ...process.env,
       ...extraEnv,
       ...(trace ? { LABS_DEOPT_TRACE: '1' } : {}),
@@ -189,7 +185,17 @@ async function runTrialChild(
       // An inspection also needs the compiler's own account. Its traces go to
       // one file in the order they happened, which needs compilation to stay
       // on the main thread.
-      if (trace && process.env.LABS_INSPECT) traces = openSync(join(trace, 'traces.txt'), 'w');
+      if (trace && process.env.LABS_INSPECT) {
+        traces = openSync(join(trace, 'traces.txt'), 'w');
+        const preload = fileURLToPath(new URL('./inspect-scripts.cjs', import.meta.url));
+        env.LABS_INSPECT_SCRIPTS = JSON.stringify({
+          destination: join(trace, 'scripts.json'),
+          nodeOptions: env.NODE_OPTIONS,
+        });
+        env.NODE_OPTIONS = [`--require ${JSON.stringify(preload)}`, env.NODE_OPTIONS]
+          .filter(Boolean)
+          .join(' ');
+      }
       const flags = !trace
         ? []
         : [
@@ -222,7 +228,6 @@ async function runTrialChild(
     const result = JSON.parse(readFileSync(resultFile, 'utf-8')) as {
       trial: Trial;
       calibrationRate: number;
-      generated?: Record<string, string>;
     };
     if (trace) {
       // The worker has exited, so V8 has released the logs it marked.
@@ -230,8 +235,7 @@ async function runTrialChild(
       for (const run of result.trial.runs) {
         const optimization = run.stats?.optimization;
         if (!optimization?.window) continue;
-        if (result.generated)
-          run.inspection = readNodeInspection(trace, optimization.window, result.generated);
+        if (process.env.LABS_INSPECT) run.inspection = readNodeInspection(trace, optimization.window);
         // A bailout only counts against a workload Labs asked TurboFan to compile.
         if (optimization.target === 'TurboFan')
           optimization.deoptimized = [read(optimization.window)];

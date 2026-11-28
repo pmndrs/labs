@@ -24,6 +24,7 @@ export default defineConfig([
       generator: 'tsgo',
     },
     clean: true,
+    copy: ['src/bench/inspect-scripts.cjs'],
     deps: {
       alwaysBundle: ['fast-string-width', 'fast-string-truncated-width'],
       neverBundle: ['bun:jsc'],
