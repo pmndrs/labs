@@ -2,7 +2,7 @@
   "name": "@pmndrs/labs",
   "description": "\ud83c\udfc6 JS benchmarks you can trust",
   "type": "module",
-  "version": "0.14.0",
+  "version": "0.13.1",
   "license": "ISC",
   "main": "./dist/index.mjs",
   "module": "./dist/index.mjs",
