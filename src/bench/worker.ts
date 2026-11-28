@@ -10,6 +10,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type { runBrowser } from '../browser-runner.ts';
 import type { BlockJob, BlockResult } from '../browser.ts';
 import { getBenchRegistry } from '../index.ts';
@@ -162,7 +163,7 @@ async function runTrialChild(
       : undefined;
   let traces: number | undefined;
   try {
-    const env = {
+    const env: NodeJS.ProcessEnv = {
       ...process.env,
       ...extraEnv,
       ...(trace ? { LABS_DEOPT_TRACE: '1' } : {}),
@@ -184,7 +185,17 @@ async function runTrialChild(
       // An inspection also needs the compiler's own account. Its traces go to
       // one file in the order they happened, which needs compilation to stay
       // on the main thread.
-      if (trace && process.env.LABS_INSPECT) traces = openSync(join(trace, 'traces.txt'), 'w');
+      if (trace && process.env.LABS_INSPECT) {
+        traces = openSync(join(trace, 'traces.txt'), 'w');
+        const preload = fileURLToPath(new URL('./inspect-scripts.cjs', import.meta.url));
+        env.LABS_INSPECT_SCRIPTS = JSON.stringify({
+          destination: join(trace, 'scripts.json'),
+          nodeOptions: env.NODE_OPTIONS,
+        });
+        env.NODE_OPTIONS = [`--require ${JSON.stringify(preload)}`, env.NODE_OPTIONS]
+          .filter(Boolean)
+          .join(' ');
+      }
       const flags = !trace
         ? []
         : [

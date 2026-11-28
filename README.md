@@ -133,6 +133,8 @@ bench inspect --filter "normalize"
 
 Browse the findings in a full-screen view. Select a benchmark to see where the time goes, what was inlined, where objects change shape, and where optimized code was thrown away. Each finding points to a file and line.
 
+Functions created with `new Function` appear in the same report. If the generated body includes `//# sourceURL=walks/records.js`, inspect uses that name. Otherwise it labels the script with its creator and a short hash of the source. Line and column numbers refer to the generated script, including the function wrapper V8 adds.
+
 Agents are very good at this. Give one `bench inspect --json --bytecode` and let it work through the findings.
 
 <img src="docs/images/inspect.png" width="760" alt="Labs inspect view with a benchmark list and, for the selected bench, the tiers it reached, the calls that were inlined or refused, a megamorphic property access, and two deopts with their reasons and positions" />
